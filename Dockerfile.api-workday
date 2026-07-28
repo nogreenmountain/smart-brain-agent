@@ -1,0 +1,20 @@
+FROM agentops-api-local:patched-2026-07-17-dashboard
+
+RUN pip install --no-cache-dir \
+    --target=/app/.venv/lib/python3.12/site-packages \
+    fastembed==0.8.0 \
+    pypdf==6.4.0 \
+    pgvector==0.4.1 \
+    python-multipart==0.0.20
+
+COPY agentops_local/api/ /app/agentops/api/
+COPY agentops_local/auth/ /app/agentops/auth/
+COPY agentops_local/common/ /app/agentops/common/
+COPY agentops_local/rag/ /app/agentops/rag/
+COPY agentops_local/workday/ /app/agentops/workday/
+COPY agentops_local/project_memory/ /app/agentops/project_memory/
+COPY employee_telemetry/ /app/employee_telemetry/
+
+EXPOSE 8000
+
+CMD ["/app/.venv/bin/uvicorn", "agentops.app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

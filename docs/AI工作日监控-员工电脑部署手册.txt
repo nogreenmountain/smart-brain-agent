@@ -1,0 +1,180 @@
+AI 工作日监控：CC Switch 员工电脑部署手册
+版本：2026-07-20
+
+一、方案结论
+
+可行，但准确说法是：
+
+CC Switch 负责模型/API/供应商切换、本地路由和保存 Common Config；
+Claude Code 与 Codex 自己产生 OpenTelemetry Trace；
+AgentOps Collector 接收 Trace；
+智慧大脑 Workday 页面按员工和日期汇总。
+
+只安装 CC Switch、只登录智慧大脑网页，都不会自动产生监控数据。员工电脑还必须执行一次本手册中的部署包安装器，并重新启动 Claude Code/Codex。
+
+二、采集边界
+
+采集：
+
+1. 员工编号和姓名。
+2. Claude Code/Codex 来源。
+3. 会话、Trace、Span、LLM 调用和工具调用数量。
+4. 模型、Token、成本估算、延迟、成功/失败。
+5. 开始和结束时间。
+
+不采集：
+
+1. 键盘、鼠标、屏幕截图、剪贴板和浏览器历史。
+2. Prompt 原文和 AI 回复原文。
+3. 工具输入输出、Shell 完整命令。
+4. 文件内容和完整文件路径。
+5. 员工桌面上的其他软件活动。
+
+建议公司在正式启用前完成员工告知、授权、数据保留周期和查看权限制度。
+
+三、服务器管理员生成通用部署包
+
+服务器项目目录：
+
+D:\AgentOpsServer\AgentOps\app
+
+先确认以下容器正在运行：
+
+agentops-api-1
+agentops-otel
+agentops-clickhouse-1
+
+然后在 PowerShell 中运行：
+
+cd D:\AgentOpsServer\AgentOps\app
+.\scripts\Generate-UniversalEmployeeTelemetryBundle.ps1
+
+只会生成一个通用部署包，保存到：
+
+D:\AgentOpsServer\AgentOps\employee-deploy\universal\ai-workday-universal
+
+这个目录可以发给所有员工，不需要再按 test1 到 test12 分别打包。
+
+通用包本身不包含员工编号、密码或采集令牌。员工首次安装时输入智慧大脑用户名和密码，服务端确认账号及项目成员关系后，才会为这台电脑签发绑定该登录账号的采集令牌。
+
+四、员工电脑要求
+
+1. Windows 10 或更高版本。
+2. CC Switch 3.12.2 或更高版本，建议 3.17.0。
+3. 已安装 Claude Code 或 Codex。
+4. 已安装 Python 3。
+5. 能访问服务器 192.168.1.40 的 8000 和 4318 端口。
+
+可在员工电脑 PowerShell 中检查网络：
+
+Test-NetConnection 192.168.1.40 -Port 4318
+Test-NetConnection 192.168.1.40 -Port 8000
+
+TcpTestSucceeded 必须为 True。
+
+五、员工电脑安装
+
+所有员工使用相同的 ai-workday-universal 目录：
+
+1. 管理员把 ai-workday-universal 整个目录复制到员工电脑本地。
+2. 员工从系统托盘彻底退出 CC Switch。
+3. 在部署包目录空白处按住 Shift 点击鼠标右键，打开 PowerShell。
+4. 执行：
+
+powershell -ExecutionPolicy Bypass -File .\Install-AIWorkdayTelemetry.ps1
+
+5. 按提示输入智慧大脑用户名和密码，例如 test1 / 123456。
+6. 短用户名 test1 会自动补全为 test1@local.dev。
+7. 安装成功后重新打开 CC Switch。
+8. 在 CC Switch 中分别进入 Claude 和 Codex，各切换一次当前供应商。
+9. 关闭已经打开的 Claude Code/Codex 窗口并重新打开。
+10. 正常使用 Claude Code 或 Codex。
+
+安装器会自动：
+
+1. 检查服务器 4318 端口。
+2. 使用现有账号密码登录智慧大脑并验证项目权限。
+3. 从登录账号自动绑定员工编号，员工不能自行填写或冒充其他编号。
+4. 签发带有效期、只允许上报 Trace 的专属采集令牌。
+5. 备份 CC Switch 数据库、Claude settings.json 和 Codex config.toml。
+6. 更新 CC Switch 的 Claude/Codex Common Config。
+7. 让所有 Claude/Codex Provider 使用 Common Config。
+8. 同步更新当前 Claude/Codex 配置。
+9. 开启 Trace，关闭 Logs、Metrics 和所有原文类上报。
+10. 把 192.168.1.40、127.0.0.1 和 localhost 追加到用户级 NO_PROXY，避免系统代理拦截局域网 Trace。
+11. 安装完成后删除包含令牌的中间配置文件。
+
+密码只在本次登录的内存中使用，不写入文件、CC Switch、Claude 或 Codex。
+
+六、验证是否开始监控
+
+员工完成一次 Claude Code 或 Codex 操作后，等待约 5 到 15 秒。
+
+项目成员打开：
+
+http://192.168.1.40:3002/workday
+
+选择 Default Project，员工编号输入 test1，日期选择当天，点击生成。
+
+应看到：
+
+1. Trace 和 Span 数量大于 0。
+2. 来源对应 Claude Code 或 Codex。
+3. 有模型、Token、延迟或工具调用数据。
+4. 没有 Prompt、回复正文、命令和文件内容。
+
+当前原生 CLI 不会自动生成 agentops.task.id，因此任务拆分可能显示“未标记任务”。这不影响员工、日期、调用、Token、工具和错误汇总。
+
+七、登录与监控的关系
+
+智慧大脑 test1 到 test12 的用户名密码有两个用途：
+
+1. 登录网页并查看有权限的项目。
+2. 安装时验证员工身份并领取专属遥测令牌。
+
+员工只登录 http://192.168.1.40:3002，仍然不会因此开始监控。
+
+真正开始监控的条件是：
+
+1. 员工电脑执行部署包安装器。
+2. CC Switch Common Config 已应用。
+3. Claude Code/Codex 已重新启动。
+4. 员工电脑能访问 192.168.1.40:4318。
+5. 新启动的 Claude Code/Codex 已读取安装器写入的 NO_PROXY。
+
+安装成功后不必保持网页登录，也可以正常上报 Trace；网页只是查看入口。
+
+八、卸载
+
+1. 从系统托盘彻底退出 CC Switch。
+2. 在原部署包目录运行：
+
+powershell -ExecutionPolicy Bypass -File .\Uninstall-AIWorkdayTelemetry.ps1
+
+3. 重新打开 CC Switch。
+
+安装和卸载前的配置及 NO_PROXY 备份保存在：
+
+%LOCALAPPDATA%\AIWorkdayTelemetry\backups
+
+九、令牌到期与重新部署
+
+默认令牌有效期为 30 天。到期后员工重新运行同一份通用安装器并再次登录即可，不需要管理员重新生成或发放个人部署包。
+
+测试期建议 30 天。正式使用建议启用 HTTPS、建立定期轮换和离职员工撤销流程。
+
+十、当前网络安全说明
+
+当前 Collector 使用：
+
+http://192.168.1.40:4318
+
+这适合受控局域网试运行，但 HTTP 不加密。正式跨网、无线访客网或不可信局域网部署前，应先给 OTLP 入口启用 HTTPS/TLS。
+
+十一、常见故障
+
+1. 登录提示账号、密码或项目权限失败：确认使用自己的智慧大脑账号，并确认账号已加入 Default Project。
+2. Test-NetConnection 成功但 Codex 没有数据：确认安装完成后已彻底关闭并重新打开 Codex。旧进程不会读取新的 NO_PROXY。
+3. Claude 有数据而 Codex 没有数据：运行 echo $env:NO_PROXY，应包含 192.168.1.40；没有时重新运行安装器并重开终端。
+4. 两者都没有数据：检查令牌是否过期，以及服务器 agentops-otel 是否正在运行。
+5. 页面显示“未标记任务”：这是当前原生 CLI 没有动态任务标签的正常表现，不代表采集失败。

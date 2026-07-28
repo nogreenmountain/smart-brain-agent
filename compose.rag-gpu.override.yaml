@@ -1,0 +1,31 @@
+# Optional RAG GPU override.
+#
+# Use only after this smoke test succeeds:
+#   docker run --rm --gpus all \
+#     -v /usr/lib/wsl/lib:/usr/lib/wsl/lib:ro \
+#     -e LD_LIBRARY_PATH=/usr/lib/wsl/lib \
+#     rag-embedding-service-local:latest \
+#     python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+#
+# Docker Desktop on this Windows/WSL2 host exposes /dev/dxg but does not
+# reliably inject libnvidia-ml/libcuda automatically. The read-only WSL
+# driver-library mount below is required for nvidia-smi and PyTorch CUDA.
+
+services:
+  rag-embedding-service:
+    gpus: all
+    environment:
+      LD_LIBRARY_PATH: /usr/lib/wsl/lib
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      NVIDIA_VISIBLE_DEVICES: all
+    volumes:
+      - /usr/lib/wsl/lib:/usr/lib/wsl/lib:ro
+
+  rag-reranker-service:
+    gpus: all
+    environment:
+      LD_LIBRARY_PATH: /usr/lib/wsl/lib
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      NVIDIA_VISIBLE_DEVICES: all
+    volumes:
+      - /usr/lib/wsl/lib:/usr/lib/wsl/lib:ro

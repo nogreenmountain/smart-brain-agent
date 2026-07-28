@@ -1,0 +1,190 @@
+AI 聊天记录监控三路接入实施说明
+更新时间：2026-07-27
+
+一、最终目标
+
+智慧大脑最终需要同时监控三类 AI 使用入口：
+
+1. CC Switch 转接的 API 调用
+2. ChatGPT 网页版
+3. ChatGPT 桌面端
+
+三类入口最终统一进入智慧大脑的 AI 聊天记录与工作日报体系，统一记录：
+
+- 员工
+- 项目
+- 任务
+- 来源入口
+- 聊天原文
+- 调用次数
+- token
+- 成本
+- 错误
+- 耗时
+- 关键 Trace 或会话复盘引用
+
+二、当前已完成的底座
+
+本次已经先落地“统一聊天记录接收底座”，后续三类入口都往这套接口写入。
+
+已新增数据库表：
+
+- public.ai_chat_sessions
+  用于存一轮会话的结构化信息，包括员工、项目、任务、来源、模型、token、成本、错误、耗时、trace_id 等。
+
+- public.ai_chat_messages
+  用于存聊天消息原文，包括 user / assistant / system / tool 角色消息。
+
+已新增后端接口：
+
+- POST /v4/ai-chat/ingest
+  受保护写入接口。客户端不能自己指定 employee_id，后端根据当前登录用户推导员工身份，避免员工冒充别人。
+
+- GET /v4/ai-chat/sessions/{project_id}
+  受保护查询接口。默认不返回聊天原文；只有 include_messages=true 时才返回消息内容。
+
+已新增审计动作：
+
+- ai_chat_ingest
+- ai_chat_list
+
+已完成真实验证：
+
+- test1 登录成功。
+- chatgpt_web 来源的测试会话写入成功。
+- ai_chat_sessions 中有 1 条会话。
+- ai_chat_messages 中有 2 条消息。
+- 默认查询不返回消息原文。
+- include_messages=true 时返回消息原文。
+- 审计日志记录 ai_chat_ingest 和 ai_chat_list。
+
+三、三路分开实施
+
+路线一：CC Switch
+
+目标：
+让所有经过 CC Switch 的 API 调用都进入智慧大脑聊天记录系统。
+
+推荐做法：
+
+1. 新增智慧大脑 AI Gateway 服务。
+2. Gateway 提供 OpenAI / Anthropic 兼容接口。
+3. CC Switch 的 provider base_url 指向 AI Gateway。
+4. AI Gateway 记录请求、响应、模型、token、成本、错误、耗时。
+5. AI Gateway 再转发到真实模型供应商。
+6. 写入 /v4/ai-chat/ingest，并同步产生 AgentOps Trace。
+
+优点：
+
+- token 和成本最准。
+- 错误和耗时最准。
+- 能和 Trace 打通。
+- 最适合研发部门正式使用。
+
+注意：
+
+- 不能把员工的模型密钥写进安装包。
+- 推荐由公司统一配置供应商密钥或中转服务。
+
+路线二：ChatGPT 网页版
+
+目标：
+员工打开 chatgpt.com 网页时，也能监控聊天记录和使用情况。
+
+推荐做法：
+
+1. 开发公司内部 Chrome / Edge 浏览器插件。
+2. 插件只在 chatgpt.com 生效。
+3. 插件要求员工登录智慧大脑账号。
+4. 插件要求选择项目和任务。
+5. 插件监听 ChatGPT 页面中的用户消息和助手回复。
+6. 插件把会话写入 /v4/ai-chat/ingest。
+7. token 和成本用本地估算，或后端按模型价格估算。
+
+优点：
+
+- 可以覆盖 ChatGPT 网页版。
+- 可以拿到聊天原文。
+- 员工体验接近原来使用方式。
+
+限制：
+
+- token 和成本是估算，不如 API 精确。
+- ChatGPT 网页结构变化后，插件可能需要维护。
+- 插件必须明示正在采集公司 AI 工作记录，不能隐藏运行。
+
+路线三：ChatGPT 桌面端
+
+目标：
+覆盖 ChatGPT 官方桌面端。
+
+合规可行路线：
+
+1. 公司统一使用 ChatGPT Enterprise / Edu / Business 工作区。
+2. 管理员启用 OpenAI Compliance Platform / Compliance Logs。
+3. 智慧大脑新增 Compliance Importer。
+4. Importer 定期拉取或接收 ChatGPT 工作区日志。
+5. 将 ChatGPT 桌面端和网页端产生的企业工作区会话导入 ai_chat_sessions / ai_chat_messages。
+
+官方依据：
+
+- OpenAI Compliance Platform for Enterprise and Edu Customers
+  https://help.openai.com/en/articles/9261474-openai-compliance-platform-for-enterprise-and-edu-customers
+
+- Workspace analytics for ChatGPT Enterprise and Edu
+  https://help.openai.com/en/articles/10875114-workspace-analytics-for-chatgpt-enterprise-and-edu
+
+重要限制：
+
+- 如果员工使用个人 ChatGPT 账号和官方桌面端直连 OpenAI，公司本地后端无法像 API 一样直接拿到完整请求、响应、token 和成本。
+- 不建议也不应使用键盘记录、偷偷截图、破解本地客户端数据、抓 cookie、安装根证书做 HTTPS 中间人等方式。
+
+如果必须覆盖桌面体验：
+
+- 优先采购或接入企业工作区合规日志。
+- 或者改为公司受控入口：员工用浏览器插件版 ChatGPT / 智慧大脑入口，而不是个人账号桌面端。
+
+四、推荐实施顺序
+
+P1：统一聊天记录底座（已完成）
+
+- 数据表
+- 写入接口
+- 查询接口
+- 权限
+- 审计
+- 真实写入验证
+
+P2：CC Switch AI Gateway
+
+- 新增代理服务。
+- 支持 OpenAI / Anthropic 基础聊天接口。
+- 请求和响应都写入 ai_chat。
+- 成本、token、错误、耗时准确记录。
+- 改员工安装包，把 CC Switch 指到 Gateway。
+
+P3：SmartBrain 聊天记录页面
+
+- 新增“AI 聊天记录”页面。
+- 支持按项目、员工、来源、任务、日期查询。
+- 支持默认隐藏原文，授权后查看原文。
+- 支持跳转 Workday 和 Trace。
+
+P4：ChatGPT 网页插件
+
+- 开发 Chrome / Edge 插件。
+- 支持登录智慧大脑。
+- 支持选择项目和任务。
+- 支持采集 ChatGPT 网页消息。
+- 支持断网缓存和重试。
+
+P5：ChatGPT 桌面端合规导入
+
+- 明确是否采购或启用 ChatGPT 企业工作区。
+- 拿到 Compliance Platform / Logs 权限。
+- 开发导入器。
+- 将官方日志映射到统一 ai_chat 表。
+
+五、当前结论
+
+现在后端已经具备统一接收聊天记录的能力。下一步最应该做 CC Switch AI Gateway，因为这一路最稳定、指标最准、也最容易和现有 AgentOps Trace 打通。

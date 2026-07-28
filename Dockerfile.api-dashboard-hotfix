@@ -1,0 +1,6 @@
+FROM agentops-api-local:patched-2026-07-17
+
+COPY api/agentops/app.py /app/agentops/app.py
+COPY agentops_local/api/app.py /app/agentops/api/app.py
+COPY agentops_local/api/routes/v4/projects.py /app/agentops/api/routes/v4/projects.py
+COPY agentops_local/auth/views.py /app/agentops/auth/views.py

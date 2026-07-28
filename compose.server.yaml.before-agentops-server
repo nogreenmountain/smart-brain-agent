@@ -1,0 +1,98 @@
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.12
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8123:8123"
+      - "127.0.0.1:9000:9000"
+    environment:
+      CLICKHOUSE_DB: "${CLICKHOUSE_DATABASE}"
+      CLICKHOUSE_USER: "${CLICKHOUSE_USERNAME}"
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD}"
+    volumes:
+      - "D:/AgentOpsServer/data/clickhouse:/var/lib/clickhouse"
+
+  otelcollector:
+    build:
+      context: ./opentelemetry-collector
+      dockerfile: Dockerfile
+    container_name: agentops-otel
+    restart: unless-stopped
+    depends_on:
+      - clickhouse
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+      - "127.0.0.1:13133:13133"
+    environment:
+      CLICKHOUSE_ENDPOINT: "http://clickhouse:8123"
+      CLICKHOUSE_USERNAME: "${CLICKHOUSE_USERNAME}"
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD}"
+      CLICKHOUSE_DATABASE: "${CLICKHOUSE_DATABASE}"
+      LOGS_TABLE_NAME: "otel_logs"
+      TRACES_TABLE_NAME: "otel_traces"
+      CLICKHOUSE_TTL: "720h"
+      CLICKHOUSE_TIMEOUT: "10s"
+      JWT_SECRET: "${JWT_SECRET_KEY}"
+
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - clickhouse
+    ports:
+      - "8000:8000"
+    environment:
+      PROTOCOL: "http"
+      API_DOMAIN: "192.168.1.40:8000"
+      APP_DOMAIN: "192.168.1.40:3000"
+      SUPABASE_URL: "http://host.docker.internal:54321"
+      SUPABASE_KEY: "${SUPABASE_SERVICE_ROLE_KEY}"
+      SUPABASE_HOST: "host.docker.internal"
+      SUPABASE_PORT: "54322"
+      SUPABASE_DATABASE: "postgres"
+      SUPABASE_USER: "postgres"
+      SUPABASE_PASSWORD: "postgres"
+      SUPABASE_SSLMODE: "disable"
+      SUPABASE_MAX_POOL_SIZE: "10"
+      JWT_SECRET_KEY: "${JWT_SECRET_KEY}"
+      AUTH_COOKIE_SECRET: "${AUTH_COOKIE_SECRET}"
+      CLICKHOUSE_HOST: "clickhouse"
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_USER: "${CLICKHOUSE_USERNAME}"
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD}"
+      CLICKHOUSE_DATABASE: "${CLICKHOUSE_DATABASE}"
+      CLICKHOUSE_SECURE: "false"
+      CLICKHOUSE_ENDPOINT: "http://clickhouse:8123"
+      CLICKHOUSE_USERNAME: "${CLICKHOUSE_USERNAME}"
+      LOGGING_LEVEL: "INFO"
+      SQLALCHEMY_LOG_LEVEL: "WARNING"
+      RATE_LIMIT_ENABLE: "false"
+
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_SUPABASE_URL: "http://192.168.1.40:54321"
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: "${NEXT_PUBLIC_SUPABASE_ANON_KEY}"
+        NEXT_PUBLIC_API_URL: "http://192.168.1.40:8000"
+        NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: ""
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_SUPABASE_URL: "http://192.168.1.40:54321"
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: "${NEXT_PUBLIC_SUPABASE_ANON_KEY}"
+      SUPABASE_SERVICE_ROLE_KEY: "${SUPABASE_SERVICE_ROLE_KEY}"
+      SUPABASE_PROJECT_ID: "database"
+      NEXT_PUBLIC_API_URL: "http://192.168.1.40:8000"
+      NEXT_PUBLIC_APP_URL: "http://192.168.1.40:3000"
+      NEXT_PUBLIC_SITE_URL: "http://192.168.1.40:3000"
+      NEXT_PUBLIC_SIGNIN_METHODS: "email"
+      NEXT_PUBLIC_ENVIRONMENT_TYPE: "development"
+      NEXT_PUBLIC_PLAYGROUND: "false"

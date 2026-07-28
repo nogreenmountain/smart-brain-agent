@@ -1,0 +1,95 @@
+# Override file for agentops-api:
+#  - Pin image to the patched Workday + CC Switch enrollment + RAG v2 +
+#    AI chat monitoring build.
+#  - Inject LLM env vars at runtime (no secrets in this file).
+#  - Add local BGE-M3 embedding and BGE reranker services for staged RAG v2.
+#  - Restore uvicorn startup (base image's CMD was overwritten by a botched
+#    `docker commit`; the patch Dockerfile fixes the entrypoint instead).
+#
+# After any backend code change, rebuild with:
+#   cd D:\AgentOpsServer\AgentOps\app
+#   docker build -f Dockerfile.api-workday \
+#     -t agentops-api-local:patched-2026-07-28-material-memory-flow .
+#
+# Setup (PowerShell, in a fresh session):
+#   $env:ANTHROPIC_AUTH_TOKEN = "sk-cp-...your-new-token-from-minimax-console"
+#   $env:ANTHROPIC_BASE_URL  = "https://api.minimaxi.com/anthropic"
+#   $env:RAG_LLM_MODEL       = "MiniMax-M3"
+#   cd D:\AgentOpsServer\AgentOps\app
+#   docker compose -f compose.server.yaml -f compose.server.override.yaml up -d api
+#
+# On this GTX 1080 server, include the GPU override when recreating the RAG
+# model services so embedding/reranker stay on CUDA:
+#   docker compose -f compose.server.yaml -f compose.server.override.yaml -f compose.rag-gpu.override.yaml \
+#     up -d rag-embedding-service rag-reranker-service
+#
+# Verify:
+#   curl http://192.168.1.40:8000/health              -> 200
+#   curl -X POST http://192.168.1.40:8000/v4/knowledge/answer \
+#     -H "Content-Type: application/json" \
+#     -d '{"project_id":"<uuid>","query":"<text>","k":3}'
+#   Look for "source": "llm" in the response.
+
+services:
+  rag-embedding-service:
+    image: rag-embedding-service-local:latest
+    build:
+      context: .
+      dockerfile: rag_services/embedding_service/Dockerfile
+    restart: unless-stopped
+    environment:
+      HF_HOME: /models/huggingface
+      RAG_EMBED_MODEL_NAME: ${RAG_EMBED_MODEL_NAME:-BAAI/bge-m3}
+      RAG_EMBED_BATCH_SIZE: ${RAG_EMBED_BATCH_SIZE:-4}
+      RAG_EMBED_MAX_LENGTH: ${RAG_EMBED_MAX_LENGTH:-8192}
+      RAG_EMBED_USE_FP16: ${RAG_EMBED_USE_FP16:-false}
+      RAG_MODEL_DEVICE: ${RAG_MODEL_DEVICE:-auto}
+    volumes:
+      - rag_model_cache:/models
+
+  rag-reranker-service:
+    image: rag-reranker-service-local:latest
+    build:
+      context: .
+      dockerfile: rag_services/reranker_service/Dockerfile
+    restart: unless-stopped
+    environment:
+      HF_HOME: /models/huggingface
+      RAG_RERANK_MODEL_NAME: ${RAG_RERANK_MODEL_NAME:-BAAI/bge-reranker-v2-m3}
+      RAG_RERANK_BATCH_SIZE: ${RAG_RERANK_BATCH_SIZE:-2}
+      RAG_RERANK_MAX_LENGTH: ${RAG_RERANK_MAX_LENGTH:-1024}
+      RAG_RERANK_USE_FP16: ${RAG_RERANK_USE_FP16:-false}
+      RAG_MODEL_DEVICE: ${RAG_MODEL_DEVICE:-auto}
+    volumes:
+      - rag_model_cache:/models
+
+  api:
+    image: agentops-api-local:patched-2026-07-28-material-memory-flow
+    depends_on:
+      - clickhouse
+    environment:
+      # Read from host shell env. NEVER hardcode secrets in this file.
+      ANTHROPIC_AUTH_TOKEN: ${ANTHROPIC_AUTH_TOKEN:-}
+      # Containers must reach the host-side MiniMax proxy via host.docker.internal,
+      # NOT 127.0.0.1 (which would resolve to the container itself).
+      ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-http://host.docker.internal:15721}
+      RAG_LLM_MODEL: ${RAG_LLM_MODEL:-MiniMax-M3}
+      RAG_RETRIEVAL_VERSION: ${RAG_RETRIEVAL_VERSION:-v1}
+      RAG_EMBEDDING_SERVICE_URL: ${RAG_EMBEDDING_SERVICE_URL:-http://rag-embedding-service:8080}
+      RAG_RERANKER_SERVICE_URL: ${RAG_RERANKER_SERVICE_URL:-http://rag-reranker-service:8080}
+      RAG_V2_EMBEDDING_MODEL: ${RAG_V2_EMBEDDING_MODEL:-BAAI/bge-m3}
+      RAG_V2_EMBEDDING_VERSION: ${RAG_V2_EMBEDDING_VERSION:-2026-07-21-bge-m3}
+      RAG_V2_EMBED_ON_UPLOAD: ${RAG_V2_EMBED_ON_UPLOAD:-false}
+      RAG_V2_FALLBACK_TO_V1: ${RAG_V2_FALLBACK_TO_V1:-true}
+
+  smartbrain:
+    image: smartbrain-dashboard-local:latest
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "3002:3000"
+
+volumes:
+  rag_model_cache:
+    name: "agentops-rag-model-cache"

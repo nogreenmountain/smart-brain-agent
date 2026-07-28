@@ -1,0 +1,86 @@
+#ai-monitor-panel {
+  position: fixed;
+  right: 14px;
+  bottom: 14px;
+  z-index: 2147483647;
+  width: 300px;
+  max-width: calc(100vw - 28px);
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #0f172a;
+  box-shadow: 0 14px 36px rgba(15, 23, 42, 0.18);
+  font-family: "Microsoft YaHei", "Segoe UI", Arial, sans-serif;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+#ai-monitor-panel.ai-monitor-collapsed .ai-monitor-body {
+  display: none;
+}
+
+#ai-monitor-panel button,
+#ai-monitor-panel input {
+  font: inherit;
+}
+
+#ai-monitor-panel .ai-monitor-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 9px 10px;
+  border-bottom: 1px solid #e2e8f0;
+  font-weight: 700;
+}
+
+#ai-monitor-panel .ai-monitor-body {
+  padding: 10px;
+}
+
+#ai-monitor-panel label {
+  display: block;
+  margin: 7px 0 4px;
+  color: #475569;
+}
+
+#ai-monitor-panel input {
+  width: 100%;
+  min-height: 32px;
+  padding: 5px 7px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  color: #0f172a;
+}
+
+#ai-monitor-panel button {
+  min-height: 32px;
+  padding: 5px 9px;
+  border: 1px solid #2563eb;
+  border-radius: 6px;
+  background: #2563eb;
+  color: #ffffff;
+  cursor: pointer;
+}
+
+#ai-monitor-panel button.secondary {
+  border-color: #cbd5e1;
+  background: #f8fafc;
+  color: #0f172a;
+}
+
+#ai-monitor-panel .ai-monitor-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 9px;
+}
+
+#ai-monitor-panel .ai-monitor-row button {
+  flex: 1;
+}
+
+#ai-monitor-status {
+  margin-top: 8px;
+  color: #475569;
+  word-break: break-word;
+}

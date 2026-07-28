@@ -1,0 +1,30 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #eef3f9;
+  --fg: #10213e;
+  --muted: #6e7d97;
+  --border: #d7e0ec;
+  --card: #ffffff;
+}
+
+html, body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: "InterVariable", "Inter", "SF Pro Text", "PingFang SC", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* 滚动条美化 */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #bfcbdb; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #8b99ae; }
+
+/* markdown 简化样式 */
+.prose-sm { line-height: 1.7; }
+.prose-sm p { margin: 0.5em 0; }
+.prose-sm code { background: #f3f4f6; padding: 0.1em 0.3em; border-radius: 3px; font-size: 0.9em; }

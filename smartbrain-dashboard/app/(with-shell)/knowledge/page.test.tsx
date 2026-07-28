@@ -1,0 +1,227 @@
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import KnowledgePage from './page';
+
+const mocks = vi.hoisted(() => ({
+  deleteKnowledgeDocument: vi.fn(),
+  listKnowledgeLedger: vi.fn(),
+  listProjectMemoryDepartments: vi.fn(),
+  listProjects: vi.fn(),
+  push: vi.fn(),
+}));
+
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({
+    push: mocks.push,
+  }),
+}));
+
+vi.mock('@/lib/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/api')>();
+  return {
+    ...actual,
+    deleteKnowledgeDocument: mocks.deleteKnowledgeDocument,
+    listKnowledgeLedger: mocks.listKnowledgeLedger,
+    listProjectMemoryDepartments: mocks.listProjectMemoryDepartments,
+    listProjects: mocks.listProjects,
+  };
+});
+
+describe('KnowledgePage', () => {
+  beforeEach(() => {
+    mocks.deleteKnowledgeDocument.mockReset();
+    mocks.listKnowledgeLedger.mockReset();
+    mocks.listProjectMemoryDepartments.mockReset();
+    mocks.listProjects.mockReset();
+    mocks.push.mockReset();
+    mocks.deleteKnowledgeDocument.mockResolvedValue(undefined);
+    mocks.listProjectMemoryDepartments.mockResolvedValue([
+      { id: 'research', name: '研发', sort_order: 1 },
+      { id: 'marketing', name: '市场', sort_order: 2 },
+      { id: 'business', name: '业务', sort_order: 3 },
+    ]);
+    mocks.listProjects.mockResolvedValue([
+      {
+        id: 'project-1',
+        org_id: 'org-1',
+        name: '智慧大脑',
+        environment: 'development',
+        department_id: 'research',
+        role: 'developer',
+      },
+      {
+        id: 'project-2',
+        org_id: 'org-1',
+        name: '市场素材库',
+        environment: 'development',
+        department_id: 'marketing',
+        role: 'owner',
+      },
+    ]);
+    mocks.listKnowledgeLedger.mockResolvedValue({
+      project: {
+        id: 'project-1',
+        name: '智慧大脑',
+        environment: 'development',
+        department_id: 'research',
+        created_at: '2026-07-28T01:00:00Z',
+        completed_at: null,
+      },
+      permissions: { can_review: false },
+      leaders: [
+        { user_id: 'leader-1', email: 'hanshangbo@local.dev', role: 'owner' },
+      ],
+      uploaders: [
+        { user_id: 'user-1', email: 'test1@local.dev' },
+        { user_id: 'user-2', email: 'test2@local.dev' },
+      ],
+      summary: {
+        raw_document_count: 2,
+        approved_count: 1,
+        pending_count: 1,
+        rejected_count: 0,
+        unreviewed_count: 0,
+        latest_uploaded_at: '2026-07-28T02:00:00Z',
+        latest_reviewed_at: '2026-07-28T03:00:00Z',
+      },
+      documents: [
+        {
+          document_id: 'doc-2',
+          filename: 'README.md',
+          display_name: 'README.md',
+          format: 'md',
+          size_bytes: 120,
+          status: 'ready',
+          chunk_count: 2,
+          error_message: null,
+          uploaded_by: { user_id: 'user-1', email: 'test1@local.dev' },
+          uploaded_at: '2026-07-28T02:00:00Z',
+          approval_status: 'approved',
+          reviewed_by: { user_id: 'leader-1', email: 'hanshangbo@local.dev' },
+          reviewed_at: '2026-07-28T03:00:00Z',
+          review_comment: '通过',
+          draft_id: 'draft-1',
+          approved_memory_document_id: 'memory-doc-1',
+        },
+        {
+          document_id: 'doc-3',
+          filename: '方案.pptx',
+          display_name: '方案.pptx',
+          format: 'pptx',
+          size_bytes: 4096,
+          status: 'ready',
+          chunk_count: 1,
+          error_message: null,
+          uploaded_by: { user_id: 'user-2', email: 'test2@local.dev' },
+          uploaded_at: '2026-07-28T02:10:00Z',
+          approval_status: 'pending_review',
+          reviewed_by: null,
+          reviewed_at: null,
+          review_comment: null,
+          draft_id: 'draft-2',
+          approved_memory_document_id: null,
+        },
+      ],
+    });
+  });
+
+  it('renders a read-only project material ledger filtered by department project uploader and status', async () => {
+    const user = userEvent.setup();
+    render(<KnowledgePage />);
+
+    expect(await screen.findByRole('heading', { name: '知识库' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: '研发' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: '智慧大脑 (development)' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: '市场素材库 (development)' })).not.toBeInTheDocument();
+
+    await waitFor(() => {
+      expect(screen.getAllByText('hanshangbo@local.dev').length).toBeGreaterThan(0);
+    });
+    expect(screen.getAllByText('test1@local.dev').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('test2@local.dev').length).toBeGreaterThan(0);
+    expect(screen.getByText('README.md')).toBeInTheDocument();
+    expect(screen.getByText('方案.pptx')).toBeInTheDocument();
+    expect(screen.getAllByText('已审批入库').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('待审批').length).toBeGreaterThan(0);
+    expect(screen.queryByRole('heading', { name: '上传项目原始资料' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: '检索知识库' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '确定上传资料' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '检索' })).not.toBeInTheDocument();
+
+    await user.selectOptions(screen.getByLabelText('上传成员'), 'user-2');
+    await user.selectOptions(screen.getByLabelText('审批状态'), 'pending_review');
+
+    await waitFor(() => {
+      expect(mocks.listKnowledgeLedger).toHaveBeenLastCalledWith({
+        projectId: 'project-1',
+        uploaderUserId: 'user-2',
+        approvalStatus: 'pending_review',
+      });
+    });
+  });
+
+  it('lets reviewers delete saved documents after confirmation and refreshes the ledger', async () => {
+    const user = userEvent.setup();
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    mocks.listKnowledgeLedger.mockResolvedValueOnce({
+      project: {
+        id: 'project-1',
+        name: '鏅烘収澶ц剳',
+        environment: 'development',
+        department_id: 'research',
+        created_at: '2026-07-28T01:00:00Z',
+        completed_at: null,
+      },
+      permissions: { can_review: true },
+      leaders: [
+        { user_id: 'leader-1', email: 'hanshangbo@local.dev', role: 'owner' },
+      ],
+      uploaders: [
+        { user_id: 'user-1', email: 'test1@local.dev' },
+      ],
+      summary: {
+        raw_document_count: 1,
+        approved_count: 1,
+        pending_count: 0,
+        rejected_count: 0,
+        unreviewed_count: 0,
+        latest_uploaded_at: '2026-07-28T02:00:00Z',
+        latest_reviewed_at: '2026-07-28T03:00:00Z',
+      },
+      documents: [
+        {
+          document_id: 'doc-2',
+          filename: 'README.md',
+          display_name: 'README.md',
+          format: 'md',
+          size_bytes: 120,
+          status: 'ready',
+          chunk_count: 2,
+          error_message: null,
+          uploaded_by: { user_id: 'user-1', email: 'test1@local.dev' },
+          uploaded_at: '2026-07-28T02:00:00Z',
+          approval_status: 'approved',
+          reviewed_by: { user_id: 'leader-1', email: 'hanshangbo@local.dev' },
+          reviewed_at: '2026-07-28T03:00:00Z',
+          review_comment: '閫氳繃',
+          draft_id: 'draft-1',
+          approved_memory_document_id: 'memory-doc-1',
+        },
+      ],
+    });
+
+    render(<KnowledgePage />);
+
+    await user.click(await screen.findByLabelText(/README.md/));
+
+    expect(confirmSpy).toHaveBeenCalled();
+    expect(mocks.deleteKnowledgeDocument).toHaveBeenCalledWith('doc-2');
+    await waitFor(() => {
+      expect(mocks.listKnowledgeLedger).toHaveBeenCalledTimes(2);
+    });
+
+    confirmSpy.mockRestore();
+  });
+});
