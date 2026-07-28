@@ -68,11 +68,12 @@ services:
     depends_on:
       - clickhouse
     environment:
-      # Read from host shell env. NEVER hardcode secrets in this file.
+      # Read token from host shell env. NEVER hardcode secrets in this file.
       ANTHROPIC_AUTH_TOKEN: ${ANTHROPIC_AUTH_TOKEN:-}
       # Containers must reach the host-side MiniMax proxy via host.docker.internal,
-      # NOT 127.0.0.1 (which would resolve to the container itself).
-      ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-http://host.docker.internal:15721}
+      # NOT 127.0.0.1 (which would resolve to the container itself). Use a
+      # Docker-specific override to avoid inheriting host CLI settings.
+      ANTHROPIC_BASE_URL: ${ANTHROPIC_DOCKER_BASE_URL:-http://host.docker.internal:15721}
       RAG_LLM_MODEL: ${RAG_LLM_MODEL:-MiniMax-M3}
       RAG_RETRIEVAL_VERSION: ${RAG_RETRIEVAL_VERSION:-v1}
       RAG_EMBEDDING_SERVICE_URL: ${RAG_EMBEDDING_SERVICE_URL:-http://rag-embedding-service:8080}
