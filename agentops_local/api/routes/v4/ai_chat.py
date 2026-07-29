@@ -550,7 +550,11 @@ def list_ai_chat_sessions(
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error
 
     try:
-        require_member(orm, user_id=user_id, project_id=project_id)
+        project_role = require_member(
+            orm,
+            user_id=user_id,
+            project_id=project_id,
+        )
     except AuthzError as error:
         _record_ai_chat_audit(
             orm,
@@ -564,11 +568,36 @@ def list_ai_chat_sessions(
         )
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error
 
+    own_employee_id, _ = _resolve_employee(orm, user_id)
+    can_view_other_employees = project_role.role in {"owner", "admin"}
+    if (
+        employee_id
+        and employee_id != own_employee_id
+        and not can_view_other_employees
+    ):
+        _record_ai_chat_audit(
+            orm,
+            request,
+            user_id=user_id,
+            action="ai_chat_list",
+            project_id=project_id,
+            source=source,
+            result_status="forbidden_employee_scope",
+            employee_id=employee_id,
+        )
+        raise HTTPException(
+            status_code=403,
+            detail="regular members can only view their own AI usage records",
+        )
+    effective_employee_id = (
+        employee_id if can_view_other_employees else own_employee_id
+    )
+
     conditions = ["s.project_id = :project_id"]
     params: dict[str, Any] = {"project_id": str(project_id), "limit": limit}
-    if employee_id:
+    if effective_employee_id:
         conditions.append("s.employee_id = :employee_id")
-        params["employee_id"] = employee_id
+        params["employee_id"] = effective_employee_id
     if source:
         conditions.append("s.source = :source")
         params["source"] = source
@@ -647,11 +676,11 @@ def list_ai_chat_sessions(
         project_id=project_id,
         source=source,
         result_status="ok",
-        employee_id=employee_id,
+        employee_id=effective_employee_id,
     )
     return AIChatSessionListResponse(
         project_id=project_id,
-        employee_id=employee_id,
+        employee_id=effective_employee_id,
         date=work_date,
         sessions=[_row_to_session(row) for row in rows],
     )

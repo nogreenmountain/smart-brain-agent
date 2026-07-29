@@ -128,7 +128,7 @@ class AIChatRouteTests(unittest.TestCase):
         self.assertEqual(response.employee_id, "test1")
         self.assertEqual(response.employee_name, "研发一号")
         self.assertEqual(response.message_count, 2)
-        self.assertEqual(self.orm.commits, 1)
+        self.assertEqual(self.orm.commits, 2)
         insert_session = [
             params
             for sql, params in self.orm.calls
@@ -224,6 +224,34 @@ class AIChatRouteTests(unittest.TestCase):
         self.assertEqual(len(response.sessions), 1)
         self.assertIsNone(response.sessions[0].messages)
         self.assertEqual(response.sessions[0].message_count, 2)
+
+    def test_regular_member_cannot_list_another_employee_sessions(self) -> None:
+        with (
+            patch.object(route, "current_user_id", return_value=self.user_id),
+            patch.object(
+                route,
+                "require_member",
+                return_value=SimpleNamespace(role="developer"),
+            ),
+            patch.object(route, "_resolve_employee", return_value=("test1", "Test 1")),
+            patch.object(route, "record_audit"),
+        ):
+            with self.assertRaises(HTTPException) as raised:
+                route.list_ai_chat_sessions(
+                    request=object(),
+                    project_id=self.project_id,
+                    employee_id="test2",
+                    work_date=None,
+                    source=None,
+                    include_messages=False,
+                    limit=50,
+                    orm=self.orm,
+                )
+
+        self.assertEqual(raised.exception.status_code, 403)
+        self.assertFalse(
+            any("FROM public.ai_chat_sessions s" in sql for sql, _ in self.orm.calls)
+        )
 
 
 if __name__ == "__main__":

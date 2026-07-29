@@ -52,6 +52,28 @@ class WorkdayEnrollmentResponse(BaseModel):
     codex_common_config: str
 
 
+def _resolve_employee_for_user(
+    orm: Session,
+    user_id: uuid.UUID,
+) -> tuple[str, str]:
+    profile = orm.execute(
+        text("""
+            SELECT au.email, pu.full_name
+            FROM auth.users au
+            LEFT JOIN public.users pu ON pu.id = au.id
+            WHERE au.id = :uid
+        """),
+        {"uid": str(user_id)},
+    ).first()
+    if profile is None or not profile.email:
+        raise HTTPException(status_code=404, detail="user profile not found")
+    return derive_employee_identity(
+        user_id=user_id,
+        email=profile.email,
+        full_name=profile.full_name,
+    )
+
+
 def _enrollment_settings() -> tuple[str, int]:
     try:
         token_days = int(
@@ -133,23 +155,7 @@ def enroll_workday(
             detail=error.detail,
         ) from error
 
-    profile = orm.execute(
-        text("""
-            SELECT au.email, pu.full_name
-            FROM auth.users au
-            LEFT JOIN public.users pu ON pu.id = au.id
-            WHERE au.id = :uid
-        """),
-        {"uid": str(user_id)},
-    ).first()
-    if profile is None or not profile.email:
-        raise HTTPException(status_code=404, detail="user profile not found")
-
-    employee_id, employee_name = derive_employee_identity(
-        user_id=user_id,
-        email=profile.email,
-        full_name=profile.full_name,
-    )
+    employee_id, employee_name = _resolve_employee_for_user(orm, user_id)
     try:
         collector_endpoint, token_days = _enrollment_settings()
         issued_at = datetime.now(timezone.utc)
@@ -254,7 +260,11 @@ def get_workday_summary(
         ) from error
 
     try:
-        require_member(orm, user_id=user_id, project_id=project_id)
+        project_role = require_member(
+            orm,
+            user_id=user_id,
+            project_id=project_id,
+        )
     except AuthzError as error:
         _record_workday_audit(
             orm,
@@ -272,6 +282,26 @@ def get_workday_summary(
             status_code=error.status_code,
             detail=error.detail,
         ) from error
+
+    if project_role.role not in {"owner", "admin"}:
+        own_employee_id, _ = _resolve_employee_for_user(orm, user_id)
+        if employee_id != own_employee_id:
+            _record_workday_audit(
+                orm,
+                request,
+                user_id=user_id,
+                project_id=project_id,
+                employee_id=employee_id,
+                work_date=work_date,
+                include_traces=include_traces,
+                include_replay_refs=include_replay_refs,
+                include_raw_metrics=include_raw_metrics,
+                result_status="forbidden_employee_scope",
+            )
+            raise HTTPException(
+                status_code=403,
+                detail="regular members can only view their own AI usage records",
+            )
 
     try:
         spans, query_warnings = fetch_span_records(

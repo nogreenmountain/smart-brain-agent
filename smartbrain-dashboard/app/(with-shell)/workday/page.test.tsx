@@ -5,221 +5,174 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import WorkdayPage from './page';
 
 const mocks = vi.hoisted(() => ({
-  getWorkdaySummary: vi.fn(),
-  listProjects: vi.fn(),
+  createAIUsageReport: vi.fn(),
+  getAIUsageOptions: vi.fn(),
+  getAIUsageRecords: vi.fn(),
 }));
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>();
   return {
     ...actual,
-    getWorkdaySummary: mocks.getWorkdaySummary,
-    listProjects: mocks.listProjects,
+    createAIUsageReport: mocks.createAIUsageReport,
+    getAIUsageOptions: mocks.getAIUsageOptions,
+    getAIUsageRecords: mocks.getAIUsageRecords,
   };
 });
 
-const summary = {
-  status: 'ok' as const,
-  project_id: 'project-1',
-  employee: { id: 'employee-001', name: 'Alice' },
-  date: '2026-07-20',
+const selfOptions = {
+  mode: 'self' as const,
+  current_employee: {
+    id: 'tangweixiang',
+    name: '唐伟翔',
+    email: 'tangweixiang@local.dev',
+    project_ids: ['project-1'],
+  },
+  departments: [
+    { id: 'research', name: '研发' },
+    { id: 'marketing', name: '市场' },
+    { id: 'business', name: '业务' },
+  ],
+  projects: [
+    { id: 'project-1', name: '智慧大脑agent', department_id: 'research' },
+  ],
+  employees: [],
+};
+
+const usageResult = {
+  mode: 'self' as const,
+  employee: selfOptions.current_employee,
+  projects: selfOptions.projects,
   timezone: 'Asia/Shanghai' as const,
-  overview: {
-    active_start: '2026-07-20T01:00:00Z',
-    active_end: '2026-07-20T01:10:00Z',
-    active_time_range_seconds: 600,
-    trace_count: 2,
-    span_count: 6,
-    task_count: 1,
-    llm_call_count: 2,
-    tool_call_count: 3,
+  summary: {
+    start_date: '2026-07-23',
+    end_date: '2026-07-29',
+    period_days: 7,
+    active_days: 2,
+    record_count: 3,
+    total_tokens: 12600,
+    prompt_tokens: 7200,
+    completion_tokens: 5400,
+    average_tokens_per_day: 1800,
     error_count: 1,
-    total_tokens: 1800,
-    total_cost: 0.42,
-    avg_llm_latency_ms: 1200,
-    p95_llm_latency_ms: 1800,
-  },
-  narrative_summary: 'Alice 完成了日报生成任务。',
-  tasks: [
-    {
-      task_id: 'task-1',
-      title: '生成日报',
-      duration_seconds: 590,
-      trace_count: 2,
-      span_count: 6,
-      llm_call_count: 2,
-      tool_call_count: 3,
-      error_count: 1,
-      total_tokens: 1800,
-      total_cost: 0.42,
-      avg_llm_latency_ms: 1200,
-    },
-  ],
-  findings: [
-    {
-      finding_type: 'error' as const,
-      severity: 'high' as const,
-      title: '工具重复失败：shell',
-      description: '同一工具失败达到阈值。',
-      evidence: { failure_count: 2 },
-      trace_ids: ['trace-1'],
-      task_id: 'task-1',
-      threshold: 2,
-      actual_value: 2,
-    },
-  ],
-  important_traces: [
-    {
-      trace_id: 'trace-1',
-      task_id: 'task-1',
-      start_time: '2026-07-20T01:00:00Z',
-      end_time: '2026-07-20T01:10:00Z',
-      duration_seconds: 600,
-      span_count: 4,
-      llm_call_count: 1,
-      tool_call_count: 2,
-      error_count: 1,
-      total_tokens: 900,
-      total_cost: 0.3,
-      reasons: ['error_finding', 'high_tool_usage'],
-      replay_url: '/traces?trace_id=trace-1',
-    },
-  ],
-  distillation_candidates: [
-    {
-      candidate_id: 'candidate-1',
-      status: 'pending' as const,
-      title: '待复核：工具重复失败',
-      reason: '可沉淀工具失败排查经验。',
-      task_id: 'task-1',
-      trace_ids: ['trace-1'],
-      signals: ['error', 'high'],
-    },
-  ],
-  raw_metrics: {
-    prompt_tokens: 1000,
-    completion_tokens: 700,
-    reasoning_tokens: 100,
-    cache_read_input_tokens: 50,
-    total_tokens: 1800,
-    model_usage: [
-      { name: 'MiniMax-M3', call_count: 2, total_tokens: 1800, total_cost: 0.42 },
+    total_cost: 0.18,
+    daily_usage: [
+      { date: '2026-07-28', record_count: 1, total_tokens: 3600, prompt_tokens: 2100, completion_tokens: 1500, error_count: 0 },
+      { date: '2026-07-29', record_count: 2, total_tokens: 9000, prompt_tokens: 5100, completion_tokens: 3900, error_count: 1 },
     ],
-    tool_usage: [{ name: 'shell', call_count: 2, error_count: 1 }],
+    hourly_usage: Array.from({ length: 24 }, (_, hour) => ({
+      hour,
+      record_count: hour === 10 ? 3 : 0,
+      total_tokens: hour === 10 ? 12600 : 0,
+    })),
+    source_usage: [
+      { source: 'chatgpt_web', record_count: 2, total_tokens: 9600 },
+      { source: 'cc_switch', record_count: 1, total_tokens: 3000 },
+    ],
   },
-  warnings: ['1 个 Span 未标记任务，已归入 unassigned'],
+  records: [
+    {
+      id: 'chat-1',
+      record_type: 'chat' as const,
+      project_id: 'project-1',
+      project_name: '智慧大脑agent',
+      employee_id: 'tangweixiang',
+      employee_name: '唐伟翔',
+      source: 'chatgpt_web',
+      title: '登录模块联调',
+      started_at: '2026-07-29T02:00:00Z',
+      ended_at: '2026-07-29T02:05:00Z',
+      task_id: 'task-auth',
+      task_title: '登录模块',
+      model: 'gpt-4.1',
+      status: 'ok',
+      duration_ms: 300000,
+      prompt_tokens: 500,
+      completion_tokens: 400,
+      total_tokens: 900,
+      cost: 0.01,
+      error_count: 0,
+      trace_id: null,
+      message_count: 2,
+      messages: [
+        { role: 'user', content: '为什么登录返回 401？', token_count: 10, created_at: '2026-07-29T02:00:00Z' },
+        { role: 'assistant', content: '检查令牌是否过期。', token_count: 12, created_at: '2026-07-29T02:01:00Z' },
+      ],
+    },
+  ],
+  has_more: false,
+  warnings: [],
 };
 
 describe('WorkdayPage', () => {
   beforeEach(() => {
-    mocks.listProjects.mockResolvedValue([
-      {
-        id: 'project-1',
-        org_id: 'org-1',
-        name: 'Default Project',
-        environment: 'development',
-      },
-    ]);
-    mocks.getWorkdaySummary.mockResolvedValue(summary);
+    mocks.getAIUsageOptions.mockResolvedValue(selfOptions);
+    mocks.getAIUsageRecords.mockResolvedValue(usageResult);
+    mocks.createAIUsageReport.mockResolvedValue({
+      employee: selfOptions.current_employee,
+      project: selfOptions.projects[0],
+      summary: usageResult.summary,
+      high_frequency_periods: ['10:00-11:00'],
+      report: '## 完成了什么\n完成登录模块联调。\n\n## 实现了什么\n定位令牌问题。\n\n## 遇到了什么问题\n登录返回 401。\n\n## 解决了什么问题\n确认令牌过期。',
+      model: 'MiniMax-M3',
+      generated_at: '2026-07-29T04:00:00Z',
+    });
   });
 
-  it('generates and renders the complete structured workday report', async () => {
+  it('shows ordinary users only their own usage and never exposes report controls', async () => {
     const user = userEvent.setup();
     render(<WorkdayPage />);
 
-    await screen.findByRole('option', { name: 'Default Project (development)' });
-    await user.type(screen.getByLabelText('员工 ID'), 'employee-001');
-    fireEvent.change(screen.getByLabelText('工作日期'), {
-      target: { value: '2026-07-20' },
-    });
-    await user.click(screen.getByRole('button', { name: '生成日报' }));
+    expect(await screen.findByText('我的 AI 使用')).toBeInTheDocument();
+    expect(await screen.findByText('12,600')).toBeInTheDocument();
+    expect(screen.getByText('1,800')).toBeInTheDocument();
+    expect(screen.getByText('登录模块联调')).toBeInTheDocument();
+    expect(screen.queryByLabelText('部门')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('项目')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('员工')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '生成区间工作报告' })).not.toBeInTheDocument();
 
-    await waitFor(() => {
-      expect(mocks.getWorkdaySummary).toHaveBeenCalledWith('project-1', {
-        employeeId: 'employee-001',
-        date: '2026-07-20',
-        includeTraces: true,
-        includeReplayRefs: true,
-        includeRawMetrics: true,
-      });
-    });
+    await user.click(screen.getByRole('button', { name: '登录模块联调' }));
+    expect(screen.getByText('为什么登录返回 401？')).toBeInTheDocument();
 
-    expect(await screen.findByText('Alice 的 AI 工作日')).toBeInTheDocument();
-    expect(screen.getByText('Alice 完成了日报生成任务。')).toBeInTheDocument();
-    expect(screen.getAllByText('生成日报')).toHaveLength(2);
-    expect(screen.getByText('工具重复失败：shell')).toBeInTheDocument();
-    expect(screen.getByText('trace-1')).toBeInTheDocument();
-    expect(screen.getByText('待复核：工具重复失败')).toBeInTheDocument();
-    expect(screen.getByText('MiniMax-M3')).toBeInTheDocument();
-    expect(screen.getByText('1 个 Span 未标记任务，已归入 unassigned')).toBeInTheDocument();
-
-    const replay = screen.getByRole('link', { name: '打开 Trace' });
-    expect(replay).toHaveAttribute(
-      'href',
-      'http://localhost:3001/traces?trace_id=trace-1',
-    );
+    fireEvent.change(screen.getByLabelText('开始日期'), { target: { value: '2026-07-20' } });
+    await user.click(screen.getByRole('button', { name: '查询记录' }));
+    await waitFor(() => expect(mocks.getAIUsageRecords).toHaveBeenLastCalledWith(
+      expect.objectContaining({ startDate: '2026-07-20', employeeId: undefined, projectId: undefined }),
+    ));
   });
 
-  it('passes disabled include flags and keeps the core overview visible', async () => {
+  it('gives administrators cascading filters and generates a scoped report', async () => {
     const user = userEvent.setup();
+    const adminOptions = {
+      ...selfOptions,
+      mode: 'admin' as const,
+      current_employee: { ...selfOptions.current_employee, id: 'hanshangbo', name: '韩尚博', email: 'hanshangbo@local.dev' },
+      employees: [
+        { ...selfOptions.current_employee, project_ids: ['project-1'] },
+      ],
+    };
+    mocks.getAIUsageOptions.mockResolvedValueOnce(adminOptions);
+    mocks.getAIUsageRecords.mockResolvedValueOnce({ ...usageResult, mode: 'admin' });
+
     render(<WorkdayPage />);
 
-    await screen.findByRole('option', { name: 'Default Project (development)' });
-    await user.type(screen.getByLabelText('员工 ID'), 'employee-001');
-    fireEvent.change(screen.getByLabelText('工作日期'), {
-      target: { value: '2026-07-20' },
-    });
-    await user.click(screen.getByLabelText('关键 Trace'));
-    await user.click(screen.getByLabelText('详细指标'));
-    await user.click(screen.getByRole('button', { name: '生成日报' }));
+    expect(await screen.findByText('团队 AI 使用')).toBeInTheDocument();
+    expect(screen.getByLabelText('部门')).toHaveValue('research');
+    expect(screen.getByLabelText('项目')).toHaveValue('project-1');
+    expect(screen.getByLabelText('员工')).toHaveValue('tangweixiang');
+    await screen.findByText('登录模块联调');
 
-    await waitFor(() => {
-      expect(mocks.getWorkdaySummary).toHaveBeenCalledWith(
-        'project-1',
-        expect.objectContaining({
-          includeTraces: false,
-          includeReplayRefs: false,
-          includeRawMetrics: false,
-        }),
-      );
-    });
-    expect(await screen.findByText('Alice 的 AI 工作日')).toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: '关键 Trace' })).not.toBeInTheDocument();
-    expect(screen.queryByText('MiniMax-M3')).not.toBeInTheDocument();
-  });
-
-  it('renders no-data and request-error states', async () => {
-    const user = userEvent.setup();
-    mocks.getWorkdaySummary.mockResolvedValueOnce({
-      ...summary,
-      status: 'no_data',
-      narrative_summary: '',
-      tasks: [],
-      findings: [],
-      important_traces: [],
-      distillation_candidates: [],
-      raw_metrics: null,
-      warnings: [],
-    });
-    const { unmount } = render(<WorkdayPage />);
-
-    await screen.findByRole('option', { name: 'Default Project (development)' });
-    await user.type(screen.getByLabelText('员工 ID'), 'employee-001');
-    fireEvent.change(screen.getByLabelText('工作日期'), {
-      target: { value: '2026-07-20' },
-    });
-    await user.click(screen.getByRole('button', { name: '生成日报' }));
-    expect(await screen.findByText('当天没有匹配的工作数据')).toBeInTheDocument();
-
-    unmount();
-    mocks.getWorkdaySummary.mockRejectedValueOnce(new Error('日报服务暂不可用'));
-    render(<WorkdayPage />);
-    await screen.findByRole('option', { name: 'Default Project (development)' });
-    await user.type(screen.getByLabelText('员工 ID'), 'employee-001');
-    fireEvent.change(screen.getByLabelText('工作日期'), {
-      target: { value: '2026-07-20' },
-    });
-    await user.click(screen.getByRole('button', { name: '生成日报' }));
-    expect(await screen.findByText('日报服务暂不可用')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '生成区间工作报告' }));
+    await waitFor(() => expect(mocks.createAIUsageReport).toHaveBeenCalledWith({
+      departmentId: 'research',
+      projectId: 'project-1',
+      employeeId: 'tangweixiang',
+      startDate: expect.any(String),
+      endDate: expect.any(String),
+      source: undefined,
+    }));
+    expect(await screen.findByText('AI 使用工作报告')).toBeInTheDocument();
+    expect(screen.getByText('完成登录模块联调。')).toBeInTheDocument();
   });
 });

@@ -310,6 +310,151 @@ export interface WorkdaySummaryParams {
   includeRawMetrics: boolean;
 }
 
+export type AIUsageSource =
+  | 'cc_switch'
+  | 'chatgpt_web'
+  | 'chatgpt_desktop'
+  | 'openai_compliance'
+  | 'smartbrain';
+
+export interface AIUsageDepartmentOption {
+  id: DepartmentId;
+  name: string;
+}
+
+export interface AIUsageProjectOption {
+  id: string;
+  name: string;
+  department_id: DepartmentId;
+}
+
+export interface AIUsageEmployeeOption {
+  id: string;
+  name: string;
+  email: string;
+  project_ids: string[];
+}
+
+export interface AIUsageOptions {
+  mode: 'self' | 'admin';
+  current_employee: AIUsageEmployeeOption;
+  departments: AIUsageDepartmentOption[];
+  projects: AIUsageProjectOption[];
+  employees: AIUsageEmployeeOption[];
+}
+
+export interface AIUsageMessage {
+  role: string;
+  content: string;
+  token_count: number | null;
+  created_at: string | null;
+}
+
+export interface AIUsageRecord {
+  id: string;
+  record_type: 'chat' | 'trace';
+  project_id: string;
+  project_name: string;
+  employee_id: string;
+  employee_name: string;
+  source: string;
+  title: string;
+  started_at: string;
+  ended_at: string | null;
+  task_id: string;
+  task_title: string | null;
+  model: string | null;
+  status: string;
+  duration_ms: number | null;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  cost: number;
+  error_count: number;
+  trace_id: string | null;
+  message_count: number;
+  messages: AIUsageMessage[] | null;
+}
+
+export interface AIUsageDailyPoint {
+  date: string;
+  record_count: number;
+  total_tokens: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  error_count: number;
+}
+
+export interface AIUsageHourlyPoint {
+  hour: number;
+  record_count: number;
+  total_tokens: number;
+}
+
+export interface AIUsageSourcePoint {
+  source: string;
+  record_count: number;
+  total_tokens: number;
+}
+
+export interface AIUsageSummary {
+  start_date: string;
+  end_date: string;
+  period_days: number;
+  active_days: number;
+  record_count: number;
+  total_tokens: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  average_tokens_per_day: number;
+  error_count: number;
+  total_cost: number;
+  daily_usage: AIUsageDailyPoint[];
+  hourly_usage: AIUsageHourlyPoint[];
+  source_usage: AIUsageSourcePoint[];
+}
+
+export interface AIUsageQueryResult {
+  mode: 'self' | 'admin';
+  employee: AIUsageEmployeeOption;
+  projects: AIUsageProjectOption[];
+  timezone: 'Asia/Shanghai';
+  summary: AIUsageSummary;
+  records: AIUsageRecord[];
+  has_more: boolean;
+  warnings: string[];
+}
+
+export interface AIUsageQueryParams {
+  startDate: string;
+  endDate: string;
+  departmentId?: DepartmentId;
+  projectId?: string;
+  employeeId?: string;
+  source?: AIUsageSource;
+  includeMessages?: boolean;
+  limit?: number;
+}
+
+export interface AIUsageReport {
+  employee: AIUsageEmployeeOption;
+  project: AIUsageProjectOption;
+  summary: AIUsageSummary;
+  high_frequency_periods: string[];
+  report: string;
+  model: string;
+  generated_at: string;
+}
+
+export interface AIUsageReportParams {
+  departmentId: DepartmentId;
+  projectId: string;
+  employeeId: string;
+  startDate: string;
+  endDate: string;
+  source?: AIUsageSource;
+}
+
 export type DepartmentId = 'research' | 'marketing' | 'business';
 
 export interface Department {
@@ -623,6 +768,43 @@ export async function getWorkdaySummary(
   return call<WorkdaySummary>(
     `/v4/workday/summary/${encodeURIComponent(projectId)}?${qs.toString()}`,
   );
+}
+
+export async function getAIUsageOptions(): Promise<AIUsageOptions> {
+  return call<AIUsageOptions>('/v4/ai-usage/options');
+}
+
+export async function getAIUsageRecords(
+  params: AIUsageQueryParams,
+): Promise<AIUsageQueryResult> {
+  const qs = new URLSearchParams({
+    start_date: params.startDate,
+    end_date: params.endDate,
+    include_messages: String(params.includeMessages ?? true),
+    limit: String(params.limit ?? 100),
+  });
+  if (params.departmentId) qs.set('department_id', params.departmentId);
+  if (params.projectId) qs.set('project_id', params.projectId);
+  if (params.employeeId) qs.set('employee_id', params.employeeId);
+  if (params.source) qs.set('source', params.source);
+  return call<AIUsageQueryResult>(`/v4/ai-usage/records?${qs.toString()}`);
+}
+
+export async function createAIUsageReport(
+  params: AIUsageReportParams,
+): Promise<AIUsageReport> {
+  return call<AIUsageReport>('/v4/ai-usage/report', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      department_id: params.departmentId,
+      project_id: params.projectId,
+      employee_id: params.employeeId,
+      start_date: params.startDate,
+      end_date: params.endDate,
+      source: params.source,
+    }),
+  });
 }
 
 // 项目长期记忆

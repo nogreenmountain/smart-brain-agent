@@ -6,6 +6,7 @@ import unittest
 import uuid
 from datetime import date
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from fastapi import HTTPException
@@ -70,7 +71,11 @@ class WorkdayRouteTests(unittest.TestCase):
     def test_aggregation_failure_is_audited_and_returns_service_error(self) -> None:
         with (
             patch.object(route, "current_user_id", return_value=self.user_id),
-            patch.object(route, "require_member"),
+            patch.object(
+                route,
+                "require_member",
+                return_value=SimpleNamespace(role="admin"),
+            ),
             patch.object(route, "fetch_span_records", return_value=([], ())),
             patch.object(
                 route,
@@ -85,6 +90,30 @@ class WorkdayRouteTests(unittest.TestCase):
         self.assertEqual(raised.exception.status_code, 503)
         audit.assert_called_once()
         self.assertEqual(audit.call_args.kwargs["result_status"], "service_error")
+
+    def test_regular_member_cannot_request_another_employee_summary(self) -> None:
+        with (
+            patch.object(route, "current_user_id", return_value=self.user_id),
+            patch.object(
+                route,
+                "require_member",
+                return_value=SimpleNamespace(role="developer"),
+            ),
+            patch.object(
+                route,
+                "_resolve_employee_for_user",
+                return_value=("employee-self", "Employee Self"),
+            ),
+            patch.object(route, "_record_workday_audit") as audit,
+        ):
+            with self.assertRaises(HTTPException) as raised:
+                route.get_workday_summary(**self.common)
+
+        self.assertEqual(raised.exception.status_code, 403)
+        self.assertEqual(
+            audit.call_args.kwargs["result_status"],
+            "forbidden_employee_scope",
+        )
 
 
 if __name__ == "__main__":
