@@ -56,7 +56,6 @@ class AIUsageTraceQueryTests(unittest.TestCase):
     def _query(self) -> str:
         route._trace_records(
             self.clickhouse,
-            projects=self.projects,
             employee_id="employee-001",
             start_utc=datetime(2026, 7, 29, tzinfo=timezone.utc),
             end_utc=datetime(2026, 7, 30, tzinfo=timezone.utc),
@@ -70,6 +69,8 @@ class AIUsageTraceQueryTests(unittest.TestCase):
         self.assertIn("HAVING", sql)
         self.assertIn("meaningful_span_count > 0", sql)
         self.assertIn("session_task.turn", sql)
+        self.assertNotIn("WHERE project_id IN", sql)
+        self.assertEqual(self.clickhouse.parameters["employee_id"], "employee-001")
 
     def test_query_supports_codex_turn_token_attributes(self) -> None:
         sql = self._query()

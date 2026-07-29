@@ -59,7 +59,7 @@ def _record_context(records: list[Any], *, max_chars: int = 30_000) -> str:
 def build_report_prompt(
     *,
     employee_name: str,
-    project_name: str,
+    scope_name: str,
     summary: Any,
     records: list[Any],
 ) -> str:
@@ -68,7 +68,7 @@ def build_report_prompt(
     return f"""请根据以下事实生成一份区间 AI 使用工作报告。
 
 员工：{employee_name}
-项目：{project_name}
+统计范围：{scope_name}
 日期区间：{summary.start_date.isoformat()} 至 {summary.end_date.isoformat()}（含首尾）
 区间自然日：{summary.period_days}
 有使用记录的天数：{summary.active_days}

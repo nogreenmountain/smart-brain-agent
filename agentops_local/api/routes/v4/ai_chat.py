@@ -432,20 +432,6 @@ def ingest_ai_chat(
     except AuthzError as error:
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error
 
-    try:
-        require_member(orm, user_id=user_id, project_id=body.project_id)
-    except AuthzError as error:
-        _record_ai_chat_audit(
-            orm,
-            request,
-            user_id=user_id,
-            action="ai_chat_ingest",
-            project_id=body.project_id,
-            source=body.source,
-            result_status="forbidden",
-        )
-        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
-
     employee_id, employee_name = _resolve_employee(orm, user_id)
     try:
         session_id = _store_chat_session(
@@ -531,10 +517,6 @@ def device_ingest_ai_chat(
     if str(body.project_id) != str(claims["project_id"]):
         raise HTTPException(status_code=403, detail="project is outside the device credential scope")
     user_id = uuid.UUID(str(claims["sub"]))
-    try:
-        require_member(orm, user_id=user_id, project_id=body.project_id)
-    except AuthzError as error:
-        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
 
     employee_id = str(claims["employee_id"])
     employee_name = str(claims["employee_name"])

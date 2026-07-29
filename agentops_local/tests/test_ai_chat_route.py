@@ -120,11 +120,7 @@ class AIChatRouteTests(unittest.TestCase):
                 orm=self.orm,
             )
 
-        require_member.assert_called_once_with(
-            self.orm,
-            user_id=self.user_id,
-            project_id=self.project_id,
-        )
+        require_member.assert_not_called()
         self.assertEqual(response.employee_id, "test1")
         self.assertEqual(response.employee_name, "研发一号")
         self.assertEqual(response.message_count, 2)
@@ -147,7 +143,7 @@ class AIChatRouteTests(unittest.TestCase):
         audit.assert_called_once()
         self.assertEqual(audit.call_args.kwargs["action"], "ai_chat_ingest")
 
-    def test_non_member_cannot_ingest(self) -> None:
+    def test_ai_monitor_ingest_does_not_require_project_membership(self) -> None:
         with (
             patch.object(route, "current_user_id", return_value=self.user_id),
             patch.object(
@@ -157,20 +153,19 @@ class AIChatRouteTests(unittest.TestCase):
             ),
             patch.object(route, "record_audit") as audit,
         ):
-            with self.assertRaises(HTTPException) as raised:
-                route.ingest_ai_chat(
-                    request=object(),
-                    body=self.body,
-                    orm=self.orm,
-                )
+            response = route.ingest_ai_chat(
+                request=object(),
+                body=self.body,
+                orm=self.orm,
+            )
 
-        self.assertEqual(raised.exception.status_code, 403)
-        self.assertFalse(
+        self.assertEqual(response.employee_id, "test1")
+        self.assertTrue(
             any("INSERT INTO public.ai_chat_sessions" in sql for sql, _ in self.orm.calls)
         )
         audit.assert_called_once()
         self.assertEqual(audit.call_args.kwargs["action"], "ai_chat_ingest")
-        self.assertEqual(audit.call_args.kwargs["metadata"]["result_status"], "forbidden")
+        self.assertEqual(audit.call_args.kwargs["metadata"]["result_status"], "ok")
 
     def test_device_ingest_uses_signed_employee_identity(self) -> None:
         self.body.source = "cc_switch"
@@ -199,11 +194,7 @@ class AIChatRouteTests(unittest.TestCase):
             "signed-device-token",
             secret="x" * 32,
         )
-        require_member.assert_called_once_with(
-            self.orm,
-            user_id=self.user_id,
-            project_id=self.project_id,
-        )
+        require_member.assert_not_called()
         self.assertEqual(response.employee_id, "test1")
         insert_session = [
             params

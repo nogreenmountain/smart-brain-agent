@@ -51,11 +51,12 @@ class AIUsageReportingTests(unittest.TestCase):
 
         prompt = reporting.build_report_prompt(
             employee_name="Test 1",
-            project_name="Smart Brain",
+            scope_name="All AI usage",
             summary=summary,
             records=[record],
         )
 
+        self.assertIn("All AI usage", prompt)
         self.assertIn("Token 总量：900", prompt)
         self.assertIn("自然日日均 Token：300.0", prompt)
         self.assertIn("完成了什么", prompt)

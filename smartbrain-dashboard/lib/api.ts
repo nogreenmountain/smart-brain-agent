@@ -428,8 +428,6 @@ export interface AIUsageQueryResult {
 export interface AIUsageQueryParams {
   startDate: string;
   endDate: string;
-  departmentId?: DepartmentId;
-  projectId?: string;
   employeeId?: string;
   source?: AIUsageSource;
   includeMessages?: boolean;
@@ -438,7 +436,6 @@ export interface AIUsageQueryParams {
 
 export interface AIUsageReport {
   employee: AIUsageEmployeeOption;
-  project: AIUsageProjectOption;
   summary: AIUsageSummary;
   high_frequency_periods: string[];
   report: string;
@@ -447,8 +444,6 @@ export interface AIUsageReport {
 }
 
 export interface AIUsageReportParams {
-  departmentId: DepartmentId;
-  projectId: string;
   employeeId: string;
   startDate: string;
   endDate: string;
@@ -783,8 +778,6 @@ export async function getAIUsageRecords(
     include_messages: String(params.includeMessages ?? true),
     limit: String(params.limit ?? 100),
   });
-  if (params.departmentId) qs.set('department_id', params.departmentId);
-  if (params.projectId) qs.set('project_id', params.projectId);
   if (params.employeeId) qs.set('employee_id', params.employeeId);
   if (params.source) qs.set('source', params.source);
   return call<AIUsageQueryResult>(`/v4/ai-usage/records?${qs.toString()}`);
@@ -797,8 +790,6 @@ export async function createAIUsageReport(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      department_id: params.departmentId,
-      project_id: params.projectId,
       employee_id: params.employeeId,
       start_date: params.startDate,
       end_date: params.endDate,

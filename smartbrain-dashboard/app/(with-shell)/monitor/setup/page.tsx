@@ -50,7 +50,7 @@ const componentLabels: Record<AIMonitorComponentName, string> = {
 
 const componentDescriptions: Record<AIMonitorComponentName, string> = {
   cc_switch: '通过 CC Switch 转接的 Claude Code、Codex 调用会写入 Trace。',
-  chatgpt_web_extension: '打开 ChatGPT 网页时同步项目、任务、聊天记录、token 估算和耗时。',
+  chatgpt_web_extension: '打开 ChatGPT 网页时同步员工、任务、聊天记录、token 估算和耗时。',
   browser_shortcut: '员工从桌面快捷方式启动浏览器，确保插件只在受控窗口里生效。',
   chatgpt_desktop: '个人账号桌面端暂不做本地强抓，正式方案走受监控网页或企业合规接口。',
 };

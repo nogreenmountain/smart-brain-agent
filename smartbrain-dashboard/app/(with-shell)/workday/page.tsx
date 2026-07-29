@@ -30,7 +30,6 @@ import {
   AIUsageReport,
   AIUsageSource,
   createAIUsageReport,
-  DepartmentId,
   getAIUsageOptions,
   getAIUsageRecords,
 } from '@/lib/api';
@@ -42,6 +41,9 @@ const SOURCE_LABELS: Record<string, string> = {
   openai_compliance: 'OpenAI 合规接口',
   smartbrain: '智慧大脑',
 };
+
+const selectClass =
+  'h-10 w-full rounded-lg border border-[#d7e0ec] bg-white px-3 text-sm text-[#10213e] outline-none transition focus:border-brand-500 focus:ring-4 focus:ring-brand-500/15 disabled:bg-[#f7f9fc] disabled:text-[#8b99ae]';
 
 function shanghaiToday(): string {
   return new Intl.DateTimeFormat('en-CA', {
@@ -93,14 +95,9 @@ function sourceLabel(source: string): string {
   return SOURCE_LABELS[source] ?? source;
 }
 
-const selectClass =
-  'h-10 w-full rounded-lg border border-[#d7e0ec] bg-white px-3 text-sm text-[#10213e] outline-none transition focus:border-brand-500 focus:ring-4 focus:ring-brand-500/15 disabled:bg-[#f7f9fc] disabled:text-[#8b99ae]';
-
 export default function WorkdayPage() {
   const today = useMemo(shanghaiToday, []);
   const [options, setOptions] = useState<AIUsageOptions | null>(null);
-  const [departmentId, setDepartmentId] = useState<DepartmentId>('research');
-  const [projectId, setProjectId] = useState('');
   const [employeeId, setEmployeeId] = useState('');
   const [startDate, setStartDate] = useState(() => shiftDate(today, -6));
   const [endDate, setEndDate] = useState(today);
@@ -114,14 +111,7 @@ export default function WorkdayPage() {
   const [error, setError] = useState('');
 
   const adminMode = options?.mode === 'admin';
-  const departmentProjects = useMemo(
-    () => options?.projects.filter((item) => item.department_id === departmentId) ?? [],
-    [departmentId, options],
-  );
-  const projectEmployees = useMemo(
-    () => options?.employees.filter((item) => item.project_ids.includes(projectId)) ?? [],
-    [options, projectId],
-  );
+  const employeeOptions = options?.employees ?? [];
 
   useEffect(() => {
     let active = true;
@@ -129,25 +119,10 @@ export default function WorkdayPage() {
       .then(async (loaded) => {
         if (!active) return;
         setOptions(loaded);
-        let initialDepartment: DepartmentId = 'research';
-        let initialProject = '';
-        let initialEmployee = '';
-        if (loaded.mode === 'admin') {
-          const firstProject = loaded.projects[0];
-          initialDepartment = firstProject?.department_id ?? 'research';
-          initialProject = firstProject?.id ?? '';
-          initialEmployee = loaded.employees.find((item) => item.project_ids.includes(initialProject))?.id ?? '';
-          setDepartmentId(initialDepartment);
-          setProjectId(initialProject);
-          setEmployeeId(initialEmployee);
-        }
-        if (loaded.mode === 'self' || (initialProject && initialEmployee)) {
-          await loadRecords({
-            mode: loaded.mode,
-            department: initialDepartment,
-            project: initialProject,
-            employee: initialEmployee,
-          });
+        const initialEmployee = loaded.mode === 'admin' ? loaded.employees[0]?.id ?? '' : '';
+        if (initialEmployee) setEmployeeId(initialEmployee);
+        if (loaded.mode === 'self' || initialEmployee) {
+          await loadRecords(loaded.mode, initialEmployee);
         }
       })
       .catch((requestError: unknown) => {
@@ -163,28 +138,19 @@ export default function WorkdayPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function loadRecords(scope?: {
-    mode: 'self' | 'admin';
-    department: DepartmentId;
-    project: string;
-    employee: string;
-  }) {
-    const mode = scope?.mode ?? options?.mode;
+  async function loadRecords(modeOverride?: 'self' | 'admin', employeeOverride?: string) {
+    const mode = modeOverride ?? options?.mode;
     if (!mode || loadingRecords) return;
-    const selectedProject = scope?.project ?? projectId;
-    const selectedEmployee = scope?.employee ?? employeeId;
-    const selectedDepartment = scope?.department ?? departmentId;
+    const selectedEmployee = employeeOverride ?? employeeId;
     if (startDate > endDate) {
       setError('开始日期不能晚于结束日期');
       return;
     }
-    if (mode === 'admin' && (!selectedProject || !selectedEmployee)) return;
+    if (mode === 'admin' && !selectedEmployee) return;
 
     const params: AIUsageQueryParams = {
       startDate,
       endDate,
-      departmentId: mode === 'admin' ? selectedDepartment : undefined,
-      projectId: mode === 'admin' ? selectedProject : undefined,
       employeeId: mode === 'admin' ? selectedEmployee : undefined,
       source: source || undefined,
       includeMessages: true,
@@ -207,25 +173,6 @@ export default function WorkdayPage() {
     void loadRecords();
   }
 
-  function chooseDepartment(value: DepartmentId) {
-    setDepartmentId(value);
-    const nextProject = options?.projects.find((item) => item.department_id === value);
-    const nextProjectId = nextProject?.id ?? '';
-    setProjectId(nextProjectId);
-    setEmployeeId(options?.employees.find((item) => item.project_ids.includes(nextProjectId))?.id ?? '');
-    setResult(null);
-    setReport(null);
-  }
-
-  function chooseProject(value: string) {
-    setProjectId(value);
-    const project = options?.projects.find((item) => item.id === value);
-    if (project) setDepartmentId(project.department_id);
-    setEmployeeId(options?.employees.find((item) => item.project_ids.includes(value))?.id ?? '');
-    setResult(null);
-    setReport(null);
-  }
-
   function setRange(days: number) {
     setStartDate(shiftDate(today, -(days - 1)));
     setEndDate(today);
@@ -234,19 +181,16 @@ export default function WorkdayPage() {
   }
 
   async function generateReport() {
-    if (!adminMode || !projectId || !employeeId || !result || generatingReport) return;
+    if (!adminMode || !employeeId || !result || generatingReport) return;
     setGeneratingReport(true);
     setError('');
     try {
-      const generated = await createAIUsageReport({
-        departmentId,
-        projectId,
+      setReport(await createAIUsageReport({
         employeeId,
         startDate,
         endDate,
         source: source || undefined,
-      });
-      setReport(generated);
+      }));
     } catch (requestError: unknown) {
       setError(requestError instanceof Error ? requestError.message : 'AI 使用工作报告生成失败');
     } finally {
@@ -278,7 +222,7 @@ export default function WorkdayPage() {
             )}
           </div>
           <p className="mt-0.5 truncate text-xs text-[#6c7b91]">
-            {options?.current_employee.name ?? '正在确认账号权限'} · Asia/Shanghai
+            {options?.current_employee.name ?? '正在确认账号权限'} · Asia/Shanghai · 按员工账号统计
           </p>
         </div>
         {result && (
@@ -292,22 +236,11 @@ export default function WorkdayPage() {
       <main className="flex-1 overflow-y-auto">
         <form onSubmit={submitQuery} className="border-b border-[#dde4ee] bg-white px-4 py-4 md:px-6">
           {adminMode && (
-            <div className="mb-3 grid gap-3 sm:grid-cols-3">
-              <Field label="部门" htmlFor="usage-department">
-                <select id="usage-department" className={selectClass} value={departmentId} onChange={(event) => chooseDepartment(event.target.value as DepartmentId)}>
-                  {options?.departments.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-                </select>
-              </Field>
-              <Field label="项目" htmlFor="usage-project">
-                <select id="usage-project" className={selectClass} value={projectId} onChange={(event) => chooseProject(event.target.value)}>
-                  {departmentProjects.length === 0 && <option value="">该部门暂无项目</option>}
-                  {departmentProjects.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-                </select>
-              </Field>
+            <div className="mb-3 grid gap-3 sm:grid-cols-[minmax(260px,420px)]">
               <Field label="员工" htmlFor="usage-employee">
                 <select id="usage-employee" className={selectClass} value={employeeId} onChange={(event) => { setEmployeeId(event.target.value); setResult(null); setReport(null); }}>
-                  {projectEmployees.length === 0 && <option value="">该项目暂无成员</option>}
-                  {projectEmployees.map((item) => <option key={item.id} value={item.id}>{item.name} ({item.email.split('@')[0]})</option>)}
+                  {employeeOptions.length === 0 && <option value="">暂无可查询员工</option>}
+                  {employeeOptions.map((item) => <option key={item.id} value={item.id}>{item.name} ({item.email.split('@')[0]})</option>)}
                 </select>
               </Field>
             </div>
@@ -326,7 +259,7 @@ export default function WorkdayPage() {
                 {Object.entries(SOURCE_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
               </select>
             </Field>
-            <Button type="submit" className="w-full lg:w-auto" disabled={loadingOptions || loadingRecords || (adminMode && (!projectId || !employeeId))}>
+            <Button type="submit" className="w-full lg:w-auto" disabled={loadingOptions || loadingRecords || (adminMode && !employeeId)}>
               {loadingRecords ? <><LoadingDots /> 查询中</> : <><Search size={16} aria-hidden="true" /> 查询记录</>}
             </Button>
           </div>
@@ -344,13 +277,14 @@ export default function WorkdayPage() {
           <div className="flex items-center justify-center gap-3 py-24 text-sm text-[#6c7b91]"><LoadingDots />正在汇总 AI 使用记录</div>
         )}
         {!loadingOptions && !loadingRecords && !result && !error && (
-          <EmptyState icon="" title={adminMode ? '选择范围后查询员工 AI 使用记录' : '选择日期区间后查询自己的 AI 使用记录'} />
+          <EmptyState icon="" title={adminMode ? '选择员工后查询 AI 使用记录' : '选择日期区间后查询自己的 AI 使用记录'} />
         )}
+
         {result && (
           <div className="mx-auto w-full max-w-[1500px] px-4 py-5 md:px-6">
             <section aria-label="AI 使用概览" className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
               <Metric icon={<Zap size={17} />} label="Token 总量" value={formatCount(result.summary.total_tokens)} detail={`${formatCount(result.summary.prompt_tokens)} 输入 · ${formatCount(result.summary.completion_tokens)} 输出`} tone="blue" />
-              <Metric icon={<BarChart3 size={17} />} label="自然日日均" value={formatCount(result.summary.average_tokens_per_day)} detail={`按 ${result.summary.period_days} 个自然日计算`} tone="green" />
+              <Metric icon={<BarChart3 size={17} />} label="自然日均值" value={formatCount(result.summary.average_tokens_per_day)} detail={`按 ${result.summary.period_days} 个自然日计算`} tone="green" />
               <Metric icon={<MessageSquareText size={17} />} label="使用记录" value={formatCount(result.summary.record_count)} detail={`${result.summary.source_usage.length} 个 AI 来源`} tone="violet" />
               <Metric icon={<CalendarDays size={17} />} label="活跃天数" value={`${result.summary.active_days} 天`} detail={`覆盖区间 ${result.summary.period_days} 天`} tone="cyan" />
               <Metric icon={<TriangleAlert size={17} />} label="错误记录" value={formatCount(result.summary.error_count)} detail={result.summary.error_count ? '建议展开记录复盘' : '所选区间无已记录错误'} tone={result.summary.error_count ? 'red' : 'gray'} />
@@ -375,7 +309,7 @@ export default function WorkdayPage() {
                   <div className="flex flex-wrap items-end justify-between gap-3">
                     <div>
                       <h2 className="text-base font-semibold text-[#0b1930]">AI 使用记录</h2>
-                      <p className="mt-1 text-xs text-[#6c7b91]">{result.employee.name} · {result.projects.map((item) => item.name).join('、')}</p>
+                      <p className="mt-1 text-xs text-[#6c7b91]">{result.employee.name} · 按员工账号汇总，不按项目切分</p>
                     </div>
                     {adminMode && (
                       <Button type="button" onClick={generateReport} disabled={generatingReport || result.summary.record_count === 0}>
@@ -436,7 +370,7 @@ function HourlyUsage({ result }: { result: AIUsageQueryResult }) {
 
 function UsageRecordRow({ record, expanded, onToggle }: { record: AIUsageRecord; expanded: boolean; onToggle: () => void }) {
   const duration = formatDuration(record.duration_ms);
-  return <article className="min-w-0"><button type="button" onClick={onToggle} className="flex w-full items-start gap-3 px-3 py-3 text-left hover:bg-[#f8fafc] md:px-4" aria-expanded={expanded} aria-label={record.title}>{expanded ? <ChevronDown className="mt-1 shrink-0 text-[#6c7b91]" size={17} /> : <ChevronRight className="mt-1 shrink-0 text-[#6c7b91]" size={17} />}<span className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md ${record.record_type === 'chat' ? 'bg-[#eaf2ff] text-[#2463a9]' : 'bg-[#eef1f5] text-[#607086]'}`}>{record.record_type === 'chat' ? <MessageSquareText size={16} /> : <Bot size={16} />}</span><span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium text-[#172844]">{record.title}</span><span className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-[#6c7b91]"><span>{formatDateTime(record.started_at)}</span><span>{sourceLabel(record.source)}</span><span>{record.project_name}</span>{duration && <span>{duration}</span>}</span></span><span className="shrink-0 text-right"><span className="block text-sm font-semibold text-[#253655]">{formatCount(record.total_tokens)}</span><span className="text-[10px] text-[#8491a4]">Tokens</span></span></button>{expanded && <div className="border-t border-[#edf1f6] bg-[#f8fafc] px-4 py-4 md:pl-[76px] md:pr-5"><div className="flex flex-wrap gap-2 text-[11px]"><Badge icon={<Hash size={12} />} text={record.task_title ?? record.task_id} /><Badge icon={<Bot size={12} />} text={record.model ?? '模型未上报'} />{record.error_count > 0 && <Badge icon={<TriangleAlert size={12} />} text={`${record.error_count} 个错误`} danger />}{record.trace_id && <a href={replayHref(record.trace_id)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-md border border-[#cbd8e8] bg-white px-2 py-1 font-medium text-[#2463a9] hover:border-[#8eb4dd]"><ExternalLink size={12} />打开 Trace</a>}</div>{record.messages && record.messages.length > 0 ? <div className="mt-4 space-y-3">{record.messages.map((message, index) => <div key={`${record.id}-${index}`} className={`max-w-4xl rounded-lg border px-3 py-2.5 text-sm leading-6 ${message.role === 'user' ? 'border-[#cfe0f4] bg-white text-[#1d3554]' : 'border-[#dbe7df] bg-[#f3faf6] text-[#234536]'}`}><p className="mb-1 text-[10px] font-semibold uppercase text-[#78869a]">{message.role === 'user' ? '用户' : message.role === 'assistant' ? 'AI' : message.role}</p><p className="whitespace-pre-wrap break-words">{message.content}</p></div>)}</div> : <p className="mt-4 text-xs text-[#6c7b91]">该记录只有结构化调用指标，没有可展开的对话内容。</p>}</div>}</article>;
+  return <article className="min-w-0"><button type="button" onClick={onToggle} className="flex w-full items-start gap-3 px-3 py-3 text-left hover:bg-[#f8fafc] md:px-4" aria-expanded={expanded} aria-label={record.title}>{expanded ? <ChevronDown className="mt-1 shrink-0 text-[#6c7b91]" size={17} /> : <ChevronRight className="mt-1 shrink-0 text-[#6c7b91]" size={17} />}<span className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md ${record.record_type === 'chat' ? 'bg-[#eaf2ff] text-[#2463a9]' : 'bg-[#eef1f5] text-[#607086]'}`}>{record.record_type === 'chat' ? <MessageSquareText size={16} /> : <Bot size={16} />}</span><span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium text-[#172844]">{record.title}</span><span className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-[#6c7b91]"><span>{formatDateTime(record.started_at)}</span><span>{sourceLabel(record.source)}</span>{record.model && <span>{record.model}</span>}{duration && <span>{duration}</span>}</span></span><span className="shrink-0 text-right"><span className="block text-sm font-semibold text-[#253655]">{formatCount(record.total_tokens)}</span><span className="text-[10px] text-[#8491a4]">Tokens</span></span></button>{expanded && <div className="border-t border-[#edf1f6] bg-[#f8fafc] px-4 py-4 md:pl-[76px] md:pr-5"><div className="flex flex-wrap gap-2 text-[11px]"><Badge icon={<Hash size={12} />} text={record.task_title ?? record.task_id} /><Badge icon={<Bot size={12} />} text={record.model ?? '模型未上报'} />{record.error_count > 0 && <Badge icon={<TriangleAlert size={12} />} text={`${record.error_count} 个错误`} danger />}{record.trace_id && <a href={replayHref(record.trace_id)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-md border border-[#cbd8e8] bg-white px-2 py-1 font-medium text-[#2463a9] hover:border-[#8eb4dd]"><ExternalLink size={12} />打开 Trace</a>}</div>{record.messages && record.messages.length > 0 ? <div className="mt-4 space-y-3">{record.messages.map((message, index) => <div key={`${record.id}-${index}`} className={`max-w-4xl rounded-lg border px-3 py-2.5 text-sm leading-6 ${message.role === 'user' ? 'border-[#cfe0f4] bg-white text-[#1d3554]' : 'border-[#dbe7df] bg-[#f3faf6] text-[#234536]'}`}><p className="mb-1 text-[10px] font-semibold uppercase text-[#78869a]">{message.role === 'user' ? '用户' : message.role === 'assistant' ? 'AI' : message.role}</p><p className="whitespace-pre-wrap break-words">{message.content}</p></div>)}</div> : <p className="mt-4 text-xs text-[#6c7b91]">该记录暂未同步到可展开的对话正文。</p>}</div>}</article>;
 }
 
 function Badge({ icon, text, danger = false }: { icon: ReactNode; text: string; danger?: boolean }) {
@@ -445,7 +379,7 @@ function Badge({ icon, text, danger = false }: { icon: ReactNode; text: string; 
 
 function ReportPanel({ report }: { report: AIUsageReport }) {
   const sections = report.report.split(/(?=^##\s)/m).map((item) => item.trim()).filter(Boolean);
-  return <section className="mt-7 border-t-2 border-[#b9c9dc] pt-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><div className="flex items-center gap-2"><FileText size={18} className="text-[#3979bf]" /><h2 className="text-base font-semibold text-[#0b1930]">AI 使用工作报告</h2></div><p className="mt-1 text-xs text-[#6c7b91]">{report.employee.name} · {report.project.name} · {report.summary.start_date} 至 {report.summary.end_date}</p></div><span className="rounded-md border border-[#d7e0ec] bg-white px-2 py-1 text-[11px] text-[#6c7b91]">{report.model}</span></div><div className="mt-4 grid gap-3 sm:grid-cols-3"><MiniFact icon={<Clock3 size={15} />} label="高频时段" value={report.high_frequency_periods.join('、') || '暂无'} /><MiniFact icon={<Zap size={15} />} label="Token 总量" value={formatCount(report.summary.total_tokens)} /><MiniFact icon={<BarChart3 size={15} />} label="自然日日均" value={formatCount(report.summary.average_tokens_per_day)} /></div><div className="mt-5 grid gap-x-8 gap-y-5 lg:grid-cols-2">{sections.map((section) => { const [heading, ...body] = section.split('\n'); return <div key={heading} className="border-l-2 border-[#8eb4dd] pl-4"><h3 className="text-sm font-semibold text-[#172844]">{heading.replace(/^##\s*/, '')}</h3><p className="mt-2 whitespace-pre-wrap text-sm leading-7 text-[#465873]">{body.join('\n').trim().replace(/\*\*/g, '')}</p></div>; })}</div></section>;
+  return <section className="mt-7 border-t-2 border-[#b9c9dc] pt-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><div className="flex items-center gap-2"><FileText size={18} className="text-[#3979bf]" /><h2 className="text-base font-semibold text-[#0b1930]">AI 使用工作报告</h2></div><p className="mt-1 text-xs text-[#6c7b91]">{report.employee.name} · {report.summary.start_date} 至 {report.summary.end_date}</p></div><span className="rounded-md border border-[#d7e0ec] bg-white px-2 py-1 text-[11px] text-[#6c7b91]">{report.model}</span></div><div className="mt-4 grid gap-3 sm:grid-cols-3"><MiniFact icon={<Clock3 size={15} />} label="高频时段" value={report.high_frequency_periods.join('、') || '暂无'} /><MiniFact icon={<Zap size={15} />} label="Token 总量" value={formatCount(report.summary.total_tokens)} /><MiniFact icon={<BarChart3 size={15} />} label="自然日均值" value={formatCount(report.summary.average_tokens_per_day)} /></div><div className="mt-5 grid gap-x-8 gap-y-5 lg:grid-cols-2">{sections.map((section) => { const [heading, ...body] = section.split('\n'); return <div key={heading} className="border-l-2 border-[#8eb4dd] pl-4"><h3 className="text-sm font-semibold text-[#172844]">{heading.replace(/^##\s*/, '')}</h3><p className="mt-2 whitespace-pre-wrap text-sm leading-7 text-[#465873]">{body.join('\n').trim().replace(/\*\*/g, '')}</p></div>; })}</div></section>;
 }
 
 function MiniFact({ icon, label, value }: { icon: ReactNode; label: string; value: string }) {

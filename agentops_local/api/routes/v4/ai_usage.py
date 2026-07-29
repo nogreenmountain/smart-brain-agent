@@ -65,7 +65,7 @@ class UsageEmployeeOption(BaseModel):
     id: str
     name: str
     email: str
-    project_ids: list[uuid.UUID]
+    project_ids: list[uuid.UUID] = Field(default_factory=list)
 
 
 class UsageOptionsResponse(BaseModel):
@@ -159,8 +159,6 @@ class UsageQueryResponse(BaseModel):
 
 
 class UsageReportRequest(BaseModel):
-    department_id: str = Field(..., pattern="^(research|marketing|business)$")
-    project_id: uuid.UUID
     employee_id: str = Field(..., min_length=1, max_length=200)
     start_date: date
     end_date: date
@@ -169,7 +167,6 @@ class UsageReportRequest(BaseModel):
 
 class UsageReportResponse(BaseModel):
     employee: UsageEmployeeOption
-    project: UsageProjectOption
     summary: UsageSummaryResponse
     high_frequency_periods: list[str]
     report: str
@@ -272,22 +269,15 @@ def _bind_list(values: list[str], prefix: str) -> tuple[str, dict[str, str]]:
 
 def _employee_options(
     orm: Session,
-    projects: list[UsageProjectOption],
 ) -> list[UsageEmployeeOption]:
-    if not projects:
-        return []
-    project_ids = [str(project.id) for project in projects]
-    placeholders, params = _bind_list(project_ids, "project")
     rows = orm.execute(
-        text(f"""
-            SELECT pm.project_id, au.id AS user_id, au.email, pu.full_name
-            FROM public.project_members pm
-            JOIN auth.users au ON au.id = pm.user_id
+        text("""
+            SELECT au.id AS user_id, au.email, pu.full_name
+            FROM auth.users au
             LEFT JOIN public.users pu ON pu.id = au.id
-            WHERE pm.project_id IN ({placeholders})
-            ORDER BY au.email, pm.project_id
+            WHERE au.email IS NOT NULL
+            ORDER BY COALESCE(pu.full_name, au.email), au.email
         """),
-        params,
     ).all()
     employees: dict[str, UsageEmployeeOption] = {}
     for row in rows:
@@ -296,17 +286,13 @@ def _employee_options(
             email=row.email,
             full_name=row.full_name,
         )
-        current = employees.get(employee_id)
-        project_id = uuid.UUID(str(row.project_id))
-        if current is None:
+        if employee_id not in employees:
             employees[employee_id] = UsageEmployeeOption(
                 id=employee_id,
                 name=employee_name,
                 email=row.email,
-                project_ids=[project_id],
+                project_ids=[],
             )
-        elif project_id not in current.project_ids:
-            current.project_ids.append(project_id)
     return sorted(employees.values(), key=lambda item: (item.name, item.email))
 
 
@@ -315,15 +301,13 @@ def _usage_options(
     user_id: uuid.UUID,
 ) -> UsageOptionsResponse:
     is_admin = _is_org_admin(orm, user_id)
-    projects = _available_projects(orm, user_id=user_id, is_admin=is_admin)
     current = _current_employee(orm, user_id)
-    current.project_ids = [project.id for project in projects]
-    employees = _employee_options(orm, projects) if is_admin else []
+    employees = _employee_options(orm) if is_admin else []
     return UsageOptionsResponse(
         mode="admin" if is_admin else "self",
         current_employee=current,
         departments=[UsageDepartmentOption(id=item[0], name=item[1]) for item in DEPARTMENTS],
-        projects=projects,
+        projects=[],
         employees=employees,
     )
 
@@ -341,17 +325,6 @@ def _resolve_scope(
     requested_employee_id: str | None,
 ) -> tuple[Literal["self", "admin"], UsageEmployeeOption, list[UsageProjectOption]]:
     options = _usage_options(orm, user_id)
-    projects = options.projects
-    if department_id:
-        projects = [item for item in projects if item.department_id == department_id]
-    if project_id:
-        projects = [item for item in projects if item.id == project_id]
-        if not projects:
-            raise HTTPException(status_code=403, detail="project is outside your AI usage scope")
-    elif options.mode == "admin":
-        raise HTTPException(status_code=422, detail="project_id is required for admin queries")
-    if not projects:
-        raise HTTPException(status_code=403, detail="no accessible projects in this scope")
 
     try:
         employee_id = resolve_employee_scope(
@@ -364,48 +337,42 @@ def _resolve_scope(
 
     if options.mode == "self":
         employee = options.current_employee
-        employee.project_ids = [item.id for item in projects]
-        return "self", employee, projects
+        return "self", employee, []
 
     employee = next(
         (
             item
             for item in options.employees
             if item.id == employee_id
-            and any(project.id in item.project_ids for project in projects)
         ),
         None,
     )
     if employee is None:
-        raise HTTPException(status_code=403, detail="employee is not a member of this project")
-    return "admin", employee, projects
+        raise HTTPException(status_code=404, detail="employee account not found")
+    return "admin", employee, []
 
 
 def _chat_records(
     orm: Session,
     *,
-    projects: list[UsageProjectOption],
     employee_id: str,
     start_utc: datetime,
     end_utc: datetime,
     source: AIUsageSource | None,
 ) -> list[UsageRecord]:
-    project_names = {str(item.id): item.name for item in projects}
-    placeholders, params = _bind_list(list(project_names), "project")
-    params.update(
-        {
-            "employee_id": employee_id,
-            "start_utc": start_utc,
-            "end_utc": end_utc,
-        }
-    )
+    params = {
+        "employee_id": employee_id,
+        "start_utc": start_utc,
+        "end_utc": end_utc,
+    }
     source_condition = ""
     if source:
         source_condition = "AND s.source = :source"
         params["source"] = source
     rows = orm.execute(
         text(f"""
-            SELECT s.id, s.project_id, s.employee_id, s.employee_name,
+            SELECT s.id, s.project_id, COALESCE(p.name, 'AI Monitor') AS project_name,
+                   s.employee_id, s.employee_name,
                    s.source, s.title, s.task_id, s.task_title, s.model,
                    s.status, s.started_at, s.ended_at, s.duration_ms,
                    s.prompt_tokens, s.completion_tokens, s.total_tokens,
@@ -413,8 +380,8 @@ def _chat_records(
                    (SELECT count(*)::int FROM public.ai_chat_messages m
                     WHERE m.session_id = s.id) AS message_count
             FROM public.ai_chat_sessions s
-            WHERE s.project_id IN ({placeholders})
-              AND s.employee_id = :employee_id
+            LEFT JOIN public.projects p ON p.id = s.project_id
+            WHERE s.employee_id = :employee_id
               AND s.started_at >= :start_utc
               AND s.started_at < :end_utc
               {source_condition}
@@ -427,7 +394,7 @@ def _chat_records(
             id=str(row.id),
             record_type="chat",
             project_id=str(row.project_id),
-            project_name=project_names[str(row.project_id)],
+            project_name=row.project_name or "AI Monitor",
             employee_id=row.employee_id,
             employee_name=row.employee_name,
             source=row.source,
@@ -454,7 +421,6 @@ def _chat_records(
 def _trace_records(
     clickhouse: Any,
     *,
-    projects: list[UsageProjectOption],
     employee_id: str,
     start_utc: datetime,
     end_utc: datetime,
@@ -462,17 +428,11 @@ def _trace_records(
 ) -> list[UsageRecord]:
     if source and source != "cc_switch":
         return []
-    project_names = {str(item.id): item.name for item in projects}
-    project_conditions = []
     parameters: dict[str, Any] = {
         "employee_id": employee_id,
         "start_utc": start_utc,
         "end_utc": end_utc,
     }
-    for index, project_id in enumerate(project_names):
-        key = f"project_{index}"
-        project_conditions.append(f"%({key})s")
-        parameters[key] = project_id
 
     employee_expr = "coalesce(nullIf(SpanAttributes['agentops.employee.id'], ''), nullIf(ResourceAttributes['agentops.employee.id'], ''))"
     employee_name_expr = "coalesce(nullIf(SpanAttributes['agentops.employee.name'], ''), nullIf(ResourceAttributes['agentops.employee.name'], ''), '')"
@@ -519,8 +479,7 @@ def _trace_records(
             count() AS span_count,
             countIf({meaningful_expr}) AS meaningful_span_count
         FROM otel_traces
-        WHERE project_id IN ({', '.join(project_conditions)})
-          AND Timestamp >= %(start_utc)s
+        WHERE Timestamp >= %(start_utc)s
           AND Timestamp < %(end_utc)s
           AND {employee_expr} = %(employee_id)s
         GROUP BY project_id, TraceId
@@ -550,7 +509,7 @@ def _trace_records(
                 id=f"trace:{trace_id}",
                 record_type="trace",
                 project_id=project_id,
-                project_name=project_names.get(project_id, "未知项目"),
+                project_name="AI Monitor",
                 employee_id=employee_id,
                 employee_name=str(row.get("employee_name") or employee_id),
                 source="cc_switch",
@@ -617,7 +576,7 @@ def _merge_synced_conversations(
     padding = timedelta(seconds=90)
 
     def overlaps(chat: UsageRecord, trace: UsageRecord) -> bool:
-        if chat.source != "cc_switch" or chat.project_id != trace.project_id:
+        if chat.source != "cc_switch":
             return False
         if chat.trace_id and chat.trace_id == trace.trace_id:
             return True
@@ -678,7 +637,6 @@ def _collect_usage(
     orm: Session,
     clickhouse: Any,
     *,
-    projects: list[UsageProjectOption],
     employee: UsageEmployeeOption,
     start_date: date,
     end_date: date,
@@ -690,7 +648,6 @@ def _collect_usage(
     _, end_utc = business_day_utc_bounds(end_date)
     chat_records = _chat_records(
         orm,
-        projects=projects,
         employee_id=employee.id,
         start_utc=start_utc,
         end_utc=end_utc,
@@ -700,7 +657,6 @@ def _collect_usage(
     try:
         trace_records = _trace_records(
             clickhouse,
-            projects=projects,
             employee_id=employee.id,
             start_utc=start_utc,
             end_utc=end_utc,
@@ -820,7 +776,6 @@ def get_ai_usage_records(
     summary, records, has_more, warnings = _collect_usage(
         orm,
         clickhouse,
-        projects=projects,
         employee=employee,
         start_date=start_date,
         end_date=end_date,
@@ -884,8 +839,8 @@ def create_ai_usage_report(
     mode, employee, projects = _resolve_scope(
         orm,
         user_id=user_id,
-        department_id=body.department_id,
-        project_id=body.project_id,
+        department_id=None,
+        project_id=None,
         requested_employee_id=body.employee_id,
     )
     if mode != "admin":
@@ -893,7 +848,6 @@ def create_ai_usage_report(
     summary, records, _, _ = _collect_usage(
         orm,
         clickhouse,
-        projects=projects,
         employee=employee,
         start_date=body.start_date,
         end_date=body.end_date,
@@ -905,7 +859,7 @@ def create_ai_usage_report(
         raise HTTPException(status_code=422, detail="no AI usage records in the selected period")
     prompt = build_report_prompt(
         employee_name=employee.name,
-        project_name=projects[0].name,
+        scope_name="全部 AI 使用记录",
         summary=summary,
         records=records,
     )
@@ -941,7 +895,6 @@ def create_ai_usage_report(
 
     return UsageReportResponse(
         employee=employee,
-        project=projects[0],
         summary=_summary_response(summary),
         high_frequency_periods=_high_frequency_periods(summary),
         report=report_text,

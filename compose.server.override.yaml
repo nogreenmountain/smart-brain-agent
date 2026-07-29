@@ -9,7 +9,7 @@
 # After any backend code change, rebuild with:
 #   cd D:\AgentOpsServer\AgentOps\app
 #   docker build -f Dockerfile.api-workday \
-#     -t agentops-api-local:patched-2026-07-29-ai-monitor-r9 .
+#     -t agentops-api-local:patched-2026-07-29-ai-monitor-r12 .
 #
 # Setup (PowerShell, in a fresh session):
 #   $env:ANTHROPIC_AUTH_TOKEN = "sk-cp-...your-new-token-from-minimax-console"
@@ -64,7 +64,7 @@ services:
       - rag_model_cache:/models
 
   api:
-    image: agentops-api-local:patched-2026-07-29-ai-monitor-r9
+    image: agentops-api-local:patched-2026-07-29-ai-monitor-r12
     depends_on:
       - clickhouse
     environment:
