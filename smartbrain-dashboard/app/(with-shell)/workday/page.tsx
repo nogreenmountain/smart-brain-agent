@@ -229,6 +229,8 @@ export default function WorkdayPage() {
   function setRange(days: number) {
     setStartDate(shiftDate(today, -(days - 1)));
     setEndDate(today);
+    setResult(null);
+    setReport(null);
   }
 
   async function generateReport() {
@@ -313,13 +315,13 @@ export default function WorkdayPage() {
 
           <div className="grid items-end gap-3 sm:grid-cols-2 lg:grid-cols-[150px_150px_minmax(190px,1fr)_auto]">
             <Field label="开始日期" htmlFor="usage-start-date">
-              <Input id="usage-start-date" type="date" value={startDate} max={endDate} onChange={(event) => setStartDate(event.target.value)} />
+              <Input id="usage-start-date" type="date" value={startDate} max={endDate} onChange={(event) => { setStartDate(event.target.value); setResult(null); setReport(null); }} />
             </Field>
             <Field label="结束日期" htmlFor="usage-end-date">
-              <Input id="usage-end-date" type="date" value={endDate} min={startDate} onChange={(event) => setEndDate(event.target.value)} />
+              <Input id="usage-end-date" type="date" value={endDate} min={startDate} onChange={(event) => { setEndDate(event.target.value); setResult(null); setReport(null); }} />
             </Field>
             <Field label="AI 来源" htmlFor="usage-source">
-              <select id="usage-source" className={selectClass} value={source} onChange={(event) => setSource(event.target.value as AIUsageSource | '')}>
+              <select id="usage-source" className={selectClass} value={source} onChange={(event) => { setSource(event.target.value as AIUsageSource | ''); setResult(null); setReport(null); }}>
                 <option value="">全部来源</option>
                 {Object.entries(SOURCE_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
               </select>
@@ -423,7 +425,7 @@ function Metric({ icon, label, value, detail, tone }: { icon: ReactNode; label: 
 function UsageTrend({ result }: { result: AIUsageQueryResult }) {
   const points = result.summary.daily_usage.slice(-31);
   const max = Math.max(...points.map((item) => item.total_tokens), 1);
-  return <section><div className="flex items-baseline justify-between gap-3"><h2 className="text-sm font-semibold text-[#0b1930]">每日 Token</h2><span className="text-[11px] text-[#8491a4]">{points.length > 31 ? '最近 31 天' : `${result.summary.start_date} 至 ${result.summary.end_date}`}</span></div><div className="mt-3 flex h-52 items-end gap-1.5 border-b border-[#cfd8e5] bg-white px-3 pt-4" role="img" aria-label="每日 Token 趋势"><div className="flex h-full w-full items-end gap-1.5">{points.map((item) => { const height = item.total_tokens ? Math.max((item.total_tokens / max) * 100, 4) : 1; return <div key={item.date} className="group flex min-w-0 flex-1 flex-col items-center justify-end" title={`${item.date} · ${formatCount(item.total_tokens)} Tokens`}><div className="w-full max-w-8 rounded-t-sm bg-[#3979bf] transition group-hover:bg-[#245f9e]" style={{ height: `${height}%` }} /><span className="mt-1 hidden text-[9px] text-[#8491a4] 2xl:block">{item.date.slice(5)}</span></div>; })}</div></div><div className="mt-2 flex flex-wrap gap-2">{result.summary.source_usage.map((item) => <span key={item.source} className="rounded-md bg-white px-2 py-1 text-[11px] text-[#53647d]"><span className="font-medium text-[#253655]">{sourceLabel(item.source)}</span> · {formatCount(item.total_tokens)}</span>)}</div></section>;
+  return <section><div className="flex items-baseline justify-between gap-3"><h2 className="text-sm font-semibold text-[#0b1930]">每日 Token</h2><span className="text-[11px] text-[#8491a4]">{result.summary.daily_usage.length > 31 ? '最近 31 天' : `${result.summary.start_date} 至 ${result.summary.end_date}`}</span></div><div className="mt-3 flex h-52 items-end gap-1.5 border-b border-[#cfd8e5] bg-white px-3 pt-4" role="img" aria-label="每日 Token 趋势"><div className="flex h-full w-full items-end gap-1.5">{points.map((item) => { const height = item.total_tokens ? Math.max((item.total_tokens / max) * 100, 4) : 1; return <div key={item.date} className="group flex min-w-0 flex-1 flex-col items-center justify-end" title={`${item.date} · ${formatCount(item.total_tokens)} Tokens`}><div className="w-full max-w-8 rounded-t-sm bg-[#3979bf] transition group-hover:bg-[#245f9e]" style={{ height: `${height}%` }} /><span className="mt-1 hidden text-[9px] text-[#8491a4] 2xl:block">{item.date.slice(5)}</span></div>; })}</div></div><div className="mt-2 flex flex-wrap gap-2">{result.summary.source_usage.map((item) => <span key={item.source} className="rounded-md bg-white px-2 py-1 text-[11px] text-[#53647d]"><span className="font-medium text-[#253655]">{sourceLabel(item.source)}</span> · {formatCount(item.total_tokens)}</span>)}</div></section>;
 }
 
 function HourlyUsage({ result }: { result: AIUsageQueryResult }) {
@@ -443,7 +445,7 @@ function Badge({ icon, text, danger = false }: { icon: ReactNode; text: string; 
 
 function ReportPanel({ report }: { report: AIUsageReport }) {
   const sections = report.report.split(/(?=^##\s)/m).map((item) => item.trim()).filter(Boolean);
-  return <section className="mt-7 border-t-2 border-[#b9c9dc] pt-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><div className="flex items-center gap-2"><FileText size={18} className="text-[#3979bf]" /><h2 className="text-base font-semibold text-[#0b1930]">AI 使用工作报告</h2></div><p className="mt-1 text-xs text-[#6c7b91]">{report.employee.name} · {report.project.name} · {report.summary.start_date} 至 {report.summary.end_date}</p></div><span className="rounded-md border border-[#d7e0ec] bg-white px-2 py-1 text-[11px] text-[#6c7b91]">{report.model}</span></div><div className="mt-4 grid gap-3 sm:grid-cols-3"><MiniFact icon={<Clock3 size={15} />} label="高频时段" value={report.high_frequency_periods.join('、') || '暂无'} /><MiniFact icon={<Zap size={15} />} label="Token 总量" value={formatCount(report.summary.total_tokens)} /><MiniFact icon={<BarChart3 size={15} />} label="自然日日均" value={formatCount(report.summary.average_tokens_per_day)} /></div><div className="mt-5 grid gap-x-8 gap-y-5 lg:grid-cols-2">{sections.map((section) => { const [heading, ...body] = section.split('\n'); return <div key={heading} className="border-l-2 border-[#8eb4dd] pl-4"><h3 className="text-sm font-semibold text-[#172844]">{heading.replace(/^##\s*/, '')}</h3><p className="mt-2 whitespace-pre-wrap text-sm leading-7 text-[#465873]">{body.join('\n').trim()}</p></div>; })}</div></section>;
+  return <section className="mt-7 border-t-2 border-[#b9c9dc] pt-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><div className="flex items-center gap-2"><FileText size={18} className="text-[#3979bf]" /><h2 className="text-base font-semibold text-[#0b1930]">AI 使用工作报告</h2></div><p className="mt-1 text-xs text-[#6c7b91]">{report.employee.name} · {report.project.name} · {report.summary.start_date} 至 {report.summary.end_date}</p></div><span className="rounded-md border border-[#d7e0ec] bg-white px-2 py-1 text-[11px] text-[#6c7b91]">{report.model}</span></div><div className="mt-4 grid gap-3 sm:grid-cols-3"><MiniFact icon={<Clock3 size={15} />} label="高频时段" value={report.high_frequency_periods.join('、') || '暂无'} /><MiniFact icon={<Zap size={15} />} label="Token 总量" value={formatCount(report.summary.total_tokens)} /><MiniFact icon={<BarChart3 size={15} />} label="自然日日均" value={formatCount(report.summary.average_tokens_per_day)} /></div><div className="mt-5 grid gap-x-8 gap-y-5 lg:grid-cols-2">{sections.map((section) => { const [heading, ...body] = section.split('\n'); return <div key={heading} className="border-l-2 border-[#8eb4dd] pl-4"><h3 className="text-sm font-semibold text-[#172844]">{heading.replace(/^##\s*/, '')}</h3><p className="mt-2 whitespace-pre-wrap text-sm leading-7 text-[#465873]">{body.join('\n').trim().replace(/\*\*/g, '')}</p></div>; })}</div></section>;
 }
 
 function MiniFact({ icon, label, value }: { icon: ReactNode; label: string; value: string }) {

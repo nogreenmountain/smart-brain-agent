@@ -174,5 +174,11 @@ describe('WorkdayPage', () => {
     }));
     expect(await screen.findByText('AI 使用工作报告')).toBeInTheDocument();
     expect(screen.getByText('完成登录模块联调。')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('开始日期'), {
+      target: { value: '2026-07-20' },
+    });
+    expect(screen.queryByRole('button', { name: '生成区间工作报告' })).not.toBeInTheDocument();
+    expect(screen.queryByText('AI 使用工作报告')).not.toBeInTheDocument();
   });
 });
