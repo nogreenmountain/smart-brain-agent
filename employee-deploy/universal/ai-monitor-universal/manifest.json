@@ -1,7 +1,7 @@
 {
   "package_name": "ai-monitor-universal",
-  "package_version": "2026-07-27",
-  "project_id": "f9505558-d67d-462f-b77e-6b9550458a2b",
+  "package_version": "2026-07-29",
+  "project_id": "dfaefd9a-8e5e-4775-bc18-e3d551c651e4",
   "api_endpoint": "http://192.168.1.40:8000",
   "collector_endpoint": "http://192.168.1.40:4318",
   "default_email_domain": "local.dev",

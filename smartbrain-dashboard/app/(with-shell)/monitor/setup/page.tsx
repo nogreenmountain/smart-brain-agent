@@ -24,7 +24,7 @@ import {
   getAIMonitorStatus,
 } from '@/lib/api';
 
-const DOWNLOAD_URL = '/downloads/ai-monitor-universal-20260727.zip';
+const DOWNLOAD_URL = '/downloads/ai-monitor-universal-latest.zip';
 
 type ExtensionLiveStatus = {
   installed: boolean;

@@ -91,7 +91,7 @@ describe('MonitorSetupPage', () => {
     const links = screen.getAllByRole('link', { name: '下载安装包' });
     expect(links[0]).toHaveAttribute(
       'href',
-      '/downloads/ai-monitor-universal-20260727.zip',
+      '/downloads/ai-monitor-universal-latest.zip',
     );
     expect(screen.getByText('CC Switch / Claude / Codex')).toBeInTheDocument();
     expect(screen.getByText('ChatGPT 桌面端个人账号')).toBeInTheDocument();
