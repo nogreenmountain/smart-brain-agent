@@ -1,6 +1,6 @@
 # Smart Brain Agent 局域网部署包
 
-这是“智慧大脑 Agent”的可迁移部署包，用于在另一家公司内网快速部署一套研发部门知识库、项目记忆、AI Monitor 和 AgentOps Trace 复盘环境。
+这是“智慧大脑 Agent”的可迁移部署包，用于在内网快速部署一套研发部门知识库、项目记忆、AI Monitor 和 AgentOps Trace 复盘环境。
 
 ## 包含什么
 
