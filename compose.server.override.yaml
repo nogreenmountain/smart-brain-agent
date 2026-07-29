@@ -64,7 +64,7 @@ services:
       - rag_model_cache:/models
 
   api:
-    image: agentops-api-local:patched-2026-07-28-material-memory-flow
+    image: agentops-api-local:patched-2026-07-29-ai-monitor-extension
     depends_on:
       - clickhouse
     environment:

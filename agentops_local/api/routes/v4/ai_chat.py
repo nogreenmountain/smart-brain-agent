@@ -317,6 +317,105 @@ def _store_chat_session(
     return session_id
 
 
+def _mark_chatgpt_web_monitor_installed(
+    orm: Session,
+    *,
+    user_id: uuid.UUID,
+    employee_id: str,
+    employee_name: str,
+    body: AIChatIngestRequest,
+) -> None:
+    if body.source != "chatgpt_web":
+        return
+    seen_at = datetime.now(timezone.utc)
+    components = {
+        "chatgpt_web_extension": {
+            "name": "chatgpt_web_extension",
+            "status": "installed",
+            "version": None,
+            "last_seen_at": seen_at.isoformat(),
+            "details": {"source": "ai_chat_ingest"},
+        },
+        "browser_shortcut": {
+            "name": "browser_shortcut",
+            "status": "installed",
+            "version": None,
+            "last_seen_at": seen_at.isoformat(),
+            "details": {"source": "ai_chat_ingest"},
+        },
+    }
+    row = orm.execute(
+        text("""
+            SELECT device_id
+            FROM public.ai_monitor_devices
+            WHERE project_id = :project_id
+              AND employee_id = :employee_id
+            ORDER BY last_seen_at DESC, updated_at DESC
+            LIMIT 1
+        """),
+        {
+            "project_id": str(body.project_id),
+            "employee_id": employee_id,
+        },
+    ).first()
+    if row:
+        orm.execute(
+            text("""
+                UPDATE public.ai_monitor_devices
+                SET user_id = :user_id,
+                    employee_name = :employee_name,
+                    components = components || CAST(:components AS jsonb),
+                    last_seen_at = :last_seen_at,
+                    updated_at = now()
+                WHERE project_id = :project_id
+                  AND employee_id = :employee_id
+                  AND device_id = :device_id
+            """),
+            {
+                "project_id": str(body.project_id),
+                "user_id": str(user_id),
+                "employee_id": employee_id,
+                "employee_name": employee_name,
+                "device_id": row.device_id,
+                "components": _json_dumps(components),
+                "last_seen_at": seen_at,
+            },
+        )
+    else:
+        orm.execute(
+            text("""
+                INSERT INTO public.ai_monitor_devices (
+                    project_id, user_id, employee_id, employee_name,
+                    device_id, device_name, installer_version, os,
+                    components, last_seen_at
+                )
+                VALUES (
+                    :project_id, :user_id, :employee_id, :employee_name,
+                    :device_id, :device_name, NULL, NULL,
+                    CAST(:components AS jsonb), :last_seen_at
+                )
+                ON CONFLICT (project_id, employee_id, device_id)
+                DO UPDATE SET
+                    user_id = excluded.user_id,
+                    employee_name = excluded.employee_name,
+                    components = public.ai_monitor_devices.components || excluded.components,
+                    last_seen_at = excluded.last_seen_at,
+                    updated_at = now()
+            """),
+            {
+                "project_id": str(body.project_id),
+                "user_id": str(user_id),
+                "employee_id": employee_id,
+                "employee_name": employee_name,
+                "device_id": f"chatgpt-web-{employee_id}"[:200],
+                "device_name": "ChatGPT Web AI Monitor",
+                "components": _json_dumps(components),
+                "last_seen_at": seen_at,
+            },
+        )
+    orm.commit()
+
+
 @router.post("/ai-chat/ingest", response_model=AIChatIngestResponse)
 def ingest_ai_chat(
     request: Request,
@@ -345,6 +444,13 @@ def ingest_ai_chat(
     employee_id, employee_name = _resolve_employee(orm, user_id)
     try:
         session_id = _store_chat_session(
+            orm,
+            user_id=user_id,
+            employee_id=employee_id,
+            employee_name=employee_name,
+            body=body,
+        )
+        _mark_chatgpt_web_monitor_installed(
             orm,
             user_id=user_id,
             employee_id=employee_id,
