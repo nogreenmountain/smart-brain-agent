@@ -112,7 +112,7 @@ def remove_managed_codex_block(existing_text: str) -> str:
         return existing_text
     end = existing_text.find(MANAGED_CODEX_END, start)
     if end < 0:
-        raise ValueError("managed Codex telemetry block is incomplete")
+        return existing_text[:start].rstrip() + "\n"
     end += len(MANAGED_CODEX_END)
     if existing_text[end : end + 2] == "\r\n":
         end += 2

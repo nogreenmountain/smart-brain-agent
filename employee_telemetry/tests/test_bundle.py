@@ -211,6 +211,28 @@ class ConfigTests(unittest.TestCase):
                 snippet,
             )
 
+    def test_incomplete_managed_codex_block_is_replaced(self) -> None:
+        snippet = build_codex_common_config(
+            employee_id="test1",
+            employee_name="Test 1",
+            collector_endpoint=self.endpoint,
+            token=self.token,
+        )
+        existing = (
+            'model_reasoning_effort = "xhigh"\n'
+            "# BEGIN AI WORKDAY MONITOR - MANAGED\n"
+            "[otel]\n"
+            'exporter = "otlp-http"\n'
+        )
+
+        merged = merge_codex_common_config(existing, snippet)
+
+        self.assertIn('model_reasoning_effort = "xhigh"', merged)
+        self.assertEqual(merged.count("# BEGIN AI WORKDAY MONITOR - MANAGED"), 1)
+        self.assertEqual(merged.count("# END AI WORKDAY MONITOR - MANAGED"), 1)
+        self.assertEqual(merged.count("[otel]"), 1)
+        self.assertNotIn('exporter = "otlp-http"\n[otel]', merged)
+
     def test_no_proxy_merge_and_uninstall_preserve_existing_entries(self) -> None:
         managed = ("192.168.1.40", "127.0.0.1", "localhost")
 
