@@ -9,7 +9,9 @@
 - `api/`、`dashboard/`、`opentelemetry-collector/`：AgentOps 基础 API、Trace Dashboard、OTLP Collector 源码。
 - `rag_services/`：BGE-M3 embedding 与 reranker 服务。
 - `employee_telemetry/`：员工端通用安装包生成逻辑。
-- `employee-deploy/universal/ai-monitor-universal/`：通用员工安装器源码模板。
+- `employee-deploy/universal/ai-monitor-universal/`：通用员工监控载荷模板。
+- `employee_telemetry/windows_installer/`：单文件 EXE 图形安装器源码、构建脚本和无身份载荷。
+- `smartbrain-dashboard/public/downloads/SmartBrain-AIMonitor-Setup-latest.exe`：员工自助安装成品。
 - `supabase/migrations/`：数据库迁移。
 - `deploy/lan/`：局域网部署脚本、初始化 SQL、部署说明。
 
@@ -46,6 +48,17 @@ powershell -ExecutionPolicy Bypass -File deploy/lan/Initialize-Database.ps1
 - AgentOps Trace Dashboard：`http://<服务器IP>:3001`
 - API：`http://<服务器IP>:8000`
 - OTLP Collector：`http://<服务器IP>:4318`
+
+员工端一键安装器可重新构建：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File employee_telemetry\windows_installer\Build-Installer.ps1 `
+  -OutputPath smartbrain-dashboard\public\downloads\SmartBrain-AIMonitor-Setup-latest.exe
+```
+
+构建脚本会下载并校验官方 CPython embeddable runtime；修改
+`employee_telemetry\windows_installer\payload\manifest.json` 后可以替换服务器地址、
+项目编号和默认邮箱域名。
 
 默认初始化账号：
 

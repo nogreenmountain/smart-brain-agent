@@ -24,7 +24,7 @@ import {
   getAIMonitorStatus,
 } from '@/lib/api';
 
-const DOWNLOAD_URL = '/downloads/ai-monitor-universal-latest.zip';
+const DOWNLOAD_URL = '/downloads/SmartBrain-AIMonitor-Setup-latest.exe';
 
 type ExtensionLiveStatus = {
   installed: boolean;
@@ -190,14 +190,14 @@ export default function MonitorSetupPage() {
       <header className="flex min-h-16 flex-col items-start gap-3 border-b border-gray-200 bg-white px-4 py-3 sm:flex-row sm:items-center sm:justify-between md:px-6">
         <div className="min-w-0">
           <h1 className="text-lg font-semibold text-gray-950">AI Monitor 安装检测</h1>
-          <p className="text-xs text-gray-500">员工登录智慧大脑后下载统一安装包，安装完成再回到这里检测。</p>
+          <p className="text-xs text-gray-500">下载统一 EXE 安装器，双击登录后即可自动完成配置。</p>
         </div>
         <a
           href={DOWNLOAD_URL}
           className="inline-flex w-full shrink-0 items-center justify-center gap-1.5 rounded-md bg-brand-600 px-3 py-2 text-sm font-medium text-white hover:bg-brand-700 sm:w-auto"
         >
           <Download size={17} aria-hidden="true" />
-          下载安装包
+          下载一键安装器
         </a>
       </header>
 
@@ -367,7 +367,7 @@ export default function MonitorSetupPage() {
                 <div className="min-w-0">
                   <h2 className="text-sm font-semibold text-gray-950">安装入口</h2>
                   <p className="mt-1 text-sm text-gray-600">
-                    普通浏览器检测不到插件时，请安装后刷新本页，或用桌面上的 ChatGPT Monitored 快捷方式打开。
+                    无需打开命令行。安装时输入一次智慧大脑账号，完成后刷新本页检测，ChatGPT 请从桌面受监控快捷方式打开。
                   </p>
                 </div>
                 <div className="flex flex-wrap gap-2">
@@ -376,7 +376,7 @@ export default function MonitorSetupPage() {
                     className="inline-flex items-center justify-center gap-1.5 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
                   >
                     <Download size={17} aria-hidden="true" />
-                    下载安装包
+                    下载一键安装器
                   </a>
                   <a
                     href="/workday"

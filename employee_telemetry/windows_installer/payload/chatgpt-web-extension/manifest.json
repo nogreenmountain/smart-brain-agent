@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "智慧大脑 AI Monitor - ChatGPT Web",
+  "version": "0.2.0",
+  "description": "把 ChatGPT 网页版个人账号会话同步到智慧大脑 AI Monitor。",
+  "permissions": ["storage"],
+  "host_permissions": [
+    "https://chatgpt.com/*",
+    "https://chat.openai.com/*",
+    "http://192.168.1.40:8000/*",
+    "http://192.168.1.40:3002/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://chatgpt.com/*", "https://chat.openai.com/*"],
+      "js": ["config.js", "monitor-core.js", "content.js"],
+      "css": ["content.css"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["http://192.168.1.40:3002/*"],
+      "js": ["config.js", "smartbrain-bridge.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_title": "智慧大脑 AI Monitor"
+  }
+}

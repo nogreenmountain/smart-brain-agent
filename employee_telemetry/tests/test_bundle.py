@@ -375,6 +375,63 @@ class BundleTests(unittest.TestCase):
             self.assertIn("device-credentials.json", enroll_text)
             self.assertIn("Remove-Item -LiteralPath", install_text)
 
+    def test_universal_installer_accepts_gui_credentials_over_stdin(self) -> None:
+        request = UniversalBundleRequest(
+            project_id="f9505558-d67d-462f-b77e-6b9550458a2b",
+            api_endpoint="http://192.168.1.40:8000",
+            collector_endpoint="http://192.168.1.40:4318",
+            default_email_domain="local.dev",
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = create_universal_bundle(
+                request=request,
+                output_root=Path(temp_dir),
+            )
+            install_text = (
+                output / "Install-AIWorkdayTelemetry.ps1"
+            ).read_text(encoding="utf-8-sig")
+
+            self.assertIn("[string]$Username", install_text)
+            self.assertIn("[switch]$PasswordFromStdin", install_text)
+            self.assertIn("[string]$PythonPath", install_text)
+            self.assertIn('"--username", $Username', install_text)
+            self.assertIn('"--password-stdin"', install_text)
+            self.assertNotIn('"--password",', install_text)
+
+    def test_windows_gui_installer_source_has_secure_self_service_contract(
+        self,
+    ) -> None:
+        installer_root = Path(__file__).resolve().parents[1] / "windows_installer"
+        source = (installer_root / "SmartBrainAIMonitorSetup.cs").read_text(
+            encoding="utf-8"
+        )
+        build_script = (installer_root / "Build-Installer.ps1").read_text(
+            encoding="utf-8-sig"
+        )
+
+        self.assertIn("RedirectStandardInput = true", source)
+        self.assertIn("PasswordChar", source)
+        self.assertIn("--uninstall", source)
+        self.assertIn("UninstallString", source)
+        self.assertIn("SmartBrainAIMonitorSetup.exe", source)
+        self.assertIn("Regex.IsMatch(loginName", source)
+        self.assertNotIn('"-Password"', source)
+        self.assertIn("python-3.12.10-embed-amd64.zip", build_script)
+        self.assertIn("Get-FileHash", build_script)
+
+        payload_root = installer_root / "payload"
+        self.assertTrue((payload_root / "Install-AIMonitor.ps1").is_file())
+        self.assertTrue((payload_root / "chatgpt-web-extension").is_dir())
+        payload_text = "\n".join(
+            path.read_text(encoding="utf-8-sig", errors="ignore")
+            for path in payload_root.rglob("*")
+            if path.is_file()
+        )
+        self.assertNotRegex(
+            payload_text,
+            r"Authorization=Bearer\s+eyJ[A-Za-z0-9_-]+",
+        )
+
 
 class EnrollmentClientTests(unittest.TestCase):
     def test_short_login_name_is_normalized_without_changing_full_email(self) -> None:

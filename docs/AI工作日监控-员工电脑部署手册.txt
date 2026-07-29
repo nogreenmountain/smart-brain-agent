@@ -1,5 +1,5 @@
 AI 工作日监控：CC Switch 员工电脑部署手册
-版本：2026-07-29-r5
+版本：2026-07-29-r6-exe
 
 一、方案结论
 
@@ -10,7 +10,7 @@ Claude Code 与 Codex 自己产生 OpenTelemetry Trace；
 AgentOps Collector 接收 Trace；
 智慧大脑 Workday 页面按员工和日期汇总。
 
-只安装 CC Switch、只登录智慧大脑网页，都不会自动产生监控数据。员工电脑还必须执行一次本手册中的部署包安装器，并重新启动 Claude Code/Codex。
+只安装 CC Switch、只登录智慧大脑网页，都不会自动产生监控数据。员工电脑还必须双击运行一次本手册中的 EXE 安装器，并重新启动 Claude Code/Codex。
 
 二、采集边界
 
@@ -45,16 +45,20 @@ agentops-api-1
 agentops-otel
 agentops-clickhouse-1
 
-然后在 PowerShell 中运行：
+如需重新构建底层通用配置，在 PowerShell 中运行：
 
 cd D:\AgentOpsServer\AgentOps\app
 .\scripts\Generate-UniversalEmployeeTelemetryBundle.ps1
 
-只会生成一个通用部署包，保存到：
+底层通用配置保存到：
 
 D:\AgentOpsServer\AgentOps\employee-deploy\universal\ai-workday-universal
 
-这个目录可以发给所有员工，不需要再按 test1 到 test12 分别打包。
+再使用 `employee_telemetry\windows_installer\Build-Installer.ps1` 把该配置、ChatGPT 网页扩展和锁定哈希的 CPython 3.12.10 嵌入运行时封装成统一 EXE。发布文件为：
+
+D:\AgentOpsServer\AgentOps\employee-deploy\universal\SmartBrain-AIMonitor-Setup-20260729-r6.exe
+
+这个 EXE 可以发给所有员工，不需要再按 test1 到 test12 分别打包。
 
 通用包本身不包含员工编号、密码或采集令牌。员工首次安装时输入智慧大脑用户名和密码，服务端确认账号及项目成员关系后，才会为这台电脑签发绑定该登录账号的采集令牌。
 
@@ -63,8 +67,9 @@ D:\AgentOpsServer\AgentOps\employee-deploy\universal\ai-workday-universal
 1. Windows 10 或更高版本。
 2. CC Switch 3.12.2 或更高版本，建议 3.17.0。
 3. 已安装 Claude Code 或 Codex。
-4. 已安装 Python 3。
-5. 能访问服务器 192.168.1.40 的 8000 和 4318 端口。
+4. 能访问服务器 192.168.1.40 的 8000 和 4318 端口。
+
+员工电脑不需要预装 Python，EXE 已内置独立运行时。
 
 可在员工电脑 PowerShell 中检查网络：
 
@@ -75,23 +80,22 @@ TcpTestSucceeded 必须为 True。
 
 五、员工电脑安装
 
-所有员工从智慧大脑 AI Monitor 页面下载相同的 r5 统一安装包：
+所有员工从智慧大脑 AI Monitor 页面下载相同的 r6 一键安装器：
 
 http://192.168.1.40:3002/monitor/setup
 
-1. 管理员把 ai-workday-universal 整个目录复制到员工电脑本地。
-2. 员工从系统托盘彻底退出 CC Switch。
-3. 在部署包目录空白处按住 Shift 点击鼠标右键，打开 PowerShell。
-4. 执行：
-
-powershell -ExecutionPolicy Bypass -File .\Install-AIMonitor.ps1
-
-5. 按提示输入智慧大脑用户名和密码，例如 test1 / 123456。
-6. 短用户名 test1 会自动补全为 test1@local.dev。
+1. 员工登录智慧大脑并进入“AI Monitor”。
+2. 点击“下载一键安装器”，得到 SmartBrain-AIMonitor-Setup-latest.exe。
+3. 从系统托盘彻底退出 CC Switch，并关闭 Edge / Chrome。
+4. 双击 EXE。当前测试包尚未购买代码签名证书，若 SmartScreen 提示未知发布者，核对下载来源后选择“更多信息 -> 仍要运行”。
+5. 输入自己的智慧大脑用户名和密码，例如 test1 / 123456。
+6. 点击“立即安装”。短用户名 test1 会自动补全为 test1@local.dev。
 7. 安装成功后重新打开 CC Switch。
 8. 在 CC Switch 中分别进入 Claude 和 Codex，各切换一次当前供应商。
 9. 关闭已经打开的 Claude Code/Codex 窗口并重新打开。
 10. 正常使用 Claude Code 或 Codex。
+
+整个过程不需要打开命令行，也不需要管理员权限。
 
 安装器会自动：
 
@@ -153,11 +157,9 @@ http://192.168.1.40:3002/workday
 八、卸载
 
 1. 从系统托盘彻底退出 CC Switch。
-2. 在原部署包目录运行：
-
-powershell -ExecutionPolicy Bypass -File .\Uninstall-AIWorkdayTelemetry.ps1
-
-3. 重新打开 CC Switch。
+2. 打开 Windows“设置 -> 应用 -> 已安装的应用”。
+3. 找到“SmartBrain AI Monitor”并点击卸载。
+4. 重新打开 CC Switch。
 
 安装和卸载前的配置及 NO_PROXY 备份保存在：
 
@@ -165,7 +167,7 @@ powershell -ExecutionPolicy Bypass -File .\Uninstall-AIWorkdayTelemetry.ps1
 
 九、令牌到期与重新部署
 
-默认令牌有效期为 30 天。到期后员工重新运行同一份通用安装器并再次登录即可，不需要管理员重新生成或发放个人部署包。
+默认令牌有效期由服务器配置决定。到期后员工重新运行同一份 EXE 并再次登录即可，不需要管理员重新生成或发放个人部署包。
 
 测试期建议 30 天。正式使用建议启用 HTTPS、建立定期轮换和离职员工撤销流程。
 
@@ -180,7 +182,8 @@ http://192.168.1.40:4318
 十一、常见故障
 
 1. 登录提示账号、密码或项目权限失败：确认使用自己的智慧大脑账号，并确认账号已加入 Default Project。
-2. Test-NetConnection 成功但 Codex 没有数据：确认安装完成后已彻底关闭并重新打开 Codex。旧进程不会读取新的 NO_PROXY。
-3. Claude 有数据而 Codex 没有数据：运行 echo $env:NO_PROXY，应包含 192.168.1.40；没有时重新运行安装器并重开终端。
-4. 两者都没有数据：检查令牌是否过期，以及服务器 agentops-otel 是否正在运行。
-5. 页面显示“未标记任务”：这是当前原生 CLI 没有动态任务标签的正常表现，不代表采集失败。
+2. Windows 阻止运行：确认 EXE 从智慧大脑 3002 页面下载，点击 SmartScreen 的“更多信息 -> 仍要运行”；正式推广时应配置代码签名证书。
+3. 网络正常但 Codex 没有数据：确认安装完成后已彻底关闭并重新打开 Codex。旧进程不会读取新的配置。
+4. Claude 有数据而 Codex 没有数据：直接重新运行 EXE 覆盖安装，然后重开 CC Switch 和 Codex。
+5. 两者都没有数据：检查令牌是否过期，以及服务器 agentops-otel 是否正在运行。
+6. 页面显示“未标记任务”：这是当前原生 CLI 没有动态任务标签的正常表现，不代表采集失败。

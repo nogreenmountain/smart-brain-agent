@@ -354,6 +354,13 @@ if (Get-Process -Name "cc-switch" -ErrorAction SilentlyContinue) {
 
 $py = Get-Command py -ErrorAction SilentlyContinue
 $python = Get-Command python -ErrorAction SilentlyContinue
+$bundledPython = $null
+if ($PythonPath) {
+    if (-not (Test-Path -LiteralPath $PythonPath -PathType Leaf)) {
+        throw "Bundled Python runtime was not found."
+    }
+    $bundledPython = [System.IO.Path]::GetFullPath($PythonPath)
+}
 if ($py) {
     & $py.Source -3 (Join-Path $PSScriptRoot "Update-CCSwitchCommonConfig.py") uninstall `
         --bundle-dir $PSScriptRoot `
@@ -373,9 +380,22 @@ Write-Host "AI 工作日监控配置已移除。请重新打开 CC Switch。" -F
 
 def _powershell_universal_install_script() -> str:
     return r"""#Requires -Version 5.1
+[CmdletBinding()]
+param(
+    [string]$Username,
+    [switch]$PasswordFromStdin,
+    [string]$PythonPath
+)
+
 $ErrorActionPreference = "Stop"
 
 function Find-Python {
+    if ($PythonPath) {
+        if (-not (Test-Path -LiteralPath $PythonPath -PathType Leaf)) {
+            throw "Bundled Python runtime was not found."
+        }
+        return @([System.IO.Path]::GetFullPath($PythonPath))
+    }
     $py = Get-Command py -ErrorAction SilentlyContinue
     if ($py) { return @($py.Source, "-3") }
     $python = Get-Command python -ErrorAction SilentlyContinue
@@ -420,12 +440,19 @@ $sensitiveFiles = @(
     (Join-Path $runtimeDir "Codex-Common-Config.toml")
 )
 try {
+    $enrollArguments = @(
+        "--bundle-dir", $PSScriptRoot,
+        "--runtime-dir", $runtimeDir
+    )
+    if ($Username) {
+        $enrollArguments += @("--username", $Username)
+    }
+    if ($PasswordFromStdin) {
+        $enrollArguments += "--password-stdin"
+    }
     Invoke-PythonHelper `
         -Script (Join-Path $PSScriptRoot "Enroll-AIWorkday.py") `
-        -Arguments @(
-            "--bundle-dir", $PSScriptRoot,
-            "--runtime-dir", $runtimeDir
-        )
+        -Arguments $enrollArguments
     Invoke-PythonHelper `
         -Script (Join-Path $PSScriptRoot "Update-CCSwitchCommonConfig.py") `
         -Arguments @(
@@ -479,6 +506,9 @@ Write-Host "请重新打开 CC Switch，分别切换一次 Claude 和 Codex 当�
 
 def _powershell_universal_uninstall_script() -> str:
     return r"""#Requires -Version 5.1
+[CmdletBinding()]
+param([string]$PythonPath)
+
 $ErrorActionPreference = "Stop"
 
 if (Get-Process -Name "cc-switch" -ErrorAction SilentlyContinue) {
@@ -495,7 +525,11 @@ if (-not (Test-Path -LiteralPath (Join-Path $runtimeDir "manifest.json"))) {
 }
 
 $helper = Join-Path $PSScriptRoot "Update-CCSwitchCommonConfig.py"
-if ($py) {
+if ($bundledPython) {
+    & $bundledPython $helper uninstall `
+        --bundle-dir $runtimeDir `
+        --backup-root $backupRoot
+} elseif ($py) {
     & $py.Source -3 $helper uninstall `
         --bundle-dir $runtimeDir `
         --backup-root $backupRoot

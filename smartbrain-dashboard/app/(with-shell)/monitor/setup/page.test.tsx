@@ -88,10 +88,10 @@ describe('MonitorSetupPage', () => {
     });
     expect(screen.queryByLabelText('项目')).not.toBeInTheDocument();
 
-    const links = screen.getAllByRole('link', { name: '下载安装包' });
+    const links = screen.getAllByRole('link', { name: '下载一键安装器' });
     expect(links[0]).toHaveAttribute(
       'href',
-      '/downloads/ai-monitor-universal-latest.zip',
+      '/downloads/SmartBrain-AIMonitor-Setup-latest.exe',
     );
     expect(screen.getByText('CC Switch / Claude / Codex')).toBeInTheDocument();
     expect(screen.getByText('ChatGPT 桌面端个人账号')).toBeInTheDocument();
