@@ -195,14 +195,14 @@ def _validate_request(request: Request) -> None:
     # Check if the Origin header is present
     # If this is missing this is a strong indicator we are being accessed outside a browser
     origin = request.headers.get("origin")
-    if origin and not origin.startswith(APP_URL):
+    if origin and not origin.startswith((APP_URL, "chrome-extension://", "edge-extension://", "moz-extension://")):
         logger.warning(f"Request was made to a public route from an unexpected origin: {origin}")
         raise HTTPException(500)
 
     # Check if the referrer header is present
     # If this is missing this is a strong indicator we are being accessed outside a browser
     referrer = request.headers.get("referer")
-    if referrer and not any(referrer.startswith(u) for u in (APP_URL, *AUTH_ADDITIONAL_REFERERS)):
+    if referrer and not any(referrer.startswith(u) for u in (APP_URL, "chrome-extension://", "edge-extension://", "moz-extension://", *AUTH_ADDITIONAL_REFERERS)):
         logger.warning(f"Request was made to a public route from an unexpected referrer: {referrer}")
         raise HTTPException(500)
 

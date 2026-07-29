@@ -66,6 +66,7 @@ if api_host:
 app.add_middleware(
     CORSMiddleware,
     allow_origins=sorted(dashboard_origins),
+    allow_origin_regex=r"^(chrome|edge|moz)-extension://.*$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -53,6 +53,11 @@ function normalizeLoginName(username) {
   return `${value}@${CONFIG.defaultEmailDomain || "local.dev"}`;
 }
 
+function truncate(value, maxLength) {
+  const text = String(value || "");
+  return text.length > maxLength ? text.slice(0, maxLength) : text;
+}
+
 async function getDeviceId() {
   if (CONFIG.deviceId) return String(CONFIG.deviceId);
   const state = await chrome.storage.local.get(["aiMonitorDeviceId"]);
@@ -68,9 +73,9 @@ async function registerComponents(components) {
   return postJson("/v4/ai-monitor/devices/register", {
     project_id: CONFIG.projectId,
     device_id: deviceId,
-    device_name: CONFIG.employeeName || "Browser AI Monitor",
+    device_name: truncate(CONFIG.employeeName || "Browser AI Monitor", 200),
     installer_version: CONFIG.packageVersion || null,
-    os: navigator.userAgent,
+    os: truncate(navigator.userAgent, 500),
     components: componentList.filter(Boolean)
   });
 }

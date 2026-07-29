@@ -56,7 +56,7 @@ class AIMonitorDeviceRegisterRequest(BaseModel):
     device_id: str = Field(..., min_length=3, max_length=200)
     device_name: str | None = Field(None, max_length=200)
     installer_version: str | None = Field(None, max_length=100)
-    os: str | None = Field(None, max_length=100)
+    os: str | None = Field(None, max_length=500)
     components: list[AIMonitorComponentReport] = Field(default_factory=list, max_length=20)
 
 

@@ -120,6 +120,9 @@ def _allowed_browser_origins() -> tuple[str, ...]:
         "http://127.0.0.1:3000",
         "http://127.0.0.1:3001",
         "http://127.0.0.1:3002",
+        "chrome-extension://",
+        "edge-extension://",
+        "moz-extension://",
         *AUTH_ADDITIONAL_REFERERS,
     }
     if api_host:
