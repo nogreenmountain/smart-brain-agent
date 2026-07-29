@@ -116,6 +116,9 @@ try {
     if ($pythonCommand.Count -gt 1) { $syncArguments += $pythonCommand[1] }
     $syncArguments += @($syncScript, "--runtime-dir", $runtimeDir)
     & $pythonCommand[0] @syncArguments
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Initial AI conversation sync found old records it could not upload; background sync will retry." -ForegroundColor Yellow
+    }
 } catch {
     Write-Host "Initial AI conversation sync will retry in the background." -ForegroundColor Yellow
 }
@@ -123,3 +126,4 @@ try {
 Write-Host ""
 Write-Host "AI 工作日监控已安装。" -ForegroundColor Green
 Write-Host "请重新打开 CC Switch，分别切换一次 Claude 和 Codex 当前供应商，然后重启 Claude Code/Codex。"
+$global:LASTEXITCODE = 0

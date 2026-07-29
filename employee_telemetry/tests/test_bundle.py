@@ -371,6 +371,8 @@ class BundleTests(unittest.TestCase):
             self.assertIn("Enroll-AIWorkday.py", install_text)
             self.assertIn("SmartBrain AI Conversation Sync", install_text)
             self.assertIn("ConversationSync.py", install_text)
+            self.assertIn("Initial AI conversation sync found old records", install_text)
+            self.assertIn("$global:LASTEXITCODE = 0", install_text)
             self.assertIn("register_device", enroll_text)
             self.assertIn("device-credentials.json", enroll_text)
             self.assertIn("Remove-Item -LiteralPath", install_text)
