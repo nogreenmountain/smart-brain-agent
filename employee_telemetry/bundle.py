@@ -300,6 +300,9 @@ def build_codex_common_config(
 def _powershell_install_script() -> str:
     return r"""#Requires -Version 5.1
 $ErrorActionPreference = "Stop"
+$OutputEncoding = New-Object System.Text.UTF8Encoding $false
+[Console]::OutputEncoding = $OutputEncoding
+[Console]::InputEncoding = $OutputEncoding
 
 function Find-Python {
     $py = Get-Command py -ErrorAction SilentlyContinue
@@ -347,6 +350,9 @@ Write-Host "之后正常使用即可，不需要先登录智慧大脑网页。"
 def _powershell_uninstall_script() -> str:
     return r"""#Requires -Version 5.1
 $ErrorActionPreference = "Stop"
+$OutputEncoding = New-Object System.Text.UTF8Encoding $false
+[Console]::OutputEncoding = $OutputEncoding
+[Console]::InputEncoding = $OutputEncoding
 
 if (Get-Process -Name "cc-switch" -ErrorAction SilentlyContinue) {
     throw "请先从系统托盘彻底退出 CC Switch，再重新运行卸载器。"
@@ -388,6 +394,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$OutputEncoding = New-Object System.Text.UTF8Encoding $false
+[Console]::OutputEncoding = $OutputEncoding
+[Console]::InputEncoding = $OutputEncoding
 
 function Find-Python {
     if ($PythonPath) {
@@ -510,6 +519,9 @@ def _powershell_universal_uninstall_script() -> str:
 param([string]$PythonPath)
 
 $ErrorActionPreference = "Stop"
+$OutputEncoding = New-Object System.Text.UTF8Encoding $false
+[Console]::OutputEncoding = $OutputEncoding
+[Console]::InputEncoding = $OutputEncoding
 
 if (Get-Process -Name "cc-switch" -ErrorAction SilentlyContinue) {
     throw "请先从系统托盘彻底退出 CC Switch，再重新运行卸载器。"

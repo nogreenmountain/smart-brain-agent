@@ -7,6 +7,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$OutputEncoding = New-Object System.Text.UTF8Encoding $false
+[Console]::OutputEncoding = $OutputEncoding
+[Console]::InputEncoding = $OutputEncoding
 
 function Find-Python {
     if ($PythonPath) {

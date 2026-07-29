@@ -95,11 +95,7 @@ class WorkdayEnrollmentTests(unittest.TestCase):
                 orm=self.orm,
             )
 
-        require_member.assert_called_once_with(
-            self.orm,
-            user_id=self.user_id,
-            project_id=self.project_id,
-        )
+        require_member.assert_not_called()
         self.assertEqual(response.employee_id, "test1")
         self.assertEqual(response.employee_name, "Test Employee 1")
         self.assertEqual(
@@ -134,7 +130,9 @@ class WorkdayEnrollmentTests(unittest.TestCase):
             "workday_enroll",
         )
 
-    def test_non_member_cannot_enroll(self) -> None:
+    def test_project_membership_is_not_required_for_ai_monitor_enrollment(
+        self,
+    ) -> None:
         with (
             patch.object(
                 route,
@@ -146,17 +144,29 @@ class WorkdayEnrollmentTests(unittest.TestCase):
                 "require_member",
                 side_effect=AuthzError(403, "not a member"),
             ),
-            patch.object(route, "mint_telemetry_token") as mint,
+            patch.object(
+                route,
+                "mint_telemetry_token",
+                return_value="header.payload.signature",
+            ) as mint,
+            patch.object(route, "record_audit"),
+            patch.dict(
+                os.environ,
+                {
+                    "JWT_SECRET_KEY": "test-secret-with-at-least-32-characters",
+                    "WORKDAY_COLLECTOR_ENDPOINT": "http://192.168.1.40:4318",
+                    "WORKDAY_ENROLLMENT_TOKEN_DAYS": "30",
+                },
+            ),
         ):
-            with self.assertRaises(HTTPException) as raised:
-                route.enroll_workday(
-                    request=object(),
-                    body=self.body,
-                    orm=self.orm,
-                )
+            response = route.enroll_workday(
+                request=object(),
+                body=self.body,
+                orm=self.orm,
+            )
 
-        self.assertEqual(raised.exception.status_code, 403)
-        mint.assert_not_called()
+        self.assertEqual(response.employee_id, "test1")
+        mint.assert_called_once()
 
     def test_unusual_email_uses_stable_non_email_employee_id(self) -> None:
         employee_id, employee_name = route.derive_employee_identity(

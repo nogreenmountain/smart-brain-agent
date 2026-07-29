@@ -137,25 +137,6 @@ def enroll_workday(
             detail=error.detail,
         ) from error
 
-    try:
-        require_member(
-            orm,
-            user_id=user_id,
-            project_id=body.project_id,
-        )
-    except AuthzError as error:
-        _record_enrollment_audit(
-            orm,
-            request,
-            user_id=user_id,
-            project_id=body.project_id,
-            result_status="forbidden",
-        )
-        raise HTTPException(
-            status_code=error.status_code,
-            detail=error.detail,
-        ) from error
-
     employee_id, employee_name = _resolve_employee_for_user(orm, user_id)
     try:
         collector_endpoint, token_days = _enrollment_settings()

@@ -8,6 +8,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$OutputEncoding = New-Object System.Text.UTF8Encoding $false
+[Console]::OutputEncoding = $OutputEncoding
+[Console]::InputEncoding = $OutputEncoding
 
 function Write-Step {
     param([string]$Message)

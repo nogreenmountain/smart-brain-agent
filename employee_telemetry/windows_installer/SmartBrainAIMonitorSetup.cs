@@ -395,6 +395,8 @@ namespace SmartBrain.AIMonitor.Setup
                 StandardOutputEncoding = Encoding.UTF8,
                 StandardErrorEncoding = Encoding.UTF8
             };
+            start.EnvironmentVariables["PYTHONIOENCODING"] = "utf-8";
+            start.EnvironmentVariables["PYTHONUTF8"] = "1";
             using (Process process = new Process { StartInfo = start })
             {
                 process.OutputDataReceived += delegate(object sender, DataReceivedEventArgs e) { if (e.Data != null) output.AppendLine(e.Data); };
