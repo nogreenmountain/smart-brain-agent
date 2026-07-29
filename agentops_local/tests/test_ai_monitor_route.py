@@ -119,11 +119,7 @@ class AIMonitorRouteTests(unittest.TestCase):
                 orm=self.orm,
             )
 
-        require_member.assert_called_once_with(
-            self.orm,
-            user_id=self.user_id,
-            project_id=self.project_id,
-        )
+        require_member.assert_not_called()
         self.assertEqual(response.employee_id, "test1")
         self.assertEqual(response.device_id, "device-001")
         self.assertEqual(response.components["cc_switch"].status, "installed")
@@ -139,7 +135,7 @@ class AIMonitorRouteTests(unittest.TestCase):
         audit.assert_called_once()
         self.assertEqual(audit.call_args.kwargs["action"], "ai_monitor_device_register")
 
-    def test_non_member_cannot_register(self) -> None:
+    def test_project_membership_is_not_required_to_register_device(self) -> None:
         with (
             patch.object(route, "current_user_id", return_value=self.user_id),
             patch.object(
@@ -149,19 +145,18 @@ class AIMonitorRouteTests(unittest.TestCase):
             ),
             patch.object(route, "record_audit") as audit,
         ):
-            with self.assertRaises(HTTPException) as raised:
-                route.register_ai_monitor_device(
-                    request=object(),
-                    body=self.body,
-                    orm=self.orm,
-                )
+            response = route.register_ai_monitor_device(
+                request=object(),
+                body=self.body,
+                orm=self.orm,
+            )
 
-        self.assertEqual(raised.exception.status_code, 403)
-        self.assertFalse(
+        self.assertEqual(response.employee_id, "test1")
+        self.assertTrue(
             any("INSERT INTO public.ai_monitor_devices" in sql for sql, _ in self.orm.calls)
         )
         audit.assert_called_once()
-        self.assertEqual(audit.call_args.kwargs["metadata"]["result_status"], "forbidden")
+        self.assertEqual(audit.call_args.kwargs["metadata"]["result_status"], "ok")
 
     def test_status_lists_devices_and_live_components(self) -> None:
         row = SimpleNamespace(
@@ -204,7 +199,7 @@ class AIMonitorRouteTests(unittest.TestCase):
         self.assertEqual(response.summary["cc_switch"], "installed")
         self.assertEqual(response.summary["chatgpt_web_extension"], "missing")
 
-    def test_overall_status_lists_employee_devices_across_visible_projects(self) -> None:
+    def test_overall_status_lists_employee_devices_without_project_filter(self) -> None:
         row = SimpleNamespace(
             project_id="f9505558-d67d-462f-b77e-6b9550458a2b",
             device_id="device-001",
@@ -246,7 +241,8 @@ class AIMonitorRouteTests(unittest.TestCase):
         ])
         self.assertEqual(len(response.devices), 1)
         device_sql = [sql for sql, _ in orm.calls if "FROM public.ai_monitor_devices" in sql][0]
-        self.assertIn("project_id = ANY", device_sql)
+        self.assertNotIn("project_id = ANY", device_sql)
+        self.assertIn("WHERE employee_id = :employee_id", device_sql)
         self.assertEqual(response.summary["cc_switch"], "installed")
         audit.assert_called_once()
         self.assertEqual(audit.call_args.kwargs["action"], "ai_monitor_status")

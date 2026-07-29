@@ -209,20 +209,6 @@ def register_ai_monitor_device(
     except AuthzError as error:
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error
 
-    try:
-        require_member(orm, user_id=user_id, project_id=body.project_id)
-    except AuthzError as error:
-        _record_monitor_audit(
-            orm,
-            request,
-            user_id=user_id,
-            action="ai_monitor_device_register",
-            project_id=body.project_id,
-            result_status="forbidden",
-            device_id=body.device_id,
-        )
-        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
-
     employee_id, employee_name = _resolve_employee(orm, user_id)
     seen_at = datetime.now(timezone.utc)
     components = _component_map(body.components, seen_at=seen_at)
@@ -350,40 +336,34 @@ def get_ai_monitor_overall_status(
     if not resolved_employee_id:
         resolved_employee_id, employee_name = _resolve_employee(orm, user_id)
 
-    devices: list[AIMonitorDeviceStatus] = []
-    if project_ids:
-        rows = orm.execute(
-            text("""
-                SELECT
-                    device_id,
-                    device_name,
-                    employee_id,
-                    employee_name,
-                    installer_version,
-                    os,
-                    components,
-                    max(last_seen_at) AS last_seen_at,
-                    min(created_at) AS created_at,
-                    max(updated_at) AS updated_at
-                FROM public.ai_monitor_devices
-                WHERE project_id = ANY(CAST(:project_ids AS uuid[]))
-                  AND employee_id = :employee_id
-                GROUP BY
-                    device_id,
-                    device_name,
-                    employee_id,
-                    employee_name,
-                    installer_version,
-                    os,
-                    components
-                ORDER BY max(last_seen_at) DESC, max(updated_at) DESC
-            """),
-            {
-                "project_ids": [str(project_id) for project_id in project_ids],
-                "employee_id": resolved_employee_id,
-            },
-        ).all()
-        devices = [_row_to_device(row) for row in rows]
+    rows = orm.execute(
+        text("""
+            SELECT
+                device_id,
+                device_name,
+                employee_id,
+                employee_name,
+                installer_version,
+                os,
+                components,
+                max(last_seen_at) AS last_seen_at,
+                min(created_at) AS created_at,
+                max(updated_at) AS updated_at
+            FROM public.ai_monitor_devices
+            WHERE employee_id = :employee_id
+            GROUP BY
+                device_id,
+                device_name,
+                employee_id,
+                employee_name,
+                installer_version,
+                os,
+                components
+            ORDER BY max(last_seen_at) DESC, max(updated_at) DESC
+        """),
+        {"employee_id": resolved_employee_id},
+    ).all()
+    devices = [_row_to_device(row) for row in rows]
     if employee_name is None and devices:
         employee_name = devices[0].employee_name
 
