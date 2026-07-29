@@ -99,15 +99,17 @@ function New-MonitoredShortcut {
         [string]$Name,
         [string]$BrowserPath,
         [string]$ExtensionDir,
+        [string]$ProfileDir,
         [string]$Url = "https://chatgpt.com/"
     )
     if (-not $BrowserPath) { return $false }
+    New-Item -ItemType Directory -Force -Path $ProfileDir | Out-Null
     $desktop = [Environment]::GetFolderPath("Desktop")
     $shortcutPath = Join-Path $desktop "$Name.lnk"
     $shell = New-Object -ComObject WScript.Shell
     $shortcut = $shell.CreateShortcut($shortcutPath)
     $shortcut.TargetPath = $BrowserPath
-    $shortcut.Arguments = "--load-extension=`"$ExtensionDir`" $Url"
+    $shortcut.Arguments = "--user-data-dir=`"$ProfileDir`" --no-first-run --disable-extensions-except=`"$ExtensionDir`" --load-extension=`"$ExtensionDir`" `"$Url`""
     $shortcut.WorkingDirectory = Split-Path -Parent $BrowserPath
     $shortcut.IconLocation = $BrowserPath
     $shortcut.Description = "ChatGPT Web with SmartBrain AI Monitor extension"
@@ -127,6 +129,7 @@ if ($LASTEXITCODE -ne 0) {
 Write-Step "2/3 Install ChatGPT web monitor extension"
 $runtimeRoot = Join-Path $env:LOCALAPPDATA "AIMonitor"
 $extensionDir = Join-Path $runtimeRoot "chatgpt-web-extension"
+$profileRoot = Join-Path $runtimeRoot "browser-profiles"
 New-Item -ItemType Directory -Force -Path $extensionDir | Out-Null
 Copy-Item -Path (Join-Path $PSScriptRoot "chatgpt-web-extension\*") `
     -Destination $extensionDir `
@@ -147,24 +150,24 @@ $chromePath = Find-Browser @(
     (Join-Path $env:LOCALAPPDATA "Google\Chrome\Application\chrome.exe")
 )
 $created = @()
-if (New-MonitoredShortcut -Name "ChatGPT Monitored - Edge" -BrowserPath $edgePath -ExtensionDir $extensionDir) {
+if (New-MonitoredShortcut -Name "ChatGPT Monitored - Edge" -BrowserPath $edgePath -ExtensionDir $extensionDir -ProfileDir (Join-Path $profileRoot "edge-chatgpt")) {
     $created += "Edge"
 }
-if (New-MonitoredShortcut -Name "ChatGPT Monitored - Chrome" -BrowserPath $chromePath -ExtensionDir $extensionDir) {
+if (New-MonitoredShortcut -Name "ChatGPT Monitored - Chrome" -BrowserPath $chromePath -ExtensionDir $extensionDir -ProfileDir (Join-Path $profileRoot "chrome-chatgpt")) {
     $created += "Chrome"
 }
 if ($edgePath) {
-    New-MonitoredShortcut -Name "SmartBrain Monitor Setup - Edge" -BrowserPath $edgePath -ExtensionDir $extensionDir -Url $smartBrainSetupUrl | Out-Null
+    New-MonitoredShortcut -Name "SmartBrain Monitor Setup - Edge" -BrowserPath $edgePath -ExtensionDir $extensionDir -ProfileDir (Join-Path $profileRoot "edge-setup") -Url $smartBrainSetupUrl | Out-Null
 }
 if ($chromePath) {
-    New-MonitoredShortcut -Name "SmartBrain Monitor Setup - Chrome" -BrowserPath $chromePath -ExtensionDir $extensionDir -Url $smartBrainSetupUrl | Out-Null
+    New-MonitoredShortcut -Name "SmartBrain Monitor Setup - Chrome" -BrowserPath $chromePath -ExtensionDir $extensionDir -ProfileDir (Join-Path $profileRoot "chrome-setup") -Url $smartBrainSetupUrl | Out-Null
 }
 
 Write-Host ""
 Write-Host "AI Monitor universal installation finished." -ForegroundColor Green
 Write-Host "CC Switch: reopen CC Switch, switch Claude and Codex providers once, then restart Claude Code/Codex."
 if ($created.Count -gt 0) {
-    Write-Host "ChatGPT Web: close existing browser windows, then use desktop shortcuts: $($created -join ', ')."
+    Write-Host "ChatGPT Web: use desktop shortcuts: $($created -join ', '). These shortcuts use an isolated browser profile so the extension loads reliably."
 } else {
     Write-Host "Edge or Chrome was not found. Extension folder is ready for manual loading: $extensionDir" -ForegroundColor Yellow
 }

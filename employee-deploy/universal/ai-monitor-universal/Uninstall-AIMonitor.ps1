@@ -22,6 +22,7 @@ foreach ($shortcut in $shortcuts) {
 
 $runtimeRoot = Join-Path $env:LOCALAPPDATA "AIMonitor"
 $extensionDir = Join-Path $runtimeRoot "chatgpt-web-extension"
+$profileRoot = Join-Path $runtimeRoot "browser-profiles"
 $resolvedRoot = [System.IO.Path]::GetFullPath($runtimeRoot)
 $resolvedExtension = [System.IO.Path]::GetFullPath($extensionDir)
 if (
@@ -29,6 +30,13 @@ if (
     $resolvedExtension.StartsWith($resolvedRoot, [System.StringComparison]::OrdinalIgnoreCase)
 ) {
     Remove-Item -LiteralPath $extensionDir -Recurse -Force
+}
+$resolvedProfiles = [System.IO.Path]::GetFullPath($profileRoot)
+if (
+    (Test-Path -LiteralPath $profileRoot) -and
+    $resolvedProfiles.StartsWith($resolvedRoot, [System.StringComparison]::OrdinalIgnoreCase)
+) {
+    Remove-Item -LiteralPath $profileRoot -Recurse -Force
 }
 
 Write-Host "AI Monitor universal package configuration has been removed." -ForegroundColor Green

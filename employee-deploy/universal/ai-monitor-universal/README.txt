@@ -33,7 +33,12 @@ http://192.168.1.40:3002/monitor/setup
 8. 安装成功后重新打开 CC Switch，分别切换一次 Claude 和 Codex 当前供应商。
 9. 使用桌面上的“SmartBrain Monitor Setup - Edge”或“SmartBrain Monitor Setup - Chrome”回到检测页确认状态。
 10. 使用桌面上的“ChatGPT Monitored - Edge”或“ChatGPT Monitored - Chrome”打开 ChatGPT 网页版。
-11. 在 ChatGPT 页面右下角的“智慧大脑 AI Monitor”面板里登录智慧大脑，并填写任务 ID / 任务标题。
+11. 监控快捷方式会使用独立浏览器配置目录，第一次打开时可能需要重新登录 ChatGPT。
+12. 在 ChatGPT 页面右下角的“智慧大脑 AI Monitor”面板里登录智慧大脑，并填写任务 ID / 任务标题。
+
+如果打开 ChatGPT Monitored 后没有右下角面板
+
+请重新下载安装包并再次运行 Install-AIMonitor.ps1。2026-07-29-r2 之后的安装包会为监控入口创建独立浏览器配置，并强制加载插件。
 
 能监控什么
 
