@@ -17,9 +17,14 @@ from agentops.rag.audit import record_audit
 from agentops.rag.authz import AuthzError, current_user_id, require_member
 from agentops.workday.domain import business_day_utc_bounds
 from agentops.workday.identity import derive_employee_identity
+from employee_telemetry.bundle import (
+    secret_from_environment,
+    verify_telemetry_token,
+)
 
 
 router = APIRouter(route_class=AuthenticatedRoute)
+device_router = APIRouter()
 logger = logging.getLogger(__name__)
 
 AIChatSource = Literal[
@@ -35,7 +40,7 @@ AIChatRole = Literal["user", "assistant", "system", "tool"]
 
 class AIChatMessageInput(BaseModel):
     role: AIChatRole
-    content: str = Field(..., min_length=1, max_length=100_000)
+    content: str = Field(..., min_length=1, max_length=1_000_000)
     message_id: str | None = Field(None, max_length=200)
     created_at: datetime | None = None
     token_count: int | None = Field(None, ge=0)
@@ -474,6 +479,80 @@ def ingest_ai_chat(
             employee_id=employee_id,
         )
         raise HTTPException(status_code=503, detail="ai chat ingest unavailable") from error
+
+    _record_ai_chat_audit(
+        orm,
+        request,
+        user_id=user_id,
+        action="ai_chat_ingest",
+        project_id=body.project_id,
+        source=body.source,
+        result_status="ok",
+        employee_id=employee_id,
+        session_id=session_id,
+    )
+    return AIChatIngestResponse(
+        session_id=session_id,
+        project_id=body.project_id,
+        employee_id=employee_id,
+        employee_name=employee_name,
+        source=body.source,
+        message_count=len(body.messages),
+        status=body.status,
+    )
+
+
+def _device_claims(request: Request) -> dict[str, Any]:
+    authorization = str(request.headers.get("authorization") or "")
+    scheme, separator, token = authorization.partition(" ")
+    if not separator or scheme.lower() != "bearer" or not token.strip():
+        raise HTTPException(status_code=401, detail="device credential is required")
+    try:
+        claims = verify_telemetry_token(
+            token.strip(),
+            secret=secret_from_environment(),
+        )
+        uuid.UUID(str(claims.get("sub") or ""))
+        uuid.UUID(str(claims.get("project_id") or ""))
+    except (RuntimeError, ValueError) as error:
+        raise HTTPException(status_code=401, detail="device credential is invalid or expired") from error
+    return claims
+
+
+@device_router.post("/ai-chat/device-ingest", response_model=AIChatIngestResponse)
+def device_ingest_ai_chat(
+    request: Request,
+    body: AIChatIngestRequest,
+    orm: Session = Depends(get_orm_session),
+) -> AIChatIngestResponse:
+    claims = _device_claims(request)
+    if body.source != "cc_switch":
+        raise HTTPException(status_code=422, detail="device ingest source must be cc_switch")
+    if str(body.project_id) != str(claims["project_id"]):
+        raise HTTPException(status_code=403, detail="project is outside the device credential scope")
+    user_id = uuid.UUID(str(claims["sub"]))
+    try:
+        require_member(orm, user_id=user_id, project_id=body.project_id)
+    except AuthzError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+
+    employee_id = str(claims["employee_id"])
+    employee_name = str(claims["employee_name"])
+    try:
+        session_id = _store_chat_session(
+            orm,
+            user_id=user_id,
+            employee_id=employee_id,
+            employee_name=employee_name,
+            body=body,
+        )
+    except Exception as error:
+        logger.exception("Device AI chat ingest failed for project=%s", body.project_id)
+        try:
+            orm.rollback()
+        except Exception:
+            pass
+        raise HTTPException(status_code=503, detail="device AI chat ingest unavailable") from error
 
     _record_ai_chat_audit(
         orm,

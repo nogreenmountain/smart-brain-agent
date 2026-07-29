@@ -1,5 +1,5 @@
 AI 工作日监控：CC Switch 员工电脑部署手册
-版本：2026-07-20
+版本：2026-07-29-r5
 
 一、方案结论
 
@@ -21,13 +21,14 @@ AgentOps Collector 接收 Trace；
 3. 会话、Trace、Span、LLM 调用和工具调用数量。
 4. 模型、Token、成本估算、延迟、成功/失败。
 5. 开始和结束时间。
+6. Codex、Claude 中员工可见的用户消息和 AI 文本回复原文。
 
 不采集：
 
 1. 键盘、鼠标、屏幕截图、剪贴板和浏览器历史。
-2. Prompt 原文和 AI 回复原文。
-3. 工具输入输出、Shell 完整命令。
-4. 文件内容和完整文件路径。
+2. 系统提示词、密钥和认证令牌。
+3. 工具参数、工具输出和 Shell 完整命令。
+4. 本地文件内容和完整文件路径。
 5. 员工桌面上的其他软件活动。
 
 建议公司在正式启用前完成员工告知、授权、数据保留周期和查看权限制度。
@@ -74,14 +75,16 @@ TcpTestSucceeded 必须为 True。
 
 五、员工电脑安装
 
-所有员工使用相同的 ai-workday-universal 目录：
+所有员工从智慧大脑 AI Monitor 页面下载相同的 r5 统一安装包：
+
+http://192.168.1.40:3002/monitor/setup
 
 1. 管理员把 ai-workday-universal 整个目录复制到员工电脑本地。
 2. 员工从系统托盘彻底退出 CC Switch。
 3. 在部署包目录空白处按住 Shift 点击鼠标右键，打开 PowerShell。
 4. 执行：
 
-powershell -ExecutionPolicy Bypass -File .\Install-AIWorkdayTelemetry.ps1
+powershell -ExecutionPolicy Bypass -File .\Install-AIMonitor.ps1
 
 5. 按提示输入智慧大脑用户名和密码，例如 test1 / 123456。
 6. 短用户名 test1 会自动补全为 test1@local.dev。
@@ -95,33 +98,36 @@ powershell -ExecutionPolicy Bypass -File .\Install-AIWorkdayTelemetry.ps1
 1. 检查服务器 4318 端口。
 2. 使用现有账号密码登录智慧大脑并验证项目权限。
 3. 从登录账号自动绑定员工编号，员工不能自行填写或冒充其他编号。
-4. 签发带有效期、只允许上报 Trace 的专属采集令牌。
+4. 签发带有效期、绑定账号和项目的 Trace/对话同步设备令牌。
 5. 备份 CC Switch 数据库、Claude settings.json 和 Codex config.toml。
 6. 更新 CC Switch 的 Claude/Codex Common Config。
 7. 让所有 Claude/Codex Provider 使用 Common Config。
 8. 同步更新当前 Claude/Codex 配置。
-9. 开启 Trace，关闭 Logs、Metrics 和所有原文类上报。
+9. 开启结构化 Trace，并安装只读取 Codex/Claude 本地会话 JSONL 的对话同步器。
 10. 把 192.168.1.40、127.0.0.1 和 localhost 追加到用户级 NO_PROXY，避免系统代理拦截局域网 Trace。
-11. 安装完成后删除包含令牌的中间配置文件。
+11. 创建“SmartBrain AI Conversation Sync”定时任务，首次同步最近 7 天，之后
+    每两分钟同步一次。
+12. 删除临时配置；设备令牌单独保存在当前 Windows 用户 AppData 运行目录。
 
 密码只在本次登录的内存中使用，不写入文件、CC Switch、Claude 或 Codex。
 
 六、验证是否开始监控
 
-员工完成一次 Claude Code 或 Codex 操作后，等待约 5 到 15 秒。
+员工完成一次 Claude Code 或 Codex 操作后，结构化 Trace 约 5 到 15 秒可见，
+完整对话正文最长等待约 2 分钟。
 
 项目成员打开：
 
 http://192.168.1.40:3002/workday
 
-选择 Default Project，员工编号输入 test1，日期选择当天，点击生成。
+员工使用自己的账号登录后进入“AI 工作日”，选择当天并点击“查询记录”。
 
 应看到：
 
-1. Trace 和 Span 数量大于 0。
-2. 来源对应 Claude Code 或 Codex。
-3. 有模型、Token、延迟或工具调用数据。
-4. 没有 Prompt、回复正文、命令和文件内容。
+1. 一次用户提问只显示为少量真实对话记录，不出现大量 auth/config/plugin Trace。
+2. 展开记录能看到用户消息和 AI 文本回复原文。
+3. 有准确的模型、输入 Token、输出 Token、总 Token 和耗时。
+4. 不显示系统提示词、密钥、工具参数、命令输出和本地文件内容。
 
 当前原生 CLI 不会自动生成 agentops.task.id，因此任务拆分可能显示“未标记任务”。这不影响员工、日期、调用、Token、工具和错误汇总。
 

@@ -138,6 +138,55 @@ def decode_unverified_token(token: str) -> tuple[dict[str, Any], dict[str, Any]]
     return decode(header_segment), decode(payload_segment)
 
 
+def verify_telemetry_token(
+    token: str,
+    *,
+    secret: str,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    if len(secret) < 32:
+        raise ValueError("JWT secret must contain at least 32 characters")
+    try:
+        header_segment, payload_segment, signature_segment = token.split(".")
+        header, payload = decode_unverified_token(token)
+        padded = signature_segment + "=" * (-len(signature_segment) % 4)
+        signature = base64.urlsafe_b64decode(padded)
+    except (ValueError, TypeError, json.JSONDecodeError) as error:
+        raise ValueError("telemetry token is malformed") from error
+    if header != {"alg": "HS256", "typ": "JWT"}:
+        raise ValueError("telemetry token header is invalid")
+    signing_input = f"{header_segment}.{payload_segment}"
+    expected = hmac.new(
+        secret.encode("utf-8"),
+        signing_input.encode("ascii"),
+        hashlib.sha256,
+    ).digest()
+    if not hmac.compare_digest(expected, signature):
+        raise ValueError("telemetry token signature is invalid")
+
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        raise ValueError("now must be timezone-aware")
+    current_timestamp = int(current.astimezone(timezone.utc).timestamp())
+    try:
+        expires_at = int(payload["exp"])
+        issued_at = int(payload["iat"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError("telemetry token timestamps are invalid") from error
+    if expires_at <= current_timestamp:
+        raise ValueError("telemetry token has expired")
+    if issued_at > current_timestamp + 300:
+        raise ValueError("telemetry token was issued in the future")
+    if payload.get("aud") != "authenticated":
+        raise ValueError("telemetry token audience is invalid")
+    if payload.get("ingest_kind") != "workday_cli":
+        raise ValueError("telemetry token ingest kind is invalid")
+    for key in ("project_id", "employee_id", "employee_name"):
+        if not str(payload.get(key) or ""):
+            raise ValueError(f"telemetry token is missing {key}")
+    return payload
+
+
 def normalize_collector_endpoint(endpoint: str) -> str:
     parsed = urlsplit(endpoint.strip())
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
@@ -392,6 +441,36 @@ try {
     }
 }
 
+$syncSource = Join-Path $PSScriptRoot "ConversationSync.py"
+$syncScript = Join-Path $runtimeDir "ConversationSync.py"
+$syncRunner = Join-Path $runtimeDir "Run-ConversationSync.ps1"
+Copy-Item -LiteralPath $syncSource -Destination $syncScript -Force
+$pythonPrefix = if ($pythonCommand.Count -gt 1) { "$($pythonCommand[1]) " } else { "" }
+$runnerContent = @"
+`$ErrorActionPreference = "SilentlyContinue"
+& "$($pythonCommand[0])" $pythonPrefix`"$syncScript`" --runtime-dir `"$runtimeDir`" | Out-Null
+"@
+Set-Content -LiteralPath $syncRunner -Encoding UTF8 -Value $runnerContent
+
+$taskName = "SmartBrain AI Conversation Sync"
+try {
+    $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$syncRunner`""
+    $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 2) -RepetitionDuration (New-TimeSpan -Days 3650)
+    $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Force | Out-Null
+} catch {
+    Write-Host "AI conversation sync scheduled task could not be created: $($_.Exception.Message)" -ForegroundColor Yellow
+}
+
+try {
+    $syncArguments = @()
+    if ($pythonCommand.Count -gt 1) { $syncArguments += $pythonCommand[1] }
+    $syncArguments += @($syncScript, "--runtime-dir", $runtimeDir)
+    & $pythonCommand[0] @syncArguments
+} catch {
+    Write-Host "Initial AI conversation sync will retry in the background." -ForegroundColor Yellow
+}
+
 Write-Host ""
 Write-Host "AI 工作日监控已安装。" -ForegroundColor Green
 Write-Host "请重新打开 CC Switch，分别切换一次 Claude 和 Codex 当前供应商，然后重启 Claude Code/Codex。"
@@ -429,6 +508,19 @@ if ($py) {
 }
 if ($LASTEXITCODE -ne 0) { throw "自动卸载失败。" }
 
+Unregister-ScheduledTask -TaskName "SmartBrain AI Conversation Sync" -Confirm:$false -ErrorAction SilentlyContinue
+foreach ($fileName in @(
+    "ConversationSync.py",
+    "Run-ConversationSync.ps1",
+    "device-credentials.json",
+    "conversation-sync-state.json",
+    "conversation-sync-status.json"
+)) {
+    $path = Join-Path $runtimeDir $fileName
+    if (Test-Path -LiteralPath $path) {
+        Remove-Item -LiteralPath $path -Force
+    }
+}
 Remove-Item -LiteralPath (Join-Path $runtimeDir "manifest.json") -Force
 Write-Host "AI 工作日监控配置已移除。请重新打开 CC Switch。" -ForegroundColor Green
 """
@@ -465,9 +557,11 @@ def _universal_readme(request: UniversalBundleRequest) -> str:
 - 密码只用于一次登录，不写入文件、CC Switch 或遥测配置。
 - 员工身份由登录账号和项目成员关系决定，不能在安装器中自行指定。
 - 通用安装包本身不含员工身份或遥测令牌，可以统一分发。
-- 本机遥测令牌会写入 Claude/Codex 配置供原生 OTLP 上报使用。
-- 中间配置文件在安装结束后立即删除。
-- 默认不采集 Prompt、AI 回答、工具参数、命令内容或文件内容。
+- 本机签名设备令牌会写入当前用户的 AppData 运行目录，不保存登录密码。
+- 每两分钟同步 Codex/Claude 中员工可见的用户消息、AI 文本回复、模型和 Token；
+  首次安装同步最近 7 天的会话。
+- 不上传系统提示词、密钥、工具参数、命令输出或本地文件内容。
+- 对话原文属于敏感企业数据，请在公司制度和员工知情范围内使用。
 
 卸载
 
@@ -532,6 +626,10 @@ def create_universal_bundle(
     shutil.copyfile(
         package_dir / "client_config.py",
         output / "AIWorkdayConfig.py",
+    )
+    shutil.copyfile(
+        package_dir / "conversation_sync.py",
+        output / "ConversationSync.py",
     )
     return output
 

@@ -4,6 +4,8 @@ import argparse
 import getpass
 import http.cookiejar
 import json
+import platform
+import socket
 import sys
 import urllib.error
 import urllib.request
@@ -85,6 +87,17 @@ def _atomic_write(path: Path, content: str) -> None:
     temporary.replace(path)
 
 
+def get_or_create_device_id(runtime_dir: Path) -> str:
+    path = runtime_dir / "device-id.txt"
+    if path.exists():
+        value = path.read_text(encoding="utf-8").strip()
+        if 3 <= len(value) <= 200:
+            return value
+    value = f"win-{uuid.uuid4()}"
+    _atomic_write(path, value + "\n")
+    return value
+
+
 def _validate_enrollment(
     payload: dict[str, Any],
     *,
@@ -109,6 +122,8 @@ def _validate_enrollment(
         raise RuntimeError("Claude 遥测配置格式不正确")
     if not isinstance(codex, str) or "[otel]" not in codex:
         raise RuntimeError("Codex 遥测配置格式不正确")
+    if not str(payload.get("device_ingest_token") or ""):
+        raise RuntimeError("服务器未返回对话同步设备凭据")
     headers = str(
         claude["env"].get("OTEL_EXPORTER_OTLP_HEADERS") or ""
     )
@@ -120,6 +135,9 @@ def write_runtime_enrollment(
     payload: dict[str, Any],
     *,
     runtime_dir: Path,
+    api_endpoint: str | None = None,
+    bundle_manifest: dict[str, Any] | None = None,
+    device_id: str | None = None,
 ) -> None:
     runtime_dir.mkdir(parents=True, exist_ok=True)
     _atomic_write(
@@ -142,9 +160,75 @@ def write_runtime_enrollment(
         "collector_endpoint": payload["collector_endpoint"],
         "expires_at": payload["expires_at"],
     }
+    if device_id:
+        runtime_manifest["device_id"] = device_id
+    if bundle_manifest:
+        runtime_manifest["package_version"] = str(
+            bundle_manifest.get("package_version") or ""
+        )
+        api_endpoint = api_endpoint or str(
+            bundle_manifest.get("api_endpoint") or ""
+        )
+    if api_endpoint:
+        runtime_manifest["api_endpoint"] = api_endpoint
     _atomic_write(
         runtime_dir / "manifest.json",
         json.dumps(runtime_manifest, ensure_ascii=False, indent=2) + "\n",
+    )
+    device_token = str(payload.get("device_ingest_token") or "")
+    if device_token and api_endpoint:
+        _atomic_write(
+            runtime_dir / "device-credentials.json",
+            json.dumps(
+                {
+                    "api_endpoint": api_endpoint,
+                    "project_id": payload["project_id"],
+                    "employee_id": payload["employee_id"],
+                    "employee_name": payload["employee_name"],
+                    "expires_at": payload["expires_at"],
+                    "token": device_token,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+        )
+
+
+def register_device(
+    opener: urllib.request.OpenerDirector,
+    *,
+    api_endpoint: str,
+    project_id: str,
+    device_id: str,
+    package_version: str,
+) -> None:
+    _post_json(
+        opener,
+        f"{api_endpoint}/v4/ai-monitor/devices/register",
+        {
+            "project_id": project_id,
+            "device_id": device_id,
+            "device_name": socket.gethostname() or "Windows PC",
+            "installer_version": package_version or None,
+            "os": platform.platform(),
+            "components": [
+                {
+                    "name": "cc_switch",
+                    "status": "installed",
+                    "version": package_version or None,
+                    "details": {"source": "installer_enrollment"},
+                },
+                {
+                    "name": "chatgpt_desktop",
+                    "status": "unsupported",
+                    "version": None,
+                    "details": {
+                        "reason": "personal_desktop_account_not_locally_captured"
+                    },
+                },
+            ],
+        },
     )
 
 
@@ -174,6 +258,8 @@ def enroll(
     if not password:
         raise ValueError("密码不能为空")
 
+    device_id = get_or_create_device_id(runtime_dir)
+    package_version = str(manifest.get("package_version") or "")
     cookie_jar = http.cookiejar.CookieJar()
     opener = urllib.request.build_opener(
         urllib.request.ProxyHandler({}),
@@ -196,7 +282,20 @@ def enroll(
             project_id=project_id,
             collector_endpoint=collector_endpoint,
         )
-        write_runtime_enrollment(payload, runtime_dir=runtime_dir)
+        write_runtime_enrollment(
+            payload,
+            runtime_dir=runtime_dir,
+            api_endpoint=api_endpoint,
+            bundle_manifest=manifest,
+            device_id=device_id,
+        )
+        register_device(
+            opener,
+            api_endpoint=api_endpoint,
+            project_id=project_id,
+            device_id=device_id,
+            package_version=package_version,
+        )
         return payload
     finally:
         try:

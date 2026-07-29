@@ -108,6 +108,10 @@ class WorkdayEnrollmentTests(unittest.TestCase):
         )
         self.assertNotIn("password", response.model_dump())
         self.assertNotIn("email", response.model_dump())
+        self.assertEqual(
+            response.device_ingest_token,
+            "header.payload.signature",
+        )
         mint.assert_called_once()
         self.assertEqual(mint.call_args.kwargs["employee_id"], "test1")
         self.assertEqual(

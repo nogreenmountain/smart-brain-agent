@@ -80,6 +80,13 @@ def _post_json(
     return json.loads(raw.decode("utf-8"))
 
 
+def _atomic_write(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(content, encoding="utf-8")
+    temporary.replace(path)
+
+
 def get_or_create_device_id(runtime_dir: Path) -> str:
     path = runtime_dir / "device-id.txt"
     if path.exists():
@@ -89,13 +96,6 @@ def get_or_create_device_id(runtime_dir: Path) -> str:
     value = f"win-{uuid.uuid4()}"
     _atomic_write(path, value + "\n")
     return value
-
-
-def _atomic_write(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(content, encoding="utf-8")
-    temporary.replace(path)
 
 
 def _validate_enrollment(
@@ -122,6 +122,8 @@ def _validate_enrollment(
         raise RuntimeError("Claude 遥测配置格式不正确")
     if not isinstance(codex, str) or "[otel]" not in codex:
         raise RuntimeError("Codex 遥测配置格式不正确")
+    if not str(payload.get("device_ingest_token") or ""):
+        raise RuntimeError("服务器未返回对话同步设备凭据")
     headers = str(
         claude["env"].get("OTEL_EXPORTER_OTLP_HEADERS") or ""
     )
@@ -133,8 +135,9 @@ def write_runtime_enrollment(
     payload: dict[str, Any],
     *,
     runtime_dir: Path,
-    bundle_manifest: dict[str, Any],
-    device_id: str,
+    api_endpoint: str | None = None,
+    bundle_manifest: dict[str, Any] | None = None,
+    device_id: str | None = None,
 ) -> None:
     runtime_dir.mkdir(parents=True, exist_ok=True)
     _atomic_write(
@@ -154,16 +157,42 @@ def write_runtime_enrollment(
         "project_id": payload["project_id"],
         "employee_id": payload["employee_id"],
         "employee_name": payload["employee_name"],
-        "device_id": device_id,
-        "package_version": str(bundle_manifest.get("package_version") or ""),
-        "api_endpoint": str(bundle_manifest.get("api_endpoint") or ""),
         "collector_endpoint": payload["collector_endpoint"],
         "expires_at": payload["expires_at"],
     }
+    if device_id:
+        runtime_manifest["device_id"] = device_id
+    if bundle_manifest:
+        runtime_manifest["package_version"] = str(
+            bundle_manifest.get("package_version") or ""
+        )
+        api_endpoint = api_endpoint or str(
+            bundle_manifest.get("api_endpoint") or ""
+        )
+    if api_endpoint:
+        runtime_manifest["api_endpoint"] = api_endpoint
     _atomic_write(
         runtime_dir / "manifest.json",
         json.dumps(runtime_manifest, ensure_ascii=False, indent=2) + "\n",
     )
+    device_token = str(payload.get("device_ingest_token") or "")
+    if device_token and api_endpoint:
+        _atomic_write(
+            runtime_dir / "device-credentials.json",
+            json.dumps(
+                {
+                    "api_endpoint": api_endpoint,
+                    "project_id": payload["project_id"],
+                    "employee_id": payload["employee_id"],
+                    "employee_name": payload["employee_name"],
+                    "expires_at": payload["expires_at"],
+                    "token": device_token,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+        )
 
 
 def register_device(
@@ -174,14 +203,13 @@ def register_device(
     device_id: str,
     package_version: str,
 ) -> None:
-    hostname = socket.gethostname() or "Windows PC"
     _post_json(
         opener,
         f"{api_endpoint}/v4/ai-monitor/devices/register",
         {
             "project_id": project_id,
             "device_id": device_id,
-            "device_name": hostname,
+            "device_name": socket.gethostname() or "Windows PC",
             "installer_version": package_version or None,
             "os": platform.platform(),
             "components": [
@@ -257,6 +285,7 @@ def enroll(
         write_runtime_enrollment(
             payload,
             runtime_dir=runtime_dir,
+            api_endpoint=api_endpoint,
             bundle_manifest=manifest,
             device_id=device_id,
         )

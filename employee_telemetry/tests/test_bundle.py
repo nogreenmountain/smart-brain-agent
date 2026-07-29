@@ -26,6 +26,7 @@ from employee_telemetry.bundle import (
     merge_codex_common_config,
     mint_telemetry_token,
     remove_managed_codex_block,
+    verify_telemetry_token,
 )
 from employee_telemetry.client_config import (
     merge_no_proxy,
@@ -82,6 +83,56 @@ class TokenTests(unittest.TestCase):
                 employee_name="Test 1",
                 collector_endpoint="http://192.168.1.40:4318",
                 expires_in_days=30,
+            )
+
+    def test_signed_token_can_be_verified_for_device_ingest(self) -> None:
+        secret = "test-secret-with-at-least-thirty-two-chars"
+        issued_at = datetime(2026, 7, 20, 4, 0, tzinfo=timezone.utc)
+        token = mint_telemetry_token(
+            secret=secret,
+            project_id="f9505558-d67d-462f-b77e-6b9550458a2b",
+            employee_id="test1",
+            employee_name="Test 1",
+            expires_in_days=30,
+            subject_user_id="00000000-0000-0000-0000-000000000001",
+            issued_at=issued_at,
+        )
+
+        claims = verify_telemetry_token(
+            token,
+            secret=secret,
+            now=datetime(2026, 7, 21, 4, 0, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(claims["employee_id"], "test1")
+        self.assertEqual(
+            claims["sub"],
+            "00000000-0000-0000-0000-000000000001",
+        )
+
+    def test_tampered_or_expired_device_token_is_rejected(self) -> None:
+        secret = "test-secret-with-at-least-thirty-two-chars"
+        issued_at = datetime(2026, 7, 20, 4, 0, tzinfo=timezone.utc)
+        token = mint_telemetry_token(
+            secret=secret,
+            project_id="f9505558-d67d-462f-b77e-6b9550458a2b",
+            employee_id="test1",
+            employee_name="Test 1",
+            expires_in_days=1,
+            issued_at=issued_at,
+        )
+
+        with self.assertRaises(ValueError):
+            verify_telemetry_token(
+                token[:-1] + ("a" if token[-1] != "a" else "b"),
+                secret=secret,
+                now=issued_at,
+            )
+        with self.assertRaises(ValueError):
+            verify_telemetry_token(
+                token,
+                secret=secret,
+                now=datetime(2026, 7, 22, 4, 0, tzinfo=timezone.utc),
             )
 
 
@@ -275,6 +326,7 @@ class BundleTests(unittest.TestCase):
                 "Install-AIWorkdayTelemetry.ps1",
                 "Uninstall-AIWorkdayTelemetry.ps1",
                 "Enroll-AIWorkday.py",
+                "ConversationSync.py",
                 "Update-CCSwitchCommonConfig.py",
                 "AIWorkdayConfig.py",
                 "README.txt",
@@ -313,7 +365,14 @@ class BundleTests(unittest.TestCase):
             install_text = (
                 output / "Install-AIWorkdayTelemetry.ps1"
             ).read_text(encoding="utf-8-sig")
+            enroll_text = (
+                output / "Enroll-AIWorkday.py"
+            ).read_text(encoding="utf-8")
             self.assertIn("Enroll-AIWorkday.py", install_text)
+            self.assertIn("SmartBrain AI Conversation Sync", install_text)
+            self.assertIn("ConversationSync.py", install_text)
+            self.assertIn("register_device", enroll_text)
+            self.assertIn("device-credentials.json", enroll_text)
             self.assertIn("Remove-Item -LiteralPath", install_text)
 
 
@@ -337,6 +396,7 @@ class EnrollmentClientTests(unittest.TestCase):
             "employee_name": "Test Employee 1",
             "collector_endpoint": "http://192.168.1.40:4318",
             "expires_at": "2026-08-19T04:00:00Z",
+            "device_ingest_token": "signed-device-token",
             "claude_common_config": {
                 "env": {
                     "OTEL_EXPORTER_OTLP_HEADERS": (
@@ -352,7 +412,11 @@ class EnrollmentClientTests(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as temp_dir:
             runtime_dir = Path(temp_dir)
-            write_runtime_enrollment(payload, runtime_dir=runtime_dir)
+            write_runtime_enrollment(
+                payload,
+                runtime_dir=runtime_dir,
+                api_endpoint="http://192.168.1.40:8000",
+            )
 
             manifest = json.loads(
                 (runtime_dir / "manifest.json").read_text(encoding="utf-8")
@@ -364,6 +428,16 @@ class EnrollmentClientTests(unittest.TestCase):
             self.assertNotIn(
                 "Bearer",
                 json.dumps(manifest),
+            )
+            credentials = json.loads(
+                (runtime_dir / "device-credentials.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(credentials["token"], "signed-device-token")
+            self.assertEqual(
+                credentials["api_endpoint"],
+                "http://192.168.1.40:8000",
             )
 
     def test_bundle_contains_one_click_installer_uninstaller_and_manual(self) -> None:

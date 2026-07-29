@@ -48,6 +48,7 @@ class WorkdayEnrollmentResponse(BaseModel):
     employee_name: str
     collector_endpoint: str
     expires_at: datetime
+    device_ingest_token: str
     claude_common_config: dict[str, dict[str, str]]
     codex_common_config: str
 
@@ -181,6 +182,7 @@ def enroll_workday(
         employee_name=employee_name,
         collector_endpoint=collector_endpoint,
         expires_at=issued_at + timedelta(days=token_days),
+        device_ingest_token=token,
         claude_common_config=build_claude_common_config(
             employee_id=employee_id,
             employee_name=employee_name,

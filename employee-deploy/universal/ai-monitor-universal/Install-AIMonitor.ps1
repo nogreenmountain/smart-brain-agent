@@ -166,6 +166,7 @@ if ($chromePath) {
 Write-Host ""
 Write-Host "AI Monitor universal installation finished." -ForegroundColor Green
 Write-Host "CC Switch: reopen CC Switch, switch Claude and Codex providers once, then restart Claude Code/Codex."
+Write-Host "Codex / Claude conversations: the latest 7 days sync now, then every two minutes in the background."
 if ($created.Count -gt 0) {
     Write-Host "ChatGPT Web: use desktop shortcuts: $($created -join ', '). These shortcuts use an isolated browser profile so the extension loads reliably."
 } else {

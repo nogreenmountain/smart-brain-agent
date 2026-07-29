@@ -14,6 +14,7 @@ from .auth_me import router as auth_me_router
 from .projects import router as projects_router
 from .audit_admin import router as audit_admin_router
 from .workday import router as workday_router
+from .ai_chat import device_router as ai_chat_device_router
 from .ai_chat import router as ai_chat_router
 from .ai_monitor import router as ai_monitor_router
 from .ai_usage import router as ai_usage_router
@@ -79,6 +80,7 @@ router.include_router(projects_router)
 router.include_router(audit_admin_router)
 router.include_router(workday_router)
 router.include_router(ai_chat_router)
+router.include_router(ai_chat_device_router)
 router.include_router(ai_monitor_router)
 router.include_router(ai_usage_router)
 router.include_router(project_memory_router)

@@ -478,10 +478,26 @@ def _trace_records(
     employee_name_expr = "coalesce(nullIf(SpanAttributes['agentops.employee.name'], ''), nullIf(ResourceAttributes['agentops.employee.name'], ''), '')"
     task_id_expr = "coalesce(nullIf(SpanAttributes['agentops.task.id'], ''), nullIf(ResourceAttributes['agentops.task.id'], ''), '')"
     task_title_expr = "coalesce(nullIf(SpanAttributes['agentops.task.title'], ''), nullIf(ResourceAttributes['agentops.task.title'], ''), '')"
-    model_expr = "coalesce(nullIf(SpanAttributes['gen_ai.response.model'], ''), nullIf(SpanAttributes['gen_ai.request.model'], ''), nullIf(SpanAttributes['llm.model'], ''), '')"
+    model_expr = "coalesce(nullIf(SpanAttributes['gen_ai.response.model'], ''), nullIf(SpanAttributes['gen_ai.request.model'], ''), nullIf(SpanAttributes['llm.model'], ''), nullIf(SpanAttributes['model'], ''), '')"
     prompt_expr = "toUInt64OrZero(coalesce(nullIf(SpanAttributes['gen_ai.usage.prompt_tokens'], ''), nullIf(SpanAttributes['gen_ai.usage.input_tokens'], ''), nullIf(SpanAttributes['input_tokens'], ''), '0'))"
     completion_expr = "toUInt64OrZero(coalesce(nullIf(SpanAttributes['gen_ai.usage.completion_tokens'], ''), nullIf(SpanAttributes['gen_ai.usage.output_tokens'], ''), nullIf(SpanAttributes['output_tokens'], ''), '0'))"
     total_expr = f"if(toUInt64OrZero(SpanAttributes['gen_ai.usage.total_tokens']) > 0, toUInt64OrZero(SpanAttributes['gen_ai.usage.total_tokens']), {prompt_expr} + {completion_expr} + toUInt64OrZero(SpanAttributes['gen_ai.usage.reasoning_tokens']) + toUInt64OrZero(SpanAttributes['gen_ai.usage.cache_read_input_tokens']))"
+    codex_prompt_expr = "toUInt64OrZero(SpanAttributes['codex.turn.token_usage.input_tokens'])"
+    codex_completion_expr = "toUInt64OrZero(SpanAttributes['codex.turn.token_usage.output_tokens'])"
+    codex_total_expr = "toUInt64OrZero(SpanAttributes['codex.turn.token_usage.total_tokens'])"
+    turn_id_expr = "coalesce(nullIf(SpanAttributes['turn.id'], ''), nullIf(SpanAttributes['turn_id'], ''), '')"
+    source_application_expr = "coalesce(nullIf(SpanAttributes['source.application'], ''), '')"
+    meaningful_expr = f"""(
+        SpanName = 'session_task.turn'
+        OR {total_expr} > 0
+        OR {codex_total_expr} > 0
+        OR {task_id_expr} != ''
+        OR SpanAttributes['gen_ai.operation.name'] != ''
+        OR SpanAttributes['gen_ai.operation'] != ''
+        OR SpanAttributes['gen_ai.tool.name'] != ''
+        OR SpanAttributes['tool.name'] != ''
+        OR lower(SpanAttributes['agentops.span.kind']) IN ('llm', 'tool')
+    )"""
     cost_expr = "toFloat64OrZero(coalesce(nullIf(SpanAttributes['gen_ai.usage.total_cost'], ''), nullIf(SpanAttributes['llm.cost'], ''), '0'))"
     sql = f"""
         SELECT
@@ -492,19 +508,23 @@ def _trace_records(
             any({employee_name_expr}) AS employee_name,
             anyIf({task_id_expr}, {task_id_expr} != '') AS task_id,
             anyIf({task_title_expr}, {task_title_expr} != '') AS task_title,
+            anyIf({turn_id_expr}, {turn_id_expr} != '') AS turn_id,
+            anyIf({source_application_expr}, {source_application_expr} != '') AS source_application,
             arrayStringConcat(groupUniqArrayIf({model_expr}, {model_expr} != ''), ', ') AS model,
-            sum({prompt_expr}) AS prompt_tokens,
-            sum({completion_expr}) AS completion_tokens,
-            sum({total_expr}) AS total_tokens,
+            if(max({codex_prompt_expr}) > 0, max({codex_prompt_expr}), sum({prompt_expr})) AS prompt_tokens,
+            if(max({codex_completion_expr}) > 0, max({codex_completion_expr}), sum({completion_expr})) AS completion_tokens,
+            if(max({codex_total_expr}) > 0, max({codex_total_expr}), sum({total_expr})) AS total_tokens,
             sum({cost_expr}) AS cost,
             countIf(upper(StatusCode) = 'ERROR') AS error_count,
-            count() AS span_count
+            count() AS span_count,
+            countIf({meaningful_expr}) AS meaningful_span_count
         FROM otel_traces
         WHERE project_id IN ({', '.join(project_conditions)})
           AND Timestamp >= %(start_utc)s
           AND Timestamp < %(end_utc)s
           AND {employee_expr} = %(employee_id)s
         GROUP BY project_id, TraceId
+        HAVING meaningful_span_count > 0
         ORDER BY started_at DESC
     """
     result = clickhouse.query(sql, parameters=parameters)
@@ -520,6 +540,11 @@ def _trace_records(
         task_id = str(row.get("task_id") or "unassigned")
         task_title = str(row.get("task_title") or "") or None
         trace_id = str(row["trace_id"])
+        model = str(row.get("model") or "") or None
+        is_codex_turn = bool(row.get("turn_id")) or row.get("source_application") == "codex"
+        title = task_title or (
+            f"Codex 对话 · {model}" if is_codex_turn and model else "Codex 对话"
+        )
         records.append(
             UsageRecord(
                 id=f"trace:{trace_id}",
@@ -529,12 +554,12 @@ def _trace_records(
                 employee_id=employee_id,
                 employee_name=str(row.get("employee_name") or employee_id),
                 source="cc_switch",
-                title=task_title or f"Trace {trace_id[:12]}",
+                title=title if is_codex_turn else task_title or f"AI 调用 {trace_id[:12]}",
                 started_at=started_at,
                 ended_at=ended_at,
                 task_id=task_id,
                 task_title=task_title,
-                model=str(row.get("model") or "") or None,
+                model=model,
                 status="error" if int(row.get("error_count") or 0) else "ok",
                 duration_ms=max(int((ended_at - started_at).total_seconds() * 1000), 0),
                 prompt_tokens=int(row.get("prompt_tokens") or 0),
@@ -585,6 +610,70 @@ def _attach_messages(
     ]
 
 
+def _merge_synced_conversations(
+    chat_records: list[UsageRecord],
+    trace_records: list[UsageRecord],
+) -> tuple[list[UsageRecord], list[UsageRecord]]:
+    padding = timedelta(seconds=90)
+
+    def overlaps(chat: UsageRecord, trace: UsageRecord) -> bool:
+        if chat.source != "cc_switch" or chat.project_id != trace.project_id:
+            return False
+        if chat.trace_id and chat.trace_id == trace.trace_id:
+            return True
+        chat_end = chat.ended_at or chat.started_at
+        trace_end = trace.ended_at or trace.started_at
+        return (
+            trace.started_at <= chat_end + padding
+            and trace_end >= chat.started_at - padding
+        )
+
+    suppressed_trace_indexes: set[int] = set()
+    merged_chats: list[UsageRecord] = []
+    for chat in chat_records:
+        candidates = [
+            (index, trace)
+            for index, trace in enumerate(trace_records)
+            if overlaps(chat, trace)
+        ]
+        for index, _ in candidates:
+            suppressed_trace_indexes.add(index)
+        if not candidates:
+            merged_chats.append(chat)
+            continue
+        _, trace = min(
+            candidates,
+            key=lambda item: (
+                1
+                if chat.model
+                and item[1].model
+                and chat.model.casefold() != item[1].model.casefold()
+                else 0,
+                abs((item[1].started_at - chat.started_at).total_seconds()),
+            ),
+        )
+        merged_chats.append(
+            replace(
+                chat,
+                model=chat.model or trace.model,
+                prompt_tokens=chat.prompt_tokens or trace.prompt_tokens,
+                completion_tokens=(
+                    chat.completion_tokens or trace.completion_tokens
+                ),
+                total_tokens=chat.total_tokens or trace.total_tokens,
+                cost=chat.cost or trace.cost,
+                error_count=max(chat.error_count, trace.error_count),
+                trace_id=chat.trace_id or trace.trace_id,
+            )
+        )
+    remaining_traces = [
+        trace
+        for index, trace in enumerate(trace_records)
+        if index not in suppressed_trace_indexes
+    ]
+    return merged_chats, remaining_traces
+
+
 def _collect_usage(
     orm: Session,
     clickhouse: Any,
@@ -622,8 +711,10 @@ def _collect_usage(
         trace_records = []
         warnings.append("Trace 指标暂时不可用，当前结果仅包含已同步的聊天会话")
 
-    chat_trace_ids = {item.trace_id for item in chat_records if item.trace_id}
-    trace_records = [item for item in trace_records if item.trace_id not in chat_trace_ids]
+    chat_records, trace_records = _merge_synced_conversations(
+        chat_records,
+        trace_records,
+    )
     all_records = sorted(
         [*chat_records, *trace_records],
         key=lambda item: item.started_at,
@@ -639,7 +730,9 @@ def _collect_usage(
     if include_messages:
         visible_records = _attach_messages(orm, visible_records)
     if any(item.record_type == "trace" for item in visible_records):
-        warnings.append("CC Switch/Codex/Claude 记录仅包含结构化 Trace 指标，不含完整对话原文")
+        warnings.append(
+            "检测到尚未完成正文同步的 CC Switch 记录，请确认员工端对话同步组件在线。"
+        )
     return summary, visible_records, has_more, warnings
 
 

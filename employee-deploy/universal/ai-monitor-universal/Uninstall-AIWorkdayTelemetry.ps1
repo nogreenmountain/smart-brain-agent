@@ -28,5 +28,18 @@ if ($py) {
 }
 if ($LASTEXITCODE -ne 0) { throw "自动卸载失败。" }
 
+Unregister-ScheduledTask -TaskName "SmartBrain AI Conversation Sync" -Confirm:$false -ErrorAction SilentlyContinue
+foreach ($fileName in @(
+    "ConversationSync.py",
+    "Run-ConversationSync.ps1",
+    "device-credentials.json",
+    "conversation-sync-state.json",
+    "conversation-sync-status.json"
+)) {
+    $path = Join-Path $runtimeDir $fileName
+    if (Test-Path -LiteralPath $path) {
+        Remove-Item -LiteralPath $path -Force
+    }
+}
 Remove-Item -LiteralPath (Join-Path $runtimeDir "manifest.json") -Force
 Write-Host "AI 工作日监控配置已移除。请重新打开 CC Switch。" -ForegroundColor Green

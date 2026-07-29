@@ -4,7 +4,7 @@ globalThis.AI_MONITOR_CONFIG = {
   defaultEmailDomain: "local.dev",
   source: "chatgpt_web",
   smartBrainBase: "http://192.168.1.40:3002",
-  packageVersion: "2026-07-27",
+  packageVersion: "2026-07-29-r5",
   deviceId: "",
   employeeId: "",
   employeeName: ""

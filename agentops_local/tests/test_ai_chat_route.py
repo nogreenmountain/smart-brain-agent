@@ -172,6 +172,71 @@ class AIChatRouteTests(unittest.TestCase):
         self.assertEqual(audit.call_args.kwargs["action"], "ai_chat_ingest")
         self.assertEqual(audit.call_args.kwargs["metadata"]["result_status"], "forbidden")
 
+    def test_device_ingest_uses_signed_employee_identity(self) -> None:
+        self.body.source = "cc_switch"
+        request = SimpleNamespace(
+            headers={"authorization": "Bearer signed-device-token"}
+        )
+        claims = {
+            "sub": str(self.user_id),
+            "project_id": str(self.project_id),
+            "employee_id": "test1",
+            "employee_name": "Test 1",
+        }
+        with (
+            patch.object(route, "verify_telemetry_token", return_value=claims) as verify,
+            patch.object(route, "secret_from_environment", return_value="x" * 32),
+            patch.object(route, "require_member") as require_member,
+            patch.object(route, "record_audit"),
+        ):
+            response = route.device_ingest_ai_chat(
+                request=request,
+                body=self.body,
+                orm=self.orm,
+            )
+
+        verify.assert_called_once_with(
+            "signed-device-token",
+            secret="x" * 32,
+        )
+        require_member.assert_called_once_with(
+            self.orm,
+            user_id=self.user_id,
+            project_id=self.project_id,
+        )
+        self.assertEqual(response.employee_id, "test1")
+        insert_session = [
+            params
+            for sql, params in self.orm.calls
+            if "INSERT INTO public.ai_chat_sessions" in sql
+        ][0]
+        self.assertEqual(insert_session["employee_id"], "test1")
+
+    def test_device_ingest_rejects_project_outside_signed_scope(self) -> None:
+        self.body.source = "cc_switch"
+        request = SimpleNamespace(headers={"authorization": "Bearer token"})
+        claims = {
+            "sub": str(self.user_id),
+            "project_id": str(uuid.uuid4()),
+            "employee_id": "test1",
+            "employee_name": "Test 1",
+        }
+        with (
+            patch.object(route, "verify_telemetry_token", return_value=claims),
+            patch.object(route, "secret_from_environment", return_value="x" * 32),
+        ):
+            with self.assertRaises(HTTPException) as raised:
+                route.device_ingest_ai_chat(
+                    request=request,
+                    body=self.body,
+                    orm=self.orm,
+                )
+
+        self.assertEqual(raised.exception.status_code, 403)
+        self.assertFalse(
+            any("INSERT INTO public.ai_chat_sessions" in sql for sql, _ in self.orm.calls)
+        )
+
     def test_list_hides_messages_unless_requested(self) -> None:
         session_id = uuid.uuid4()
         orm = _Orm(

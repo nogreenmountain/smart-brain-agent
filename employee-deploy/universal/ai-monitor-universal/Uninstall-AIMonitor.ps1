@@ -7,6 +7,21 @@ try {
     Write-Host "CC Switch telemetry uninstall note: $($_.Exception.Message)" -ForegroundColor Yellow
 }
 
+Unregister-ScheduledTask -TaskName "SmartBrain AI Conversation Sync" -Confirm:$false -ErrorAction SilentlyContinue
+$conversationRuntime = Join-Path (Join-Path $env:LOCALAPPDATA "AIWorkdayTelemetry") "current"
+foreach ($fileName in @(
+    "ConversationSync.py",
+    "Run-ConversationSync.ps1",
+    "device-credentials.json",
+    "conversation-sync-state.json",
+    "conversation-sync-status.json"
+)) {
+    $path = Join-Path $conversationRuntime $fileName
+    if (Test-Path -LiteralPath $path) {
+        Remove-Item -LiteralPath $path -Force
+    }
+}
+
 $desktop = [Environment]::GetFolderPath("Desktop")
 $shortcuts = @(
     (Join-Path $desktop "ChatGPT Monitored - Edge.lnk"),
