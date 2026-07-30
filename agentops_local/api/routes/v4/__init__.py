@@ -19,6 +19,7 @@ from .ai_chat import router as ai_chat_router
 from .ai_monitor import router as ai_monitor_router
 from .ai_usage import router as ai_usage_router
 from .project_memory import router as project_memory_router
+from .project_wiki import router as project_wiki_router
 
 __all__ = ["router"]
 
@@ -84,3 +85,4 @@ router.include_router(ai_chat_device_router)
 router.include_router(ai_monitor_router)
 router.include_router(ai_usage_router)
 router.include_router(project_memory_router)
+router.include_router(project_wiki_router)

@@ -144,6 +144,7 @@ describe('MembersPage', () => {
     render(<MembersPage />);
 
     expect(await screen.findByRole('heading', { name: '成员管理' })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByLabelText('选择部门')).not.toBeDisabled());
     await user.selectOptions(screen.getByLabelText('选择部门'), 'marketing');
 
     await waitFor(() => {

@@ -485,6 +485,94 @@ export interface ProjectMemoryReviewResult {
   chunk_count: number;
 }
 
+export interface ProjectWikiSource {
+  source_type: string;
+  source_id: string;
+  locator: string | null;
+}
+
+export interface ProjectWikiLink {
+  to_title: string;
+  relation: string;
+}
+
+export interface ProjectWikiPage {
+  id: string;
+  page_key: string;
+  title: string;
+  page_type: string;
+  summary: string;
+  markdown_content: string;
+  usefulness: number;
+  confidence: number;
+  current_version: number;
+  sources: ProjectWikiSource[];
+  links: ProjectWikiLink[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProjectWikiChange {
+  id: string;
+  title: string;
+  page_type: string;
+  reason_code: string;
+  status: string;
+  summary: string;
+  proposed_markdown: string;
+  usefulness: number;
+  confidence: number;
+  contradiction: boolean;
+  source_ids: string[];
+  link_titles: string[];
+  created_at: string;
+}
+
+export interface ProjectWikiRun {
+  id: string;
+  status: 'running' | 'completed' | 'failed';
+  trigger_type: 'manual' | 'scheduled';
+  model: string;
+  source_count: number;
+  candidate_count: number;
+  auto_applied_count: number;
+  pending_review_count: number;
+  discarded_count: number;
+  error_message: string | null;
+  started_at: string;
+  completed_at: string | null;
+}
+
+export interface ProjectWikiOverview {
+  project: { id: string; name: string; department_id: string };
+  permissions: { can_review: boolean; can_compile: boolean };
+  summary: {
+    page_count: number;
+    pending_review_count: number;
+    source_count: number;
+    link_count: number;
+  };
+  pages: ProjectWikiPage[];
+  pending_changes: ProjectWikiChange[];
+  latest_run: ProjectWikiRun | null;
+}
+
+export interface ProjectWikiCompileResult {
+  run_id: string;
+  source_count: number;
+  candidate_count: number;
+  auto_applied_count: number;
+  pending_review_count: number;
+  discarded_count: number;
+  model: string;
+}
+
+export interface ProjectWikiReviewResult {
+  id: string;
+  status: 'applied' | 'rejected';
+  page_id: string | null;
+}
+
 export type AIMonitorComponentName =
   | 'cc_switch'
   | 'chatgpt_web_extension'
@@ -855,6 +943,40 @@ export async function reviewProjectMemoryDraft(
 ): Promise<ProjectMemoryReviewResult> {
   return call<ProjectMemoryReviewResult>(
     `/v4/project-memory/drafts/${encodeURIComponent(draftId)}/review`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ decision, comment }),
+    },
+  );
+}
+
+// 项目 Wiki
+export async function getProjectWikiOverview(
+  projectId: string,
+): Promise<ProjectWikiOverview> {
+  return call<ProjectWikiOverview>(
+    `/v4/project-wiki/overview?project_id=${encodeURIComponent(projectId)}`,
+  );
+}
+
+export async function compileProjectWiki(
+  projectId: string,
+): Promise<ProjectWikiCompileResult> {
+  return call<ProjectWikiCompileResult>('/v4/project-wiki/compile', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ project_id: projectId }),
+  });
+}
+
+export async function reviewProjectWikiChange(
+  changeId: string,
+  decision: 'approve' | 'reject',
+  comment?: string,
+): Promise<ProjectWikiReviewResult> {
+  return call<ProjectWikiReviewResult>(
+    `/v4/project-wiki/changes/${encodeURIComponent(changeId)}/review`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

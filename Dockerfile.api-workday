@@ -14,6 +14,7 @@ COPY agentops_local/rag/ /app/agentops/rag/
 COPY agentops_local/workday/ /app/agentops/workday/
 COPY agentops_local/ai_usage/ /app/agentops/ai_usage/
 COPY agentops_local/project_memory/ /app/agentops/project_memory/
+COPY agentops_local/project_wiki/ /app/agentops/project_wiki/
 COPY employee_telemetry/ /app/employee_telemetry/
 
 EXPOSE 8000

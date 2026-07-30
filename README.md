@@ -1,10 +1,10 @@
 # Smart Brain Agent 局域网部署包
 
-这是“智慧大脑 Agent”的可迁移部署包，用于在内网快速部署一套研发部门知识库、项目记忆、AI Monitor 和 AgentOps Trace 复盘环境。
+这是“智慧大脑 Agent”的可迁移部署包，用于在内网快速部署一套研发部门知识库、持续更新的 Project Wiki、项目记忆、AI Monitor 和 AgentOps Trace 复盘环境。
 
 ## 包含什么
 
-- `agentops_local/`：本项目后端补丁层，包含知识库、项目管理、成员管理、AI Monitor、Workday 聚合等接口。
+- `agentops_local/`：本项目后端补丁层，包含知识库、Project Wiki、项目管理、成员管理、AI Monitor、Workday 聚合等接口。
 - `smartbrain-dashboard/`：中文智慧大脑前端，默认端口 `3002`。
 - `api/`、`dashboard/`、`opentelemetry-collector/`：AgentOps 基础 API、Trace Dashboard、OTLP Collector 源码。
 - `rag_services/`：BGE-M3 embedding 与 reranker 服务。
@@ -45,6 +45,7 @@ powershell -ExecutionPolicy Bypass -File deploy/lan/Initialize-Database.ps1
 默认访问：
 
 - 智慧大脑：`http://<服务器IP>:3002`
+- Project Wiki：`http://<服务器IP>:3002/wiki`
 - AgentOps Trace Dashboard：`http://<服务器IP>:3001`
 - API：`http://<服务器IP>:8000`
 - OTLP Collector：`http://<服务器IP>:4318`

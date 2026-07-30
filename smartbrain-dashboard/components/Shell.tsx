@@ -9,6 +9,7 @@ import {
   LibraryBig,
   LogOut,
   MessageCircle,
+  Network,
   Settings,
   Users,
   type LucideIcon,
@@ -30,6 +31,7 @@ const NAV: {
 }[] = [
   { href: '/chat', label: '问答', icon: MessageCircle },
   { href: '/knowledge', label: '知识库', icon: LibraryBig },
+  { href: '/wiki', label: '项目 Wiki', icon: Network },
   { href: '/workday', label: 'AI 工作日', icon: CalendarClock },
   { href: '/monitor/setup', label: 'AI Monitor', icon: Activity },
   { href: '/members', label: '成员管理', icon: Users },
