@@ -14,7 +14,6 @@ import {
   Hash,
   MessageSquareText,
   Search,
-  Sparkles,
   TriangleAlert,
   Zap,
 } from 'lucide-react';
@@ -24,13 +23,13 @@ import { EmptyState, LoadingDots } from '@/components/Feedback';
 import { Input } from '@/components/Input';
 import { PageHeader, PageShell } from '@/components/PageLayout';
 import {
+  AIDailyWorkLogList,
   AIUsageOptions,
   AIUsageQueryParams,
   AIUsageQueryResult,
   AIUsageRecord,
-  AIUsageReport,
   AIUsageSource,
-  createAIUsageReport,
+  getAIDailyWorkLogs,
   getAIUsageOptions,
   getAIUsageRecords,
 } from '@/lib/api';
@@ -104,11 +103,10 @@ export default function WorkdayPage() {
   const [endDate, setEndDate] = useState(today);
   const [source, setSource] = useState<AIUsageSource | ''>('');
   const [result, setResult] = useState<AIUsageQueryResult | null>(null);
-  const [report, setReport] = useState<AIUsageReport | null>(null);
+  const [dailyLogs, setDailyLogs] = useState<AIDailyWorkLogList | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [loadingOptions, setLoadingOptions] = useState(true);
   const [loadingRecords, setLoadingRecords] = useState(false);
-  const [generatingReport, setGeneratingReport] = useState(false);
   const [error, setError] = useState('');
 
   const adminMode = options?.mode === 'admin';
@@ -159,9 +157,18 @@ export default function WorkdayPage() {
     };
     setLoadingRecords(true);
     setError('');
-    setReport(null);
+    setDailyLogs(null);
     try {
-      setResult(await getAIUsageRecords(params));
+      const [records, logs] = await Promise.all([
+        getAIUsageRecords(params),
+        getAIDailyWorkLogs({
+          startDate,
+          endDate,
+          employeeId: mode === 'admin' ? selectedEmployee : undefined,
+        }),
+      ]);
+      setResult(records);
+      setDailyLogs(logs);
     } catch (requestError: unknown) {
       setError(requestError instanceof Error ? requestError.message : 'AI 使用记录查询失败');
     } finally {
@@ -178,25 +185,7 @@ export default function WorkdayPage() {
     setStartDate(shiftDate(today, -(days - 1)));
     setEndDate(today);
     setResult(null);
-    setReport(null);
-  }
-
-  async function generateReport() {
-    if (!adminMode || !employeeId || !result || generatingReport) return;
-    setGeneratingReport(true);
-    setError('');
-    try {
-      setReport(await createAIUsageReport({
-        employeeId,
-        startDate,
-        endDate,
-        source: source || undefined,
-      }));
-    } catch (requestError: unknown) {
-      setError(requestError instanceof Error ? requestError.message : 'AI 使用工作报告生成失败');
-    } finally {
-      setGeneratingReport(false);
-    }
+    setDailyLogs(null);
   }
 
   function toggleRecord(id: string) {
@@ -238,7 +227,7 @@ export default function WorkdayPage() {
           {adminMode && (
             <div className="mb-3 grid gap-3 sm:grid-cols-[minmax(260px,420px)]">
               <Field label="员工" htmlFor="usage-employee">
-                <select id="usage-employee" className={selectClass} value={employeeId} onChange={(event) => { setEmployeeId(event.target.value); setResult(null); setReport(null); }}>
+                <select id="usage-employee" className={selectClass} value={employeeId} onChange={(event) => { setEmployeeId(event.target.value); setResult(null); setDailyLogs(null); }}>
                   {employeeOptions.length === 0 && <option value="">暂无可查询员工</option>}
                   {employeeOptions.map((item) => <option key={item.id} value={item.id}>{item.name} ({item.email.split('@')[0]})</option>)}
                 </select>
@@ -248,13 +237,13 @@ export default function WorkdayPage() {
 
           <div className="grid items-end gap-3 sm:grid-cols-2 lg:grid-cols-[150px_150px_minmax(190px,1fr)_auto]">
             <Field label="开始日期" htmlFor="usage-start-date">
-              <Input id="usage-start-date" type="date" value={startDate} max={endDate} onChange={(event) => { setStartDate(event.target.value); setResult(null); setReport(null); }} />
+              <Input id="usage-start-date" type="date" value={startDate} max={endDate} onChange={(event) => { setStartDate(event.target.value); setResult(null); setDailyLogs(null); }} />
             </Field>
             <Field label="结束日期" htmlFor="usage-end-date">
-              <Input id="usage-end-date" type="date" value={endDate} min={startDate} onChange={(event) => { setEndDate(event.target.value); setResult(null); setReport(null); }} />
+              <Input id="usage-end-date" type="date" value={endDate} min={startDate} onChange={(event) => { setEndDate(event.target.value); setResult(null); setDailyLogs(null); }} />
             </Field>
             <Field label="AI 来源" htmlFor="usage-source">
-              <select id="usage-source" className={selectClass} value={source} onChange={(event) => { setSource(event.target.value as AIUsageSource | ''); setResult(null); setReport(null); }}>
+              <select id="usage-source" className={selectClass} value={source} onChange={(event) => { setSource(event.target.value as AIUsageSource | ''); setResult(null); setDailyLogs(null); }}>
                 <option value="">全部来源</option>
                 {Object.entries(SOURCE_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
               </select>
@@ -297,6 +286,8 @@ export default function WorkdayPage() {
               </div>
             )}
 
+            <DailyWorkLogsPanel logs={dailyLogs} />
+
             {result.summary.record_count === 0 ? (
               <EmptyState icon="" title="所选区间没有 AI 使用记录" hint="可调整日期或 AI 来源后重新查询" />
             ) : (
@@ -307,16 +298,9 @@ export default function WorkdayPage() {
                 </section>
 
                 <section className="mt-6 border-t border-[#dde4ee] pt-5">
-                  <div className="flex flex-wrap items-end justify-between gap-3">
-                    <div>
-                      <h2 className="text-base font-semibold text-[#0b1930]">AI 使用记录</h2>
-                      <p className="mt-1 text-xs text-[#6c7b91]">{result.employee.name} · 按员工账号汇总，不按项目切分</p>
-                    </div>
-                    {adminMode && (
-                      <Button type="button" onClick={generateReport} disabled={generatingReport || result.summary.record_count === 0}>
-                        {generatingReport ? <><LoadingDots /> 生成中</> : <><Sparkles size={16} /> 生成区间工作报告</>}
-                      </Button>
-                    )}
+                  <div>
+                    <h2 className="text-base font-semibold text-[#0b1930]">AI 使用记录</h2>
+                    <p className="mt-1 text-xs text-[#6c7b91]">{result.employee.name} · 按员工账号汇总，不按项目切分</p>
                   </div>
                   <div className="mt-3 divide-y divide-[#e4eaf2] border-y border-[#dde4ee] bg-white">
                     {result.records.map((record) => (
@@ -327,8 +311,6 @@ export default function WorkdayPage() {
                 </section>
               </>
             )}
-
-            {report && <ReportPanel report={report} />}
           </div>
         )}
       </main>
@@ -357,6 +339,63 @@ function Metric({ icon, label, value, detail, tone }: { icon: ReactNode; label: 
   return <div className="min-w-0 rounded-lg border border-[#dde4ee] bg-white p-4"><div className="flex items-center gap-2 text-xs font-medium text-[#6c7b91]"><span className={`flex h-7 w-7 items-center justify-center rounded-md ${TONES[tone]}`}>{icon}</span>{label}</div><p className="mt-3 truncate text-2xl font-semibold text-[#0b1930]">{value}</p><p className="mt-1 truncate text-[11px] text-[#8491a4]" title={detail}>{detail}</p></div>;
 }
 
+function DailyWorkLogsPanel({ logs }: { logs: AIDailyWorkLogList | null }) {
+  const items = logs?.items ?? [];
+  return (
+    <section className="mt-6 border-t border-[#cfd9e6] pt-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <span className="flex h-8 w-8 items-center justify-center rounded-md bg-[#eaf2ff] text-[#2463a9]"><FileText size={17} /></span>
+          <div>
+            <h2 className="text-base font-semibold text-[#0b1930]">每日 AI 工作日志</h2>
+            <p className="mt-0.5 text-xs text-[#6c7b91]">{logs?.employee.name ?? '当前员工'} · Asia/Shanghai</p>
+          </div>
+        </div>
+        <span className="inline-flex h-8 items-center rounded-md border border-[#cbd8e8] bg-white px-3 text-xs font-medium text-[#53647d]">{items.length} 天</span>
+      </div>
+
+      {items.length === 0 ? (
+        <div className="mt-3 border-y border-[#dde4ee] bg-white px-4 py-7 text-center text-sm text-[#6c7b91]">所选日期范围暂无有效 Agent 工作日志</div>
+      ) : (
+        <div className="mt-3 divide-y divide-[#dde4ee] border-y border-[#dde4ee] bg-white">
+          {items.map((log) => (
+            <article key={log.id} className="px-4 py-5 md:px-5">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-semibold text-[#172844]">{log.work_date}</h3>
+                  <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-[#6c7b91]">
+                    <span>{log.work_items.length} 项工作</span>
+                    <span>{log.source_count} 个来源会话</span>
+                    <span className="inline-flex items-center gap-1"><Clock3 size={12} />{formatDateTime(log.generated_at)}</span>
+                  </p>
+                </div>
+                <span className="max-w-full truncate rounded-md border border-[#d7e0ec] bg-[#f8fafc] px-2 py-1 text-[11px] text-[#6c7b91]" title={log.model}>{log.model}</span>
+              </div>
+
+              <div className="mt-5 grid gap-x-8 gap-y-6 lg:grid-cols-2">
+                {log.work_items.map((item) => (
+                  <div key={`${log.id}-${item.title}`} className="min-w-0 border-l-2 border-[#8eb4dd] pl-4">
+                    <h4 className="text-sm font-semibold text-[#172844]">{item.title}</h4>
+                    {item.problem && <p className="mt-2 text-sm leading-6 text-[#53647d]">{item.problem}</p>}
+                    {item.actions.length > 0 && <WorklogList label="执行" values={item.actions} />}
+                    {item.result && <div className="mt-3"><p className="text-[11px] font-medium text-[#7a879a]">结果</p><p className="mt-1 text-sm leading-6 text-[#334760]">{item.result}</p></div>}
+                    {item.artifacts.length > 0 && <WorklogList label="产出" values={item.artifacts} />}
+                    {item.validation.length > 0 && <WorklogList label="验证" values={item.validation} />}
+                  </div>
+                ))}
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function WorklogList({ label, values }: { label: string; values: string[] }) {
+  return <div className="mt-3"><p className="text-[11px] font-medium text-[#7a879a]">{label}</p><ul className="mt-1 space-y-1 text-sm leading-6 text-[#334760]">{values.map((value) => <li key={value} className="flex gap-2"><span className="mt-2 h-1 w-1 shrink-0 rounded-full bg-[#6d91b8]" /><span className="min-w-0 break-words">{value}</span></li>)}</ul></div>;
+}
+
 function UsageTrend({ result }: { result: AIUsageQueryResult }) {
   const points = result.summary.daily_usage.slice(-31);
   const max = Math.max(...points.map((item) => item.total_tokens), 1);
@@ -376,13 +415,4 @@ function UsageRecordRow({ record, expanded, onToggle }: { record: AIUsageRecord;
 
 function Badge({ icon, text, danger = false }: { icon: ReactNode; text: string; danger?: boolean }) {
   return <span className={`inline-flex max-w-full items-center gap-1 rounded-md border px-2 py-1 ${danger ? 'border-red-200 bg-red-50 text-red-700' : 'border-[#d7e0ec] bg-white text-[#53647d]'}`}>{icon}<span className="truncate">{text}</span></span>;
-}
-
-function ReportPanel({ report }: { report: AIUsageReport }) {
-  const sections = report.report.split(/(?=^##\s)/m).map((item) => item.trim()).filter(Boolean);
-  return <section className="mt-7 border-t-2 border-[#b9c9dc] pt-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><div className="flex items-center gap-2"><FileText size={18} className="text-[#3979bf]" /><h2 className="text-base font-semibold text-[#0b1930]">AI 使用工作报告</h2></div><p className="mt-1 text-xs text-[#6c7b91]">{report.employee.name} · {report.summary.start_date} 至 {report.summary.end_date}</p></div><span className="rounded-md border border-[#d7e0ec] bg-white px-2 py-1 text-[11px] text-[#6c7b91]">{report.model}</span></div><div className="mt-4 grid gap-3 sm:grid-cols-3"><MiniFact icon={<Clock3 size={15} />} label="高频时段" value={report.high_frequency_periods.join('、') || '暂无'} /><MiniFact icon={<Zap size={15} />} label="Token 总量" value={formatCount(report.summary.total_tokens)} /><MiniFact icon={<BarChart3 size={15} />} label="自然日均值" value={formatCount(report.summary.average_tokens_per_day)} /></div><div className="mt-5 grid gap-x-8 gap-y-5 lg:grid-cols-2">{sections.map((section) => { const [heading, ...body] = section.split('\n'); return <div key={heading} className="border-l-2 border-[#8eb4dd] pl-4"><h3 className="text-sm font-semibold text-[#172844]">{heading.replace(/^##\s*/, '')}</h3><p className="mt-2 whitespace-pre-wrap text-sm leading-7 text-[#465873]">{body.join('\n').trim().replace(/\*\*/g, '')}</p></div>; })}</div></section>;
-}
-
-function MiniFact({ icon, label, value }: { icon: ReactNode; label: string; value: string }) {
-  return <div className="rounded-lg border border-[#dde4ee] bg-white px-3 py-3"><div className="flex items-center gap-1.5 text-[11px] text-[#6c7b91]">{icon}{label}</div><p className="mt-1.5 truncate text-sm font-semibold text-[#253655]" title={value}>{value}</p></div>;
 }

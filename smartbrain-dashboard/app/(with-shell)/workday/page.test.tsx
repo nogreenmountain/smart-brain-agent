@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import WorkdayPage from './page';
 
 const mocks = vi.hoisted(() => ({
-  createAIUsageReport: vi.fn(),
+  getAIDailyWorkLogs: vi.fn(),
   getAIUsageOptions: vi.fn(),
   getAIUsageRecords: vi.fn(),
 }));
@@ -14,7 +14,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>();
   return {
     ...actual,
-    createAIUsageReport: mocks.createAIUsageReport,
+    getAIDailyWorkLogs: mocks.getAIDailyWorkLogs,
     getAIUsageOptions: mocks.getAIUsageOptions,
     getAIUsageRecords: mocks.getAIUsageRecords,
   };
@@ -72,8 +72,8 @@ const usageResult = {
       record_type: 'chat' as const,
       project_id: 'compat-project',
       project_name: '兼容项目',
-      employee_id: 'tangweixiang',
-      employee_name: '唐伟翔',
+      employee_id: employee.id,
+      employee_name: employee.name,
       source: 'chatgpt_web',
       title: '登录模块联调',
       started_at: '2026-07-29T02:00:00Z',
@@ -100,39 +100,52 @@ const usageResult = {
   warnings: [],
 };
 
+const dailyLogs = {
+  employee,
+  timezone: 'Asia/Shanghai' as const,
+  items: [{
+    id: 'log-1',
+    work_date: '2026-07-29',
+    employee_id: employee.id,
+    employee_name: employee.name,
+    report_markdown: '## 完成登录模块修复\n\n**解决问题**\n登录返回 401。',
+    work_items: [{
+      title: '完成登录模块修复',
+      problem: '登录返回 401',
+      actions: ['修改 auth.py'],
+      result: '登录恢复正常',
+      artifacts: ['auth.py'],
+      validation: ['12 tests passed'],
+    }],
+    source_count: 1,
+    model: 'claude-sonnet-4-6-20250514',
+    generated_at: '2026-07-29T12:00:00Z',
+  }],
+};
+
 describe('WorkdayPage', () => {
   beforeEach(() => {
     mocks.getAIUsageOptions.mockResolvedValue(selfOptions);
     mocks.getAIUsageRecords.mockResolvedValue(usageResult);
-    mocks.createAIUsageReport.mockResolvedValue({
-      employee,
-      summary: usageResult.summary,
-      high_frequency_periods: ['10:00-11:00'],
-      report: '## 完成了什么\n完成登录模块联调。\n\n## 实现了什么\n定位令牌问题。\n\n## 遇到了什么问题\n登录返回 401。\n\n## 解决了什么问题\n确认令牌过期。',
-      model: 'MiniMax-M3',
-      generated_at: '2026-07-29T04:00:00Z',
-    });
+    mocks.getAIDailyWorkLogs.mockResolvedValue(dailyLogs);
   });
 
-  it('shows ordinary users only their own usage and never exposes report controls', async () => {
+  it('shows automatic daily work logs without manual report controls', async () => {
     const user = userEvent.setup();
     render(<WorkdayPage />);
 
     expect(await screen.findByText('我的 AI 使用')).toBeInTheDocument();
-    expect(await screen.findByText('12,600')).toBeInTheDocument();
-    expect(screen.getByText('1,800')).toBeInTheDocument();
-    expect(screen.getByText('登录模块联调')).toBeInTheDocument();
-    expect(screen.queryByLabelText('员工')).not.toBeInTheDocument();
+    expect(await screen.findByText('每日 AI 工作日志')).toBeInTheDocument();
+    expect(screen.getByText('完成登录模块修复')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '生成区间工作报告' })).not.toBeInTheDocument();
-
-    await user.click(screen.getByRole('button', { name: '登录模块联调' }));
-    expect(screen.getByText('为什么登录返回 401？')).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText('开始日期'), { target: { value: '2026-07-20' } });
     await user.click(screen.getByRole('button', { name: '查询记录' }));
-    await waitFor(() => expect(mocks.getAIUsageRecords).toHaveBeenLastCalledWith(
-      expect.objectContaining({ startDate: '2026-07-20', employeeId: undefined }),
-    ));
+    await waitFor(() => expect(mocks.getAIDailyWorkLogs).toHaveBeenLastCalledWith({
+      employeeId: undefined,
+      startDate: '2026-07-20',
+      endDate: expect.any(String),
+    }));
   });
 
   it('gives daily token columns a full-height plotting area', async () => {
@@ -144,8 +157,7 @@ describe('WorkdayPage', () => {
     expect(firstDay).toHaveClass('h-full');
   });
 
-  it('lets administrators select an employee without department or project filters', async () => {
-    const user = userEvent.setup();
+  it('lets administrators select an employee and loads that employees daily logs', async () => {
     const adminOptions = {
       ...selfOptions,
       mode: 'admin' as const,
@@ -159,18 +171,11 @@ describe('WorkdayPage', () => {
 
     expect(await screen.findByText('团队 AI 使用')).toBeInTheDocument();
     expect(screen.getByLabelText('员工')).toHaveValue('tangweixiang');
-    expect(screen.queryByLabelText('部门')).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('项目')).not.toBeInTheDocument();
-    await screen.findByText('登录模块联调');
-
-    await user.click(screen.getByRole('button', { name: '生成区间工作报告' }));
-    await waitFor(() => expect(mocks.createAIUsageReport).toHaveBeenCalledWith({
+    expect(screen.queryByRole('button', { name: '生成区间工作报告' })).not.toBeInTheDocument();
+    await waitFor(() => expect(mocks.getAIDailyWorkLogs).toHaveBeenCalledWith({
       employeeId: 'tangweixiang',
       startDate: expect.any(String),
       endDate: expect.any(String),
-      source: undefined,
     }));
-    expect(await screen.findByText('AI 使用工作报告')).toBeInTheDocument();
-    expect(screen.getByText('完成登录模块联调。')).toBeInTheDocument();
   });
 });

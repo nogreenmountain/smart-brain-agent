@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from dataclasses import asdict, replace
@@ -172,6 +173,33 @@ class UsageReportResponse(BaseModel):
     report: str
     model: str
     generated_at: datetime
+
+
+class DailyWorkItemResponse(BaseModel):
+    title: str
+    problem: str
+    actions: list[str]
+    result: str
+    artifacts: list[str]
+    validation: list[str]
+
+
+class DailyWorkLogResponse(BaseModel):
+    id: uuid.UUID
+    work_date: date
+    employee_id: str
+    employee_name: str
+    report_markdown: str
+    work_items: list[DailyWorkItemResponse]
+    source_count: int
+    model: str
+    generated_at: datetime
+
+
+class DailyWorkLogListResponse(BaseModel):
+    employee: UsageEmployeeOption
+    timezone: Literal["Asia/Shanghai"] = "Asia/Shanghai"
+    items: list[DailyWorkLogResponse]
 
 
 def _profile_for_user(orm: Session, user_id: uuid.UUID):
@@ -803,6 +831,79 @@ def get_ai_usage_records(
         has_more=has_more,
         warnings=warnings,
     )
+
+
+@router.get("/ai-usage/daily-logs", response_model=DailyWorkLogListResponse)
+def get_ai_daily_work_logs(
+    request: Request,
+    start_date: date = Query(...),
+    end_date: date = Query(...),
+    employee_id: str | None = Query(None, min_length=1, max_length=200),
+    orm: Session = Depends(get_orm_session),
+) -> DailyWorkLogListResponse:
+    try:
+        validate_date_range(start_date, end_date)
+    except UsageAccessError as error:
+        _raise_access(error)
+    try:
+        user_id = current_user_id(request)
+    except AuthzError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+
+    _, employee, projects = _resolve_scope(
+        orm,
+        user_id=user_id,
+        department_id=None,
+        project_id=None,
+        requested_employee_id=employee_id,
+    )
+    rows = orm.execute(
+        text("""
+            SELECT id, work_date, employee_id, employee_name,
+                   report_markdown, work_items, source_count, model, generated_at
+            FROM public.ai_daily_work_logs
+            WHERE employee_id = :employee_id
+              AND work_date >= :start_date
+              AND work_date <= :end_date
+              AND status = 'ready'
+            ORDER BY work_date DESC
+        """),
+        {
+            "employee_id": employee.id,
+            "start_date": start_date,
+            "end_date": end_date,
+        },
+    ).all()
+    items = []
+    for row in rows:
+        work_items = row.work_items
+        if isinstance(work_items, str):
+            work_items = json.loads(work_items)
+        items.append(
+            DailyWorkLogResponse(
+                id=row.id,
+                work_date=row.work_date,
+                employee_id=row.employee_id,
+                employee_name=row.employee_name,
+                report_markdown=row.report_markdown,
+                work_items=work_items or [],
+                source_count=row.source_count,
+                model=row.model,
+                generated_at=row.generated_at,
+            )
+        )
+    _audit(
+        orm,
+        request,
+        user_id=user_id,
+        action="ai_usage_view",
+        employee_id=employee.id,
+        projects=projects,
+        start_date=start_date,
+        end_date=end_date,
+        result_status="ok" if items else "no_data",
+    )
+    return DailyWorkLogListResponse(employee=employee, items=items)
 
 
 def _high_frequency_periods(summary: UsageSummary) -> list[str]:

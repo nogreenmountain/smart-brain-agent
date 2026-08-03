@@ -487,6 +487,39 @@ export interface AIUsageReportParams {
   source?: AIUsageSource;
 }
 
+export interface AIDailyWorkItem {
+  title: string;
+  problem: string;
+  actions: string[];
+  result: string;
+  artifacts: string[];
+  validation: string[];
+}
+
+export interface AIDailyWorkLog {
+  id: string;
+  work_date: string;
+  employee_id: string;
+  employee_name: string;
+  report_markdown: string;
+  work_items: AIDailyWorkItem[];
+  source_count: number;
+  model: string;
+  generated_at: string;
+}
+
+export interface AIDailyWorkLogList {
+  employee: AIUsageEmployeeOption;
+  timezone: 'Asia/Shanghai';
+  items: AIDailyWorkLog[];
+}
+
+export interface AIDailyWorkLogParams {
+  startDate: string;
+  endDate: string;
+  employeeId?: string;
+}
+
 export type DepartmentId = 'research' | 'marketing' | 'business';
 
 export interface Department {
@@ -964,6 +997,17 @@ export async function getAIUsageRecords(
   if (params.employeeId) qs.set('employee_id', params.employeeId);
   if (params.source) qs.set('source', params.source);
   return call<AIUsageQueryResult>(`/v4/ai-usage/records?${qs.toString()}`);
+}
+
+export async function getAIDailyWorkLogs(
+  params: AIDailyWorkLogParams,
+): Promise<AIDailyWorkLogList> {
+  const qs = new URLSearchParams({
+    start_date: params.startDate,
+    end_date: params.endDate,
+  });
+  if (params.employeeId) qs.set('employee_id', params.employeeId);
+  return call<AIDailyWorkLogList>(`/v4/ai-usage/daily-logs?${qs.toString()}`);
 }
 
 export async function createAIUsageReport(
