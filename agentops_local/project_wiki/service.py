@@ -187,9 +187,14 @@ def collect_incremental_sources(
     *,
     project_id: uuid.UUID,
     limit_per_type: int = 100,
+    include_ai_chat_sources: bool = False,
 ) -> list[WikiSource]:
     processed = _processed_hashes(orm, project_id)
-    sources = _chat_sources(orm, project_id, limit_per_type)
+    sources = (
+        _chat_sources(orm, project_id, limit_per_type)
+        if include_ai_chat_sources
+        else []
+    )
     sources.extend(_document_sources(orm, project_id, limit_per_type))
     return [
         source
@@ -808,10 +813,15 @@ def compile_project_wiki(
             1,
             min(100, int(os.getenv("PROJECT_WIKI_SOURCE_LIMIT_PER_TYPE", "10"))),
         )
+        include_ai_chat_sources = os.getenv(
+            "PROJECT_WIKI_INCLUDE_AI_CHAT_SOURCES",
+            "false",
+        ).strip().lower() in {"1", "true", "yes", "on"}
         sources = collect_incremental_sources(
             orm,
             project_id=project_id,
             limit_per_type=limit_per_type,
+            include_ai_chat_sources=include_ai_chat_sources,
         )
         source_count = len(sources)
         if not sources:

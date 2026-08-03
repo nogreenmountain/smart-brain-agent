@@ -53,6 +53,9 @@ Wiki 检索使用 PostgreSQL 关键词检索与 BGE-M3 `v2-hybrid` 融合。MCP 
 
 所有提案进入现有 `pending_review` 流程。管理员批准后才会发布为 Wiki 页面并进入后续检索。
 
+AI 使用记录和 `ai_chat_sessions` 默认不参与 Project Wiki 自动编译。只有显式设置
+`PROJECT_WIKI_INCLUDE_AI_CHAT_SOURCES=true` 才会重新启用聊天来源；项目文档、管理员审批和 MCP 明确提案不受该开关影响。
+
 ## 部署
 
 ```powershell
