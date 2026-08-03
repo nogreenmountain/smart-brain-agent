@@ -17,6 +17,7 @@ import {
 import { Button } from '@/components/Button';
 import { EmptyState, LoadingDots } from '@/components/Feedback';
 import { Input } from '@/components/Input';
+import { PageHeader, PageShell } from '@/components/PageLayout';
 import {
   AIMonitorComponentName,
   AIMonitorComponentStatus,
@@ -186,27 +187,29 @@ export default function MonitorSetupPage() {
   const readyCount = installedCount(summary);
 
   return (
-    <div className="flex h-screen min-w-0 flex-col">
-      <header className="flex min-h-16 flex-col items-start gap-3 border-b border-gray-200 bg-white px-4 py-3 sm:flex-row sm:items-center sm:justify-between md:px-6">
-        <div className="min-w-0">
-          <h1 className="text-lg font-semibold text-gray-950">AI Monitor 安装检测</h1>
-          <p className="text-xs text-gray-500">下载统一 EXE 安装器，双击登录后即可自动完成配置。</p>
-        </div>
-        <a
-          href={DOWNLOAD_URL}
-          className="inline-flex w-full shrink-0 items-center justify-center gap-1.5 rounded-md bg-brand-600 px-3 py-2 text-sm font-medium text-white hover:bg-brand-700 sm:w-auto"
-        >
-          <Download size={17} aria-hidden="true" />
-          下载一键安装器
-        </a>
-      </header>
+    <PageShell>
+      <PageHeader
+        eyebrow="DEVICE READINESS"
+        icon={MonitorCheck}
+        title="AI Monitor 安装检测"
+        description="检测当前账号的采集组件和设备状态。"
+        actions={
+          <a
+            href={DOWNLOAD_URL}
+            className="inline-flex h-10 w-full shrink-0 items-center justify-center gap-1.5 rounded-lg bg-brand-600 px-4 text-sm font-medium text-white shadow-sm hover:bg-brand-700 sm:w-auto"
+          >
+            <Download size={17} aria-hidden="true" />
+            下载一键安装器
+          </a>
+        }
+      />
 
       <div className="flex-1 overflow-y-auto">
         <form
           onSubmit={checkStatus}
-          className="border-b border-gray-200 bg-white px-4 py-4 md:px-6"
+          className="border-b border-[#d7e0ec] bg-white px-4 py-4 md:px-6"
         >
-          <div className="grid items-end gap-3 md:grid-cols-[minmax(220px,0.8fr)_auto_1fr]">
+          <div className="mx-auto grid max-w-[1320px] items-end gap-3 md:grid-cols-[minmax(220px,0.8fr)_auto_1fr]">
             <Field label="员工 ID（管理员可填）" htmlFor="monitor-employee">
               <Input
                 id="monitor-employee"
@@ -218,7 +221,7 @@ export default function MonitorSetupPage() {
             </Field>
             <Button
               type="submit"
-              className="h-[38px] whitespace-nowrap"
+              className="w-full whitespace-nowrap md:w-auto"
               disabled={checking}
             >
               {checking ? (
@@ -232,7 +235,7 @@ export default function MonitorSetupPage() {
                 </>
               )}
             </Button>
-            <div className="text-xs leading-5 text-gray-500">
+            <div className="text-xs leading-5 text-[#6e7d97]">
               当前页按成员整体统计 AI Monitor 状态，不再要求选择项目。
             </div>
           </div>
@@ -241,7 +244,7 @@ export default function MonitorSetupPage() {
         {error && (
           <div
             role="alert"
-            className="mx-4 mt-5 flex items-start gap-2 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 md:mx-6"
+            className="mx-auto mt-5 flex max-w-[1320px] items-start gap-2 rounded-lg border border-[#efc3c8] bg-[#fff5f6] px-4 py-3 text-sm text-[#b83d49]"
           >
             <AlertTriangle className="mt-0.5 shrink-0" size={17} aria-hidden="true" />
             <span className="min-w-0 break-words">{error}</span>
@@ -249,28 +252,28 @@ export default function MonitorSetupPage() {
         )}
 
         {loadingStatus && (
-          <div className="flex items-center justify-center gap-3 py-20 text-sm text-gray-500">
+          <div className="flex items-center justify-center gap-3 py-20 text-sm text-[#6e7d97]">
             <LoadingDots />
             正在加载成员 AI Monitor 状态
           </div>
         )}
 
         {!loadingStatus && (
-          <div className="space-y-5 px-4 py-5 md:px-6">
-            <section className="rounded-md border border-gray-200 bg-white p-4">
+          <div className="mx-auto max-w-[1320px] space-y-5 px-4 py-6 md:px-6">
+            <section className="rounded-lg border border-[#d7e0ec] bg-white p-4 shadow-[0_10px_24px_rgba(15,35,66,0.04)]">
               <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
                 <div className="min-w-0">
-                  <div className="flex items-center gap-2 text-sm font-medium text-gray-950">
+                  <div className="flex items-center gap-2 text-sm font-medium text-[#10213e]">
                     <MonitorCheck size={18} className="text-brand-600" aria-hidden="true" />
                     成员整体状态
                   </div>
-                  <p className="mt-1 text-sm text-gray-600">
+                  <p className="mt-1 text-sm text-[#6e7d97]">
                     {status
                       ? `${status.employee_name || status.employee_id} 的整体安装状态，最近登记设备 ${status.devices.length} 台。`
                       : '安装后回到本页点击重新检测，系统会读取服务器登记状态。'}
                   </p>
                 </div>
-                <div className="flex shrink-0 items-center gap-2 rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-700">
+                <div className="flex shrink-0 items-center gap-2 rounded-md border border-[#d7e0ec] bg-[#f7f9fc] px-3 py-2 text-sm text-[#253655]">
                   <ShieldCheck size={17} className="text-emerald-600" aria-hidden="true" />
                   已就绪 {readyCount}/3
                 </div>
@@ -294,13 +297,13 @@ export default function MonitorSetupPage() {
                 return (
                   <article
                     key={name}
-                    className="rounded-md border border-gray-200 bg-white p-4"
+                    className="rounded-lg border border-[#d7e0ec] bg-white p-4 shadow-[0_10px_24px_rgba(15,35,66,0.04)]"
                   >
                     <div className="flex items-start gap-3">
                       <StatusIcon status={currentStatus} />
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-2">
-                          <h2 className="text-sm font-semibold text-gray-950">
+                          <h2 className="text-sm font-semibold text-[#10213e]">
                             {componentLabels[name]}
                           </h2>
                           <span
@@ -309,10 +312,10 @@ export default function MonitorSetupPage() {
                             {statusText[currentStatus]}
                           </span>
                         </div>
-                        <p className="mt-2 text-sm leading-6 text-gray-600">
+                        <p className="mt-2 text-sm leading-6 text-[#6e7d97]">
                           {componentDescriptions[name]}
                         </p>
-                        <dl className="mt-3 grid gap-2 text-xs text-gray-500 sm:grid-cols-2">
+                        <dl className="mt-3 grid gap-2 text-xs text-[#6e7d97] sm:grid-cols-2">
                           <Info label="版本" value={version || '-'} />
                           <Info label="最近检测" value={formatTime(seenAt)} />
                         </dl>
@@ -323,15 +326,15 @@ export default function MonitorSetupPage() {
               })}
             </section>
 
-            <section className="rounded-md border border-gray-200 bg-white p-4">
-              <div className="flex items-center gap-2 text-sm font-semibold text-gray-950">
+            <section className="rounded-lg border border-[#d7e0ec] bg-white p-4 shadow-[0_10px_24px_rgba(15,35,66,0.04)]">
+              <div className="flex items-center gap-2 text-sm font-semibold text-[#10213e]">
                 <Activity size={18} className="text-brand-600" aria-hidden="true" />
                 设备记录
               </div>
               {status?.devices.length ? (
                 <div className="mt-3 overflow-x-auto">
                   <table className="min-w-full text-left text-sm">
-                    <thead className="border-b border-gray-200 text-xs text-gray-500">
+                    <thead className="border-b border-[#d7e0ec] text-xs text-[#6e7d97]">
                       <tr>
                         <th className="whitespace-nowrap py-2 pr-4 font-medium">设备</th>
                         <th className="whitespace-nowrap py-2 pr-4 font-medium">安装包</th>
@@ -339,15 +342,15 @@ export default function MonitorSetupPage() {
                         <th className="whitespace-nowrap py-2 pr-4 font-medium">最近上报</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-gray-100">
+                    <tbody className="divide-y divide-[#e5ebf3]">
                       {status.devices.map((device) => (
                         <tr key={device.device_id}>
-                          <td className="max-w-[260px] break-words py-2 pr-4 text-gray-900">
+                          <td className="max-w-[260px] break-words py-2 pr-4 text-[#10213e]">
                             {device.device_name || device.device_id}
                           </td>
-                          <td className="py-2 pr-4 text-gray-600">{device.installer_version || '-'}</td>
-                          <td className="max-w-[260px] break-words py-2 pr-4 text-gray-600">{device.os || '-'}</td>
-                          <td className="whitespace-nowrap py-2 pr-4 text-gray-600">
+                          <td className="py-2 pr-4 text-[#6e7d97]">{device.installer_version || '-'}</td>
+                          <td className="max-w-[260px] break-words py-2 pr-4 text-[#6e7d97]">{device.os || '-'}</td>
+                          <td className="whitespace-nowrap py-2 pr-4 text-[#6e7d97]">
                             {formatTime(device.last_seen_at)}
                           </td>
                         </tr>
@@ -356,31 +359,31 @@ export default function MonitorSetupPage() {
                   </table>
                 </div>
               ) : (
-                <p className="mt-3 text-sm text-gray-500">
+                <p className="mt-3 text-sm text-[#6e7d97]">
                   暂无设备登记。员工下载并运行安装包后，这里会显示 CC Switch 和网页监控安装状态。
                 </p>
               )}
             </section>
 
-            <section className="rounded-md border border-gray-200 bg-white p-4">
+            <section className="rounded-lg border border-[#d7e0ec] bg-white p-4 shadow-[0_10px_24px_rgba(15,35,66,0.04)]">
               <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                 <div className="min-w-0">
-                  <h2 className="text-sm font-semibold text-gray-950">安装入口</h2>
-                  <p className="mt-1 text-sm text-gray-600">
+                  <h2 className="text-sm font-semibold text-[#10213e]">安装入口</h2>
+                  <p className="mt-1 text-sm text-[#6e7d97]">
                     无需打开命令行。安装时输入一次智慧大脑账号，完成后刷新本页检测，ChatGPT 请从桌面受监控快捷方式打开。
                   </p>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <a
                     href={DOWNLOAD_URL}
-                    className="inline-flex items-center justify-center gap-1.5 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                    className="inline-flex h-10 w-full items-center justify-center gap-1.5 rounded-lg border border-[#d7e0ec] bg-white px-4 text-sm font-medium text-[#253655] hover:bg-[#f7f9fc] sm:w-auto"
                   >
                     <Download size={17} aria-hidden="true" />
                     下载一键安装器
                   </a>
                   <a
                     href="/workday"
-                    className="inline-flex items-center justify-center gap-1.5 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                    className="inline-flex h-10 w-full items-center justify-center gap-1.5 rounded-lg border border-[#d7e0ec] bg-white px-4 text-sm font-medium text-[#253655] hover:bg-[#f7f9fc] sm:w-auto"
                   >
                     <ExternalLink size={17} aria-hidden="true" />
                     打开 AI 工作日
@@ -391,7 +394,7 @@ export default function MonitorSetupPage() {
           </div>
         )}
       </div>
-    </div>
+    </PageShell>
   );
 }
 
@@ -406,7 +409,7 @@ function Field({
 }) {
   return (
     <label className="block text-sm" htmlFor={htmlFor}>
-      <span className="mb-1 block text-xs font-medium text-gray-600">{label}</span>
+      <span className="mb-1 block text-xs font-medium text-[#53647d]">{label}</span>
       {children}
     </label>
   );
@@ -415,8 +418,8 @@ function Field({
 function Info({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <dt className="text-gray-400">{label}</dt>
-      <dd className="mt-0.5 break-words text-gray-700">{value}</dd>
+      <dt className="text-[#8b99ae]">{label}</dt>
+      <dd className="mt-0.5 break-words text-[#53647d]">{value}</dd>
     </div>
   );
 }

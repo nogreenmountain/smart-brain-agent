@@ -1,5 +1,7 @@
 'use client';
 
+import { Inbox } from 'lucide-react';
+
 export function LoadingDots() {
   return (
     <span className="inline-flex gap-1">
@@ -10,12 +12,14 @@ export function LoadingDots() {
   );
 }
 
-export function EmptyState({ icon = '📭', title, hint }: { icon?: string; title: string; hint?: string }) {
+export function EmptyState({ icon, title, hint }: { icon?: string; title: string; hint?: string }) {
   return (
-    <div className="flex flex-col items-center justify-center py-16 text-gray-400">
-      <div className="text-5xl mb-3">{icon}</div>
-      <div className="text-sm">{title}</div>
-      {hint && <div className="text-xs mt-1 text-gray-400">{hint}</div>}
+    <div className="flex flex-col items-center justify-center py-16 text-[#8b99ae]">
+      <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-lg border border-[#d7e0ec] bg-white text-[#6e7d97]">
+        {icon ? <span className="text-lg" aria-hidden="true">{icon}</span> : <Inbox size={19} aria-hidden="true" />}
+      </div>
+      <div className="text-sm font-medium text-[#6e7d97]">{title}</div>
+      {hint && <div className="mt-1 text-center text-xs text-[#8b99ae]">{hint}</div>}
     </div>
   );
 }
@@ -29,8 +33,9 @@ export function Toast({
 }) {
   return (
     <div
-      className={`fixed bottom-6 right-6 px-4 py-3 rounded-md shadow-lg text-sm text-white ${
-        kind === 'error' ? 'bg-red-600' : 'bg-gray-900'
+      role="status"
+      className={`fixed bottom-5 left-4 right-4 z-50 rounded-lg px-4 py-3 text-sm text-white shadow-lg sm:bottom-6 sm:left-auto sm:right-6 sm:max-w-md ${
+        kind === 'error' ? 'bg-[#b83d49]' : 'bg-[#10213e]'
       }`}
     >
       {message}

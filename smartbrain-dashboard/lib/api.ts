@@ -102,6 +102,41 @@ export interface MaterialBatchUploadResult {
   draft: ProjectMemoryDraft;
 }
 
+export type MaterialRecommendation = 'keep' | 'review' | 'duplicate' | 'sensitive' | 'low_value';
+
+export interface MaterialIntakePreviewItem {
+  id: string;
+  filename: string;
+  format: string;
+  size_bytes: number;
+  content_hash: string;
+  recommendation: MaterialRecommendation;
+  included: boolean;
+  reason: string;
+  issues: string[];
+}
+
+export interface MaterialIntakePreview {
+  id: string;
+  project_id: string;
+  status: 'preview_ready';
+  summary: string;
+  model: string | null;
+  used_fallback: boolean;
+  items: MaterialIntakePreviewItem[];
+}
+
+export interface MaterialIntakeConfirmResult {
+  intake_id: string;
+  status: 'pending_review';
+  raw_document_count: number;
+  curated_document_id: string;
+  draft_id: string;
+  skill_count: number;
+  generation_model: string | null;
+  generation_used_fallback: boolean;
+}
+
 export type KnowledgeApprovalStatus = 'raw_uploaded' | 'pending_review' | 'approved' | 'rejected';
 
 export interface KnowledgeLedgerUser {
@@ -146,6 +181,8 @@ export interface KnowledgeLedgerDocument {
   review_comment: string | null;
   draft_id: string | null;
   approved_memory_document_id: string | null;
+  intake_id?: string | null;
+  original_file_id?: string | null;
 }
 
 export interface KnowledgeLedger {
@@ -474,6 +511,9 @@ export interface ProjectMemoryDraft {
   markdown_content: string;
   source_count: number;
   document_id: string | null;
+  skill_count?: number;
+  generation_model?: string | null;
+  generation_used_fallback?: boolean;
   created_at: string | null;
   updated_at: string | null;
 }
@@ -483,6 +523,7 @@ export interface ProjectMemoryReviewResult {
   status: 'pending_review' | 'approved' | 'rejected';
   document_id: string | null;
   chunk_count: number;
+  wiki_page_count: number;
 }
 
 export interface ProjectWikiSource {
@@ -790,6 +831,39 @@ export async function uploadProjectMaterialsBatch(
     method: 'POST',
     body: fd,
   });
+}
+
+export async function previewProjectMaterials(
+  projectId: string,
+  departmentId: DepartmentId,
+  files: File[],
+): Promise<MaterialIntakePreview> {
+  const fd = new FormData();
+  fd.append('project_id', projectId);
+  fd.append('department_id', departmentId);
+  files.forEach((file) => fd.append('files', file));
+  return call<MaterialIntakePreview>('/v4/knowledge/material-intakes/preview', {
+    method: 'POST',
+    body: fd,
+  });
+}
+
+export async function confirmMaterialIntake(
+  intakeId: string,
+  includedFileIds: string[],
+): Promise<MaterialIntakeConfirmResult> {
+  return call<MaterialIntakeConfirmResult>(
+    `/v4/knowledge/material-intakes/${encodeURIComponent(intakeId)}/confirm`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ included_file_ids: includedFileIds }),
+    },
+  );
+}
+
+export function originalMaterialDownloadUrl(intakeId: string, fileId: string): string {
+  return `${getApiBase()}/v4/knowledge/material-intakes/${encodeURIComponent(intakeId)}/files/${encodeURIComponent(fileId)}/download`;
 }
 
 export async function listKnowledgeLedger(params: KnowledgeLedgerParams): Promise<KnowledgeLedger> {

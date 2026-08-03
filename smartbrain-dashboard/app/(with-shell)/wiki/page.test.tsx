@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import ProjectWikiPage from './page';
 
 const mocks = vi.hoisted(() => ({
-  compileProjectWiki: vi.fn(),
+  answerQuestion: vi.fn(),
   getProjectWikiOverview: vi.fn(),
   listProjects: vi.fn(),
   reviewProjectWikiChange: vi.fn(),
@@ -15,7 +15,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>();
   return {
     ...actual,
-    compileProjectWiki: mocks.compileProjectWiki,
+    answerQuestion: mocks.answerQuestion,
     getProjectWikiOverview: mocks.getProjectWikiOverview,
     listProjects: mocks.listProjects,
     reviewProjectWikiChange: mocks.reviewProjectWikiChange,
@@ -98,7 +98,7 @@ const overview = {
 
 describe('ProjectWikiPage', () => {
   beforeEach(() => {
-    mocks.compileProjectWiki.mockReset();
+    mocks.answerQuestion.mockReset();
     mocks.getProjectWikiOverview.mockReset();
     mocks.listProjects.mockReset();
     mocks.reviewProjectWikiChange.mockReset();
@@ -113,14 +113,11 @@ describe('ProjectWikiPage', () => {
       },
     ]);
     mocks.getProjectWikiOverview.mockResolvedValue(overview);
-    mocks.compileProjectWiki.mockResolvedValue({
-      run_id: 'run-2',
-      source_count: 1,
-      candidate_count: 1,
-      auto_applied_count: 1,
-      pending_review_count: 0,
-      discarded_count: 0,
-      model: 'MiniMax-M3',
+    mocks.answerQuestion.mockResolvedValue({
+      query: '如何启动后台同步？',
+      synthesis: '使用 wscript 隐藏启动同步脚本，并检查后台任务状态。',
+      source: 'llm',
+      hits: [],
     });
     mocks.reviewProjectWikiChange.mockResolvedValue({
       id: 'change-1',
@@ -139,15 +136,17 @@ describe('ProjectWikiPage', () => {
     expect(screen.getAllByText('通过 wscript 隐藏启动同步脚本。')).toHaveLength(2);
     expect(screen.getByLabelText('知识关系网络')).toBeInTheDocument();
     expect(screen.getByText('chat:session-1')).toBeInTheDocument();
-    expect(screen.getByText('MiniMax-M3')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '立即编译' })).not.toBeInTheDocument();
   });
 
-  it('lets an administrator compile and approve a governed change', async () => {
+  it('answers a project question and lets an administrator approve a useful update', async () => {
     const user = userEvent.setup();
     render(<ProjectWikiPage />);
 
-    await user.click(await screen.findByRole('button', { name: '立即编译' }));
-    await waitFor(() => expect(mocks.compileProjectWiki).toHaveBeenCalledWith('project-1'));
+    await user.type(await screen.findByLabelText('询问这个项目'), '如何启动后台同步？');
+    await user.click(screen.getByRole('button', { name: '提问' }));
+    await waitFor(() => expect(mocks.answerQuestion).toHaveBeenCalledWith('project-1', '如何启动后台同步？', 6));
+    expect(await screen.findByText('使用 wscript 隐藏启动同步脚本，并检查后台任务状态。')).toBeInTheDocument();
 
     await user.click(await screen.findByRole('button', { name: '批准 安装权限口径' }));
     await waitFor(() => {

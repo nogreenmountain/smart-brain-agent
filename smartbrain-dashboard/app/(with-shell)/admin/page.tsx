@@ -14,6 +14,7 @@ import {
   Plus,
   RefreshCw,
   Save,
+  Sparkles,
   Trash2,
   Upload,
   XCircle,
@@ -35,10 +36,12 @@ import {
   listProjects,
   Me,
   Project,
+  MaterialIntakePreview,
   ProjectMemoryDraft,
+  confirmMaterialIntake,
+  previewProjectMaterials,
   reviewProjectMemoryDraft,
   updateProject,
-  uploadProjectMaterialsBatch,
   upsertProjectRepository,
 } from '@/lib/api';
 
@@ -47,6 +50,22 @@ const statusLabel: Record<ProjectMemoryDraft['status'], string> = {
   approved: '已入库',
   rejected: '已驳回',
 };
+
+const materialRecommendationLabel = {
+  keep: '建议保留',
+  review: '建议确认',
+  duplicate: '重复资料',
+  sensitive: '包含敏感信息',
+  low_value: '价值较低',
+} as const;
+
+const materialRecommendationTone = {
+  keep: 'border-[#17a58a]/25 bg-[#17a58a]/12 text-[#137f6d]',
+  review: 'border-[#f0a23a]/25 bg-[#f0a23a]/15 text-[#9a5a0d]',
+  duplicate: 'border-[#a8b4c6]/30 bg-[#eef2f7] text-[#5e6b80]',
+  sensitive: 'border-[#df5a67]/25 bg-[#df5a67]/10 text-[#b83d49]',
+  low_value: 'border-[#a8b4c6]/30 bg-[#eef2f7] text-[#5e6b80]',
+} as const;
 
 const departmentTone: Record<DepartmentId, string> = {
   research: 'border-brand-500/20 bg-brand-500/10 text-brand-700',
@@ -105,6 +124,9 @@ export default function AdminPage() {
   const [deletingProject, setDeletingProject] = useState(false);
   const [selectedMaterialFiles, setSelectedMaterialFiles] = useState<File[]>([]);
   const [uploadingMaterials, setUploadingMaterials] = useState(false);
+  const [confirmingMaterials, setConfirmingMaterials] = useState(false);
+  const [materialPreview, setMaterialPreview] = useState<MaterialIntakePreview | null>(null);
+  const [selectedMaterialIds, setSelectedMaterialIds] = useState<Set<string>>(new Set());
   const [toast, setToast] = useState<{ msg: string; kind: 'info' | 'error' } | null>(null);
 
   const departmentOptions = departments.map((department) => ({
@@ -175,11 +197,15 @@ export default function AdminPage() {
       setDrafts([]);
       setSelectedDraftId('');
       setSelectedMaterialFiles([]);
+      setMaterialPreview(null);
+      setSelectedMaterialIds(new Set());
       return;
     }
     setEditProjectName(selectedProject.name);
     setEditCompletedAt(selectedProject.completed_at ? selectedProject.completed_at.slice(0, 10) : '');
     setSelectedMaterialFiles([]);
+    setMaterialPreview(null);
+    setSelectedMaterialIds(new Set());
     if (materialFileRef.current) materialFileRef.current.value = '';
     void loadProjectMemory(selectedProject.id, canManageProject(selectedProject));
   }, [selectedProject]);
@@ -287,30 +313,54 @@ export default function AdminPage() {
     }
   }
 
-  async function uploadMaterials() {
+  async function inspectMaterials() {
     if (!selectedProject || selectedMaterialFiles.length === 0 || uploadingMaterials) return;
-    const confirmed = window.confirm(
-      `是否已经把「${selectedProject.name}」的项目原始资料全部选好？确认后会入库，并生成项目经验草稿交给负责人审批。`,
-    );
-    if (!confirmed) return;
     setUploadingMaterials(true);
     try {
-      const result = await uploadProjectMaterialsBatch(
+      const result = await previewProjectMaterials(
         selectedProject.id,
         (selectedProject.department_id || departmentId) as DepartmentId,
         selectedMaterialFiles,
       );
-      setSelectedMaterialFiles([]);
-      if (materialFileRef.current) materialFileRef.current.value = '';
-      setToast({
-        msg: `已上传 ${result.raw_document_count} 个资料，项目经验草稿已提交负责人审批`,
-        kind: 'info',
-      });
+      setMaterialPreview(result);
+      setSelectedMaterialIds(new Set(result.items.filter((item) => item.included).map((item) => item.id)));
     } catch (error: unknown) {
-      setToast({ msg: error instanceof Error ? error.message : '上传项目资料失败', kind: 'error' });
+      setToast({ msg: error instanceof Error ? error.message : '资料检查失败', kind: 'error' });
     } finally {
       setUploadingMaterials(false);
     }
+  }
+
+  async function confirmMaterials() {
+    if (!materialPreview || selectedMaterialIds.size === 0 || confirmingMaterials) return;
+    setConfirmingMaterials(true);
+    try {
+      const result = await confirmMaterialIntake(materialPreview.id, Array.from(selectedMaterialIds));
+      setSelectedMaterialFiles([]);
+      setMaterialPreview(null);
+      setSelectedMaterialIds(new Set());
+      if (materialFileRef.current) materialFileRef.current.value = '';
+      if (selectedProjectCanManage && selectedProject) {
+        await loadProjectMemory(selectedProject.id);
+      }
+      setToast({
+        msg: `已保存 ${result.raw_document_count} 份原始资料，提炼 ${result.skill_count} 个 Skill，等待负责人一次确认`,
+        kind: 'info',
+      });
+    } catch (error: unknown) {
+      setToast({ msg: error instanceof Error ? error.message : '保存和提炼失败', kind: 'error' });
+    } finally {
+      setConfirmingMaterials(false);
+    }
+  }
+
+  function togglePreviewItem(fileId: string, checked: boolean) {
+    setSelectedMaterialIds((current) => {
+      const next = new Set(current);
+      if (checked) next.add(fileId);
+      else next.delete(fileId);
+      return next;
+    });
   }
 
   async function submitReview(decision: 'approve' | 'reject') {
@@ -330,7 +380,9 @@ export default function AdminPage() {
         ),
       );
       setToast({
-        msg: decision === 'approve' ? `审批通过，已入库 ${result.chunk_count} 个片段` : '草稿已驳回',
+        msg: decision === 'approve'
+          ? `已采用并发布 ${result.wiki_page_count} 个 Wiki Skill`
+          : '本批长期记忆候选已驳回',
         kind: 'info',
       });
     } catch (error: unknown) {
@@ -347,7 +399,7 @@ export default function AdminPage() {
 
   return (
     <div className="flex h-screen min-w-0 flex-col bg-[#eef3f9] text-[#10213e]">
-      <header className="sticky top-0 z-10 border-b border-[#d7e0ec] bg-white/90 px-5 py-4 backdrop-blur md:px-6">
+      <header className="sticky top-0 z-10 border-b border-[#d7e0ec] bg-white/95 px-4 py-4 backdrop-blur md:px-6">
         <div className="mx-auto flex max-w-[1320px] flex-wrap items-center gap-3">
           <div>
             <div className="text-[12px] font-bold tracking-[0.04em] text-brand-600">PROJECT WORKBENCH</div>
@@ -368,10 +420,10 @@ export default function AdminPage() {
         </div>
       </header>
 
-      <main className="flex-1 overflow-y-auto px-5 py-6 md:px-6">
+      <main className="flex-1 overflow-y-auto px-4 py-6 md:px-6">
         <div className="mx-auto grid max-w-[1320px] gap-5">
           <section className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(300px,0.82fr)_minmax(0,1.35fr)]">
-            <div className="rounded-lg border border-[#d7e0ec] bg-white shadow-[0_16px_36px_rgba(15,35,66,0.06)]">
+            <div className="rounded-lg border border-[#d7e0ec] bg-white shadow-[0_10px_24px_rgba(15,35,66,0.04)]">
               <div className="border-b border-[#d7e0ec] bg-[#f7faff] p-5">
                 <div className="flex items-center gap-3">
                   <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-brand-500/10 text-brand-600">
@@ -434,7 +486,7 @@ export default function AdminPage() {
 
             <div className="grid gap-5">
               {canCreateProjects && (
-                <section className="rounded-lg border border-[#d7e0ec] bg-white p-5 shadow-[0_16px_36px_rgba(15,35,66,0.06)] md:p-6">
+                <section className="rounded-lg border border-[#d7e0ec] bg-white p-5 shadow-[0_10px_24px_rgba(15,35,66,0.04)] md:p-6">
                   <div className="mb-5 flex items-center gap-3">
                     <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-brand-500/10 text-brand-600">
                       <Plus size={20} aria-hidden={true} />
@@ -510,7 +562,7 @@ export default function AdminPage() {
             <>
               <section className={`grid grid-cols-1 gap-5 ${selectedProjectCanManage ? 'xl:grid-cols-[minmax(0,1fr)_minmax(320px,0.8fr)]' : 'xl:grid-cols-[minmax(320px,0.82fr)_minmax(0,1fr)]'}`}>
                 {selectedProjectCanManage && (
-                  <div className="rounded-lg border border-[#d7e0ec] bg-white p-5 shadow-[0_16px_36px_rgba(15,35,66,0.06)] md:p-6">
+                  <div className="rounded-lg border border-[#d7e0ec] bg-white p-5 shadow-[0_10px_24px_rgba(15,35,66,0.04)] md:p-6">
                     <div className="mb-5 flex items-center gap-3">
                       <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-brand-500/10 text-brand-600">
                         <PencilLine size={20} aria-hidden={true} />
@@ -560,7 +612,7 @@ export default function AdminPage() {
                   </div>
                 )}
 
-                <div className="rounded-lg border border-[#d7e0ec] bg-white p-5 shadow-[0_16px_36px_rgba(15,35,66,0.06)] md:p-6">
+                <div className="rounded-lg border border-[#d7e0ec] bg-white p-5 shadow-[0_10px_24px_rgba(15,35,66,0.04)] md:p-6">
                   <div className="mb-5 flex items-center gap-3">
                     <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-brand-500/10 text-brand-600">
                       <GitBranch size={20} aria-hidden={true} />
@@ -597,8 +649,8 @@ export default function AdminPage() {
                   </form>
                 </div>
 
-                {!selectedProjectCanManage && (
-                  <div className="rounded-lg border border-[#d7e0ec] bg-white p-5 shadow-[0_16px_36px_rgba(15,35,66,0.06)] md:p-6">
+                {(
+                  <div className="rounded-lg border border-[#d7e0ec] bg-white p-5 shadow-[0_10px_24px_rgba(15,35,66,0.04)] md:p-6">
                     <div className="mb-5 flex items-center gap-3">
                       <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-brand-500/10 text-brand-600">
                         <Upload size={20} aria-hidden={true} />
@@ -616,7 +668,11 @@ export default function AdminPage() {
                           type="file"
                           multiple
                           accept=".pdf,.doc,.docx,.ppt,.pptx,.md,.markdown,.html,.htm,.txt,.py,.ts,.tsx,.js,.jsx,.json,.yaml,.yml,.css,.scss,.java,.go,.rs,.cpp,.c,.h,.cs,.sql"
-                          onChange={(event) => setSelectedMaterialFiles(Array.from(event.target.files || []))}
+                          onChange={(event) => {
+                            setSelectedMaterialFiles(Array.from(event.target.files || []));
+                            setMaterialPreview(null);
+                            setSelectedMaterialIds(new Set());
+                          }}
                         />
                       </Field>
                       <div className="flex flex-col gap-3 rounded-lg border border-[#d7e0ec] bg-[#f7faff] px-4 py-3 text-sm text-[#6e7d97] sm:flex-row sm:items-center sm:justify-between">
@@ -627,16 +683,80 @@ export default function AdminPage() {
                           type="button"
                           className="w-full sm:w-auto"
                           disabled={selectedMaterialFiles.length === 0 || uploadingMaterials}
-                          onClick={uploadMaterials}
+                          onClick={inspectMaterials}
                         >
                           {uploadingMaterials ? <LoadingDots /> : (
                             <>
-                              <Upload size={16} aria-hidden={true} />
-                              上传项目资料
+                              <Sparkles size={16} aria-hidden={true} />
+                              AI 检查资料
                             </>
                           )}
                         </Button>
                       </div>
+                      {materialPreview && (
+                        <div className="border-t border-[#d7e0ec] pt-4">
+                          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                            <div>
+                              <h3 className="text-base font-semibold text-[#10213e]">资料体检</h3>
+                              <p className="mt-1 text-sm leading-6 text-[#6e7d97]">{materialPreview.summary}</p>
+                            </div>
+                            <span className="text-xs text-[#8b99ae]">
+                              {materialPreview.used_fallback ? '基础规则检查' : materialPreview.model || 'AI 检查'}
+                            </span>
+                          </div>
+                          <div className="mt-4 divide-y divide-[#e3e9f1] border-y border-[#e3e9f1]">
+                            {materialPreview.items.map((item) => {
+                              const blocked = item.recommendation === 'duplicate'
+                                || item.recommendation === 'sensitive'
+                                || item.recommendation === 'low_value';
+                              return (
+                                <label key={item.id} className="flex cursor-pointer items-start gap-3 py-3">
+                                  <input
+                                    type="checkbox"
+                                    className="mt-1 h-4 w-4 shrink-0 accent-[#4a7bff]"
+                                    checked={selectedMaterialIds.has(item.id)}
+                                    disabled={blocked}
+                                    onChange={(event) => togglePreviewItem(item.id, event.target.checked)}
+                                  />
+                                  <span className="min-w-0 flex-1">
+                                    <span className="flex flex-wrap items-center gap-2">
+                                      <span className="break-all text-sm font-medium text-[#10213e]">{item.filename}</span>
+                                      <span className={`rounded border px-2 py-0.5 text-xs font-medium ${materialRecommendationTone[item.recommendation]}`}>
+                                        {materialRecommendationLabel[item.recommendation]}
+                                      </span>
+                                    </span>
+                                    <span className="mt-1 block text-sm leading-6 text-[#6e7d97]">{item.reason}</span>
+                                  </span>
+                                </label>
+                              );
+                            })}
+                          </div>
+                          <div className="mt-4 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              onClick={() => {
+                                setMaterialPreview(null);
+                                setSelectedMaterialIds(new Set());
+                              }}
+                            >
+                              重新选择
+                            </Button>
+                            <Button
+                              type="button"
+                              disabled={selectedMaterialIds.size === 0 || confirmingMaterials}
+                              onClick={confirmMaterials}
+                            >
+                              {confirmingMaterials ? <LoadingDots /> : (
+                                <>
+                                  <CheckCircle2 size={16} aria-hidden={true} />
+                                  确认保存并提炼
+                                </>
+                              )}
+                            </Button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}
@@ -644,11 +764,11 @@ export default function AdminPage() {
 
               {selectedProjectCanManage && (
                 <section className="grid gap-5 xl:grid-cols-[340px_minmax(0,1fr)]">
-                <div className="rounded-lg border border-[#d7e0ec] bg-white shadow-[0_16px_36px_rgba(15,35,66,0.06)]">
+                <div className="rounded-lg border border-[#d7e0ec] bg-white shadow-[0_10px_24px_rgba(15,35,66,0.04)]">
                   <div className="flex items-center justify-between gap-2 border-b border-[#d7e0ec] bg-[#f7faff] px-5 py-4">
                     <div className="flex items-center gap-2 text-sm font-semibold text-[#10213e]">
                       <RefreshCw size={18} className="text-brand-600" aria-hidden="true" />
-                      草稿与审批
+                      待确认记忆
                     </div>
                     <Button size="sm" variant="ghost" onClick={() => loadProjectMemory(selectedProject.id)}>
                       刷新
@@ -656,7 +776,7 @@ export default function AdminPage() {
                   </div>
                   <div className="p-4">
                     {drafts.length === 0 ? (
-                      <EmptyState title="还没有长期记忆草稿" hint="上传资料后先生成草稿" />
+                      <EmptyState title="当前没有待确认内容" hint="员工确认保存资料后，AI 提炼结果会出现在这里" />
                     ) : (
                       <div className="space-y-2">
                         {drafts.map((draft) => (
@@ -675,7 +795,7 @@ export default function AdminPage() {
                               <StatusBadge status={draft.status} />
                             </div>
                             <div className="mt-1 text-xs text-[#6e7d97]">
-                              {draft.source_count} 个资料 · {fmtTime(draft.created_at)}
+                              {draft.source_count} 个资料 · {draft.skill_count || 0} 个 Skill · {fmtTime(draft.created_at)}
                             </div>
                           </button>
                         ))}
@@ -684,7 +804,7 @@ export default function AdminPage() {
                   </div>
                 </div>
 
-                <div className="rounded-lg border border-[#d7e0ec] bg-white p-5 shadow-[0_16px_36px_rgba(15,35,66,0.06)] md:p-6">
+                <div className="rounded-lg border border-[#d7e0ec] bg-white p-5 shadow-[0_10px_24px_rgba(15,35,66,0.04)] md:p-6">
                   {selectedDraft ? (
                     <div className="space-y-4">
                       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
@@ -706,18 +826,18 @@ export default function AdminPage() {
                             </Button>
                             <Button disabled={reviewing} onClick={() => submitReview('approve')}>
                               <CheckCircle2 size={17} aria-hidden="true" />
-                              审批通过并入库
+                              采用并发布到 Wiki
                             </Button>
                           </div>
                         )}
                       </div>
-                      <Field label="审批意见" htmlFor="memory-review-comment">
+                      <Field label="备注（可选）" htmlFor="memory-review-comment">
                         <Textarea
                           id="memory-review-comment"
                           value={reviewComment}
                           onChange={(event) => setReviewComment(event.target.value)}
                           rows={3}
-                          placeholder="填写通过或驳回原因"
+                          placeholder="只在需要补充说明时填写"
                         />
                       </Field>
                       <pre className="max-h-[560px] overflow-auto whitespace-pre-wrap rounded-lg border border-[#d7e0ec] bg-[#f7f9fc] p-4 text-sm leading-6 text-[#253655]">
@@ -725,7 +845,7 @@ export default function AdminPage() {
                       </pre>
                     </div>
                   ) : (
-                    <EmptyState title="选择或生成一个草稿" />
+                    <EmptyState title="选择一个待确认批次" />
                   )}
                 </div>
                 </section>

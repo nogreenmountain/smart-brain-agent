@@ -2,7 +2,7 @@
 
 import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { ClipboardCheck, ExternalLink, FileText, FolderKanban, Trash2, Users } from 'lucide-react';
+import { ClipboardCheck, Download, ExternalLink, FileText, FolderKanban, Trash2, Users } from 'lucide-react';
 import {
   ApiError,
   Department,
@@ -14,6 +14,7 @@ import {
   listKnowledgeLedger,
   listProjectMemoryDepartments,
   listProjects,
+  originalMaterialDownloadUrl,
   Project,
 } from '@/lib/api';
 import { Button } from '@/components/Button';
@@ -210,7 +211,7 @@ export default function KnowledgePage() {
 
   return (
     <div className="flex h-screen min-w-0 flex-col bg-[#eef3f9] text-[#10213e]">
-      <header className="sticky top-0 z-10 border-b border-[#d7e0ec] bg-white/92 px-5 py-4 backdrop-blur md:px-6">
+      <header className="sticky top-0 z-10 border-b border-[#d7e0ec] bg-white/95 px-4 py-4 backdrop-blur md:px-6">
         <div className="mx-auto flex max-w-[1320px] flex-wrap items-center gap-3">
           <div>
             <div className="text-[12px] font-bold tracking-[0.04em] text-brand-600">KNOWLEDGE LEDGER</div>
@@ -229,9 +230,9 @@ export default function KnowledgePage() {
         </div>
       </header>
 
-      <main className="flex-1 overflow-y-auto px-5 py-6 md:px-6">
+      <main className="flex-1 overflow-y-auto px-4 py-6 md:px-6">
         <div className="mx-auto grid max-w-[1320px] gap-5">
-          <section className="rounded-lg border border-[#d7e0ec] bg-white p-4 shadow-[0_16px_36px_rgba(15,35,66,0.06)] md:p-5">
+          <section className="rounded-lg border border-[#d7e0ec] bg-white p-4 shadow-[0_10px_24px_rgba(15,35,66,0.04)] md:p-5">
             <div className="grid grid-cols-1 gap-3 lg:grid-cols-4 xl:grid-cols-7">
               <Filter label="选择部门">
                 <Select
@@ -330,7 +331,7 @@ export default function KnowledgePage() {
             </section>
           ) : null}
 
-          <section className="overflow-hidden rounded-lg border border-[#d7e0ec] bg-white shadow-[0_16px_36px_rgba(15,35,66,0.06)]">
+          <section className="overflow-hidden rounded-lg border border-[#d7e0ec] bg-white shadow-[0_10px_24px_rgba(15,35,66,0.04)]">
             <div className="flex flex-wrap items-center gap-3 border-b border-[#d7e0ec] bg-[#f7faff] px-5 py-4">
               <div className="flex items-center gap-2 text-sm font-semibold text-[#10213e]">
                 <ClipboardCheck size={18} className="text-brand-600" aria-hidden={true} />
@@ -431,6 +432,15 @@ function LedgerRow({
             <div className="mt-1 text-xs text-[#8b99ae]">
               {fmtSize(document.size_bytes)} · {document.chunk_count} 段
             </div>
+            {document.intake_id && document.original_file_id && (
+              <a
+                href={originalMaterialDownloadUrl(document.intake_id, document.original_file_id)}
+                className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-brand-600 hover:text-brand-700"
+              >
+                <Download size={13} aria-hidden={true} />
+                下载原文件
+              </a>
+            )}
             {document.error_message && (
               <div className="mt-1 text-xs text-[#b83d49]">{document.error_message}</div>
             )}

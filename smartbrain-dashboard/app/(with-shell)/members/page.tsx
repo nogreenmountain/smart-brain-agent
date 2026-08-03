@@ -238,15 +238,15 @@ export default function MembersPage() {
 
   return (
     <div className="flex h-screen flex-col bg-[#eef3f9] text-[#10213e]">
-      <header className="sticky top-0 z-10 border-b border-[#d7e0ec] bg-white/92 px-5 py-3 backdrop-blur md:px-6">
+      <header className="sticky top-0 z-10 border-b border-[#d7e0ec] bg-white/95 px-4 py-4 backdrop-blur md:px-6">
         <div className="mx-auto flex max-w-[1320px] flex-wrap items-center gap-3">
-          <div>
-            <div className="text-[12px] font-bold tracking-[0.04em] text-brand-600">ADMIN WORKBENCH</div>
-            <h1 className="mt-0.5 text-[24px] font-semibold leading-tight tracking-normal text-[#10213e]">成员管理</h1>
+          <div className="min-w-0 flex-1">
+            <div className="text-xs font-bold text-brand-600">ADMIN WORKBENCH</div>
+            <h1 className="mt-1 text-[26px] font-semibold leading-tight tracking-normal text-[#10213e]">成员管理</h1>
+            <p className="mt-1 text-sm text-[#6e7d97]">维护项目成员、角色权限和登录凭据。</p>
           </div>
-          <div className="flex-1" />
           {me && (
-            <div className="flex items-center gap-2 rounded-full border border-[#d7e0ec] bg-[#f7f9fc] px-3 py-1.5 text-xs text-[#6e7d97]">
+            <div className="flex h-10 w-full items-center gap-2 rounded-lg border border-[#d7e0ec] bg-[#f7f9fc] px-3 text-xs text-[#6e7d97] sm:w-auto">
               <ShieldCheck size={14} className={selectedProjectCanManage ? 'text-[#17a58a]' : 'text-[#8b99ae]'} aria-hidden={true} />
               <span className="max-w-[220px] truncate">{me.email}</span>
               <span className={selectedProjectCanManage ? 'text-[#137f6d]' : 'text-[#6e7d97]'}>
@@ -257,9 +257,9 @@ export default function MembersPage() {
         </div>
       </header>
 
-      <main className="flex-1 overflow-y-auto px-4 py-4 md:px-5">
-        <div className="mx-auto grid max-w-[1320px] gap-4">
-          <section className="rounded-lg border border-[#d7e0ec] bg-white shadow-[0_12px_28px_rgba(15,35,66,0.05)]">
+      <main className="flex-1 overflow-y-auto px-4 py-6 md:px-6">
+        <div className="mx-auto grid max-w-[1320px] gap-5">
+          <section className="rounded-lg border border-[#d7e0ec] bg-white shadow-[0_10px_24px_rgba(15,35,66,0.04)]">
             <div className="border-b border-[#d7e0ec] bg-[#f7faff] px-4 py-3 md:px-5">
               <div className="flex flex-wrap items-center gap-3">
                 <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-brand-500/10 text-brand-600">
@@ -358,7 +358,7 @@ export default function MembersPage() {
             </div>
           </section>
 
-          <section className="overflow-hidden rounded-lg border border-[#d7e0ec] bg-white shadow-[0_12px_28px_rgba(15,35,66,0.05)]">
+          <section className="overflow-hidden rounded-lg border border-[#d7e0ec] bg-white shadow-[0_10px_24px_rgba(15,35,66,0.04)]">
             <div className="flex flex-wrap items-center gap-3 border-b border-[#d7e0ec] bg-[#f7faff] px-4 py-3 md:px-5">
               <div>
                 <h2 className="text-lg font-semibold leading-tight text-[#10213e]">

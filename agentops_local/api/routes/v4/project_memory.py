@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import shutil
 import tempfile
@@ -15,6 +16,7 @@ from sqlalchemy.orm import Session
 from agentops.auth.middleware import AuthenticatedRoute
 from agentops.common.orm import get_orm_session
 from agentops.project_memory.ingest import ingest_markdown_memory
+from agentops.project_memory.publish import build_skill_candidates
 from agentops.project_memory.parsers import SUPPORTED_FORMATS, extract_text
 from agentops.project_memory.templates import (
     TEMPLATE_VERSION,
@@ -29,6 +31,7 @@ from agentops.rag.authz import (
     require_member,
     require_writer,
 )
+from agentops.project_wiki.service import publish_approved_candidates
 
 
 router = APIRouter(route_class=AuthenticatedRoute)
@@ -72,6 +75,9 @@ class ProjectMemoryDraftSchema(BaseModel):
     markdown_content: str
     source_count: int
     document_id: uuid.UUID | None = None
+    skill_count: int = 0
+    generation_model: str | None = None
+    generation_used_fallback: bool = False
     created_at: str | None = None
     updated_at: str | None = None
 
@@ -86,6 +92,7 @@ class ReviewDraftResponse(BaseModel):
     status: DraftStatus
     document_id: uuid.UUID | None = None
     chunk_count: int = 0
+    wiki_page_count: int = 0
 
 
 def _department_name(department_id: str) -> str:
@@ -135,6 +142,9 @@ def _row_to_draft(row) -> ProjectMemoryDraftSchema:
         markdown_content=row.markdown_content,
         source_count=int(row.source_count or 0),
         document_id=uuid.UUID(str(row.approved_document_id)) if row.approved_document_id else None,
+        skill_count=len(getattr(row, "skill_candidates", None) or []),
+        generation_model=getattr(row, "generation_model", None),
+        generation_used_fallback=bool(getattr(row, "generation_used_fallback", False)),
         created_at=str(row.created_at) if getattr(row, "created_at", None) else None,
         updated_at=str(row.updated_at) if getattr(row, "updated_at", None) else None,
     )
@@ -283,6 +293,7 @@ def create_project_memory_draft(
             )
             RETURNING id::text, project_id::text, department_id, title, status,
                       markdown_content, source_count, approved_document_id::text,
+                      skill_candidates, generation_model, generation_used_fallback,
                       created_at::text, updated_at::text
         """),
         {
@@ -346,6 +357,7 @@ def list_project_memory_drafts(
         text("""
             SELECT id::text, project_id::text, department_id, title, status,
                    markdown_content, source_count, approved_document_id::text,
+                   skill_candidates, generation_model, generation_used_fallback,
                    created_at::text, updated_at::text
             FROM public.project_memory_drafts
             WHERE project_id = :project_id
@@ -372,7 +384,8 @@ def approve_project_memory_draft(
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error
     row = orm.execute(
         text("""
-            SELECT id::text, project_id::text, department_id, status, markdown_content, title
+            SELECT id::text, project_id::text, department_id, status, markdown_content, title,
+                   intake_id::text, skill_candidates
             FROM public.project_memory_drafts
             WHERE id = :draft_id
             FOR UPDATE
@@ -403,37 +416,92 @@ def approve_project_memory_draft(
                 "comment": body.comment,
             },
         )
+        if getattr(row, "intake_id", None):
+            orm.execute(
+                text("""
+                    UPDATE public.project_material_intakes
+                    SET status = 'rejected', updated_at = now()
+                    WHERE id = :intake_id
+                """),
+                {"intake_id": str(row.intake_id)},
+            )
         orm.commit()
         status: DraftStatus = "rejected"
         document_id = None
         chunk_count = 0
+        wiki_page_count = 0
     else:
-        result = ingest_markdown_memory(
-            markdown=row.markdown_content,
-            project_id=project_id,
-            display_name=f"{row.title}.md",
-            created_by_user_id=user_id,
-        )
-        if result.error:
-            raise HTTPException(status_code=500, detail=f"memory ingest failed: {result.error}")
-        document_id = result.document_id
-        chunk_count = result.chunk_count
-        orm.execute(
-            text("""
-                UPDATE public.documents
-                SET department_id = :department_id,
-                    memory_type = 'project_long_term_memory',
-                    memory_draft_id = :draft_id,
-                    template_version = :template_version
-                WHERE id = :document_id
-            """),
-            {
-                "department_id": row.department_id,
-                "draft_id": str(draft_id),
-                "template_version": TEMPLATE_VERSION,
-                "document_id": str(document_id),
-            },
-        )
+        intake_id = getattr(row, "intake_id", None)
+        if intake_id:
+            document_rows = orm.execute(
+                text("""
+                    SELECT id::text, memory_type
+                    FROM public.documents
+                    WHERE memory_draft_id = :draft_id
+                      AND memory_type IN ('raw_project_material', 'curated_project_source')
+                    ORDER BY CASE WHEN memory_type = 'curated_project_source' THEN 0 ELSE 1 END,
+                             created_at
+                """),
+                {"draft_id": str(draft_id)},
+            ).all()
+            if not document_rows:
+                raise HTTPException(status_code=500, detail="confirmed knowledge documents are missing")
+            curated_row = next(
+                (item for item in document_rows if item.memory_type == "curated_project_source"),
+                document_rows[0],
+            )
+            document_id = uuid.UUID(str(curated_row.id))
+            raw_skills = getattr(row, "skill_candidates", None) or []
+            if isinstance(raw_skills, str):
+                raw_skills = json.loads(raw_skills)
+            candidates = build_skill_candidates(
+                raw_skills if isinstance(raw_skills, list) else [],
+                source_document_ids=[str(item.id) for item in document_rows],
+            )
+            page_ids = publish_approved_candidates(
+                orm,
+                project_id=project_id,
+                candidates=candidates,
+                approved_by_user_id=user_id,
+            )
+            wiki_page_count = len(page_ids)
+            chunk_count = 0
+            orm.execute(
+                text("""
+                    UPDATE public.project_material_intakes
+                    SET status = 'approved', updated_at = now()
+                    WHERE id = :intake_id
+                """),
+                {"intake_id": str(intake_id)},
+            )
+        else:
+            result = ingest_markdown_memory(
+                markdown=row.markdown_content,
+                project_id=project_id,
+                display_name=f"{row.title}.md",
+                created_by_user_id=user_id,
+            )
+            if result.error:
+                raise HTTPException(status_code=500, detail=f"memory ingest failed: {result.error}")
+            document_id = result.document_id
+            chunk_count = result.chunk_count
+            wiki_page_count = 0
+            orm.execute(
+                text("""
+                    UPDATE public.documents
+                    SET department_id = :department_id,
+                        memory_type = 'project_long_term_memory',
+                        memory_draft_id = :draft_id,
+                        template_version = :template_version
+                    WHERE id = :document_id
+                """),
+                {
+                    "department_id": row.department_id,
+                    "draft_id": str(draft_id),
+                    "template_version": TEMPLATE_VERSION,
+                    "document_id": str(document_id),
+                },
+            )
         orm.execute(
             text("""
                 UPDATE public.project_memory_drafts
@@ -481,4 +549,5 @@ def approve_project_memory_draft(
         status=status,
         document_id=document_id,
         chunk_count=chunk_count,
+        wiki_page_count=wiki_page_count,
     )

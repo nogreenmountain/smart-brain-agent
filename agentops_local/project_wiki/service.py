@@ -145,7 +145,12 @@ def _document_sources(orm, project_id: uuid.UUID, limit: int) -> list[WikiSource
              AND processed.source_id = concat('document:', d.id::text)
             WHERE d.project_id = :project_id
               AND d.status = 'ready'
-              AND COALESCE(d.memory_type, '') <> 'project_wiki_page'
+              AND COALESCE(d.memory_type, '') NOT IN (
+                  'project_wiki_page',
+                  'raw_project_material',
+                  'curated_project_source',
+                  'project_long_term_memory'
+              )
               AND processed.observed_at IS DISTINCT FROM d.updated_at
             GROUP BY d.id
             ORDER BY d.updated_at ASC
@@ -561,6 +566,64 @@ def _mark_sources_processed(
             },
         )
     orm.commit()
+
+
+def publish_approved_candidates(
+    orm,
+    *,
+    project_id: uuid.UUID,
+    candidates: list[KnowledgeCandidate],
+    approved_by_user_id: uuid.UUID,
+) -> list[uuid.UUID]:
+    if not candidates:
+        return []
+    run_id = _insert_compile_run(
+        orm,
+        project_id=project_id,
+        triggered_by_user_id=approved_by_user_id,
+        model="approved-material-intake",
+    )
+    page_ids: list[uuid.UUID] = []
+    try:
+        for candidate in candidates:
+            page_ids.append(
+                _apply_candidate(
+                    orm,
+                    run_id=run_id,
+                    project_id=project_id,
+                    candidate=candidate,
+                    created_by_user_id=approved_by_user_id,
+                    reason_code="approved_material_skill",
+                )
+            )
+        _finish_compile_run(
+            orm,
+            run_id=run_id,
+            status="completed",
+            source_count=len(candidates),
+            candidate_count=len(candidates),
+            auto_applied_count=len(candidates),
+            pending_review_count=0,
+            discarded_count=0,
+        )
+    except Exception as error:
+        try:
+            orm.rollback()
+        except Exception:
+            pass
+        _finish_compile_run(
+            orm,
+            run_id=run_id,
+            status="failed",
+            source_count=len(candidates),
+            candidate_count=len(candidates),
+            auto_applied_count=len(page_ids),
+            pending_review_count=0,
+            discarded_count=0,
+            error_message=str(error)[:2000],
+        )
+        raise
+    return page_ids
 
 
 def compile_project_wiki(

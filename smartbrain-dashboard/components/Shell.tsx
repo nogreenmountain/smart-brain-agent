@@ -50,8 +50,8 @@ export function Shell({ me, children }: { me: Me; children: React.ReactNode }) {
   }
 
   return (
-    <div className="flex h-screen">
-      <aside className="w-16 md:w-56 shrink-0 bg-white/92 backdrop-blur border-r border-[#d7e0ec] text-[#253655] flex flex-col">
+    <div className="flex h-screen bg-[#eef3f9]">
+      <aside className="flex w-16 shrink-0 flex-col border-r border-[#d7e0ec] bg-white/95 text-[#253655] backdrop-blur md:w-56">
         <div className="px-3 md:px-4 py-4 border-b border-[#d7e0ec]">
           <div className="flex items-center gap-2">
             <div className="w-9 h-9 shrink-0 rounded-lg bg-brand-500/10 text-brand-600 flex items-center justify-center ring-1 ring-brand-500/15">
@@ -74,7 +74,7 @@ export function Shell({ me, children }: { me: Me; children: React.ReactNode }) {
                 type="button"
                 title={n.label}
                 onClick={() => router.push(n.href)}
-                className={`w-full flex items-center justify-center md:justify-start gap-2.5 px-3 py-2 rounded-lg text-sm transition-all duration-150 active:scale-[0.98] ${
+                className={`flex h-10 w-full items-center justify-center gap-2.5 rounded-lg px-3 text-sm transition-all duration-150 active:scale-[0.98] md:justify-start ${
                   active
                     ? 'bg-brand-500/10 text-brand-700 shadow-[inset_3px_0_0_rgba(74,123,255,0.9)]'
                     : 'text-[#6e7d97] hover:bg-[#f7f9fc] hover:text-[#10213e]'
@@ -95,7 +95,7 @@ export function Shell({ me, children }: { me: Me; children: React.ReactNode }) {
             type="button"
             title="退出登录"
             onClick={logout}
-            className="w-full flex items-center justify-center md:justify-start gap-2 px-3 py-2 text-sm text-[#6e7d97] hover:text-[#10213e] hover:bg-[#f7f9fc] rounded-lg transition-colors"
+            className="flex h-10 w-full items-center justify-center gap-2 rounded-lg px-3 text-sm text-[#6e7d97] transition-colors hover:bg-[#f7f9fc] hover:text-[#10213e] md:justify-start"
           >
             <LogOut size={17} aria-hidden="true" />
             <span className="hidden md:block">退出登录</span>
@@ -103,7 +103,7 @@ export function Shell({ me, children }: { me: Me; children: React.ReactNode }) {
         </div>
       </aside>
 
-      <main className="flex-1 min-w-0 overflow-hidden bg-[var(--bg)]">{children}</main>
+      <main className="min-w-0 flex-1 overflow-hidden bg-[var(--bg)]">{children}</main>
     </div>
   );
 }

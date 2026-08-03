@@ -131,6 +131,8 @@ class KnowledgeLedgerDocument(BaseModel):
     review_comment: str | None = None
     draft_id: uuid.UUID | None = None
     approved_memory_document_id: uuid.UUID | None = None
+    intake_id: uuid.UUID | None = None
+    original_file_id: uuid.UUID | None = None
 
 
 class KnowledgeLedgerResponse(BaseModel):
@@ -276,7 +278,9 @@ def get_knowledge_ledger(
                    reviewer.email AS reviewed_by_email,
                    draft.reviewed_at::text AS reviewed_at,
                    draft.review_comment,
-                   draft.approved_document_id::text AS approved_memory_document_id
+                   draft.approved_document_id::text AS approved_memory_document_id,
+                   draft.intake_id::text AS intake_id,
+                   pmd.original_file_id::text AS original_file_id
             FROM public.documents d
             LEFT JOIN public.project_material_documents pmd
                    ON pmd.document_id = d.id
@@ -350,6 +354,16 @@ def get_knowledge_ledger(
                 approved_memory_document_id=(
                     uuid.UUID(str(row.approved_memory_document_id))
                     if row.approved_memory_document_id
+                    else None
+                ),
+                intake_id=(
+                    uuid.UUID(str(row.intake_id))
+                    if getattr(row, "intake_id", None)
+                    else None
+                ),
+                original_file_id=(
+                    uuid.UUID(str(row.original_file_id))
+                    if getattr(row, "original_file_id", None)
                     else None
                 ),
             )

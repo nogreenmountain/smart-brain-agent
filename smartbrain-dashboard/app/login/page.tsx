@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { BrainCircuit, LogIn } from 'lucide-react';
 import { login, ApiError } from '@/lib/api';
 import { Button } from '@/components/Button';
 import { Input } from '@/components/Input';
@@ -35,19 +36,19 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-brand-50 via-white to-brand-50 p-4">
+    <div className="flex min-h-screen items-center justify-center bg-[#eef3f9] p-4 text-[#10213e]">
       <Card className="w-full max-w-sm">
-        <CardHeader className="text-center border-b-0 pb-0">
-          <div className="w-14 h-14 mx-auto rounded-xl bg-gradient-to-br from-brand-500 to-brand-700 flex items-center justify-center text-2xl text-white shadow-md">
-            🧠
+        <CardHeader className="border-b-0 pb-0 text-center">
+          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-lg bg-brand-500/10 text-brand-600 ring-1 ring-brand-500/15">
+            <BrainCircuit size={24} aria-hidden="true" />
           </div>
           <CardTitle className="mt-3 text-xl">智慧大脑</CardTitle>
-          <div className="text-xs text-gray-500 mt-1">局域网知识库与智能问答</div>
+          <div className="mt-1 text-xs text-[#6e7d97]">企业知识库与长期记忆工作台</div>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-3">
             <div>
-              <label className="text-xs text-gray-600">用户名或邮箱</label>
+              <label className="text-xs font-medium text-[#53647d]">用户名或邮箱</label>
               <Input
                 type="text"
                 value={email}
@@ -59,7 +60,7 @@ export default function LoginPage() {
               />
             </div>
             <div>
-              <label className="text-xs text-gray-600">密码</label>
+              <label className="text-xs font-medium text-[#53647d]">密码</label>
               <Input
                 type="password"
                 value={password}
@@ -70,14 +71,14 @@ export default function LoginPage() {
               />
             </div>
             {err && (
-              <div className="text-xs text-red-600 bg-red-50 border border-red-100 rounded px-2 py-1.5">
+              <div role="alert" className="rounded-md border border-[#efc3c8] bg-[#fff5f6] px-3 py-2 text-xs text-[#b83d49]">
                 {err}
               </div>
             )}
             <Button type="submit" disabled={busy} className="w-full">
-              {busy ? <LoadingDots /> : '登录'}
+              {busy ? <LoadingDots /> : <><LogIn size={16} aria-hidden="true" />登录</>}
             </Button>
-            <div className="text-xs text-center text-gray-400 pt-2">
+            <div className="pt-2 text-center text-xs text-[#8b99ae]">
               默认项目成员才能登录。如未开通请联系管理员。
             </div>
           </form>

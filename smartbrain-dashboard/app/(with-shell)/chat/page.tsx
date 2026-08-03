@@ -1,18 +1,21 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import {
-  answerQuestion,
-  listProjects,
-  Project,
-  SearchHit,
-  AnswerResult,
-} from '@/lib/api';
+import { BrainCircuit, MessageCircleQuestion, Send } from 'lucide-react';
+
 import { Button } from '@/components/Button';
-import { Textarea } from '@/components/Input';
-import { Select } from '@/components/Select';
 import { Card } from '@/components/Card';
 import { EmptyState, LoadingDots, Toast } from '@/components/Feedback';
+import { Textarea } from '@/components/Input';
+import { PageHeader, PageShell } from '@/components/PageLayout';
+import { Select } from '@/components/Select';
+import {
+  AnswerResult,
+  Project,
+  SearchHit,
+  answerQuestion,
+  listProjects,
+} from '@/lib/api';
 
 interface ChatMsg {
   id: string;
@@ -33,44 +36,40 @@ export default function ChatPage() {
   const scrollerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    (async () => {
-      try {
-        const ps = await listProjects();
-        setProjects(ps);
-        if (ps.length > 0) setProjectId(ps[0].id);
+    listProjects()
+      .then((rows) => {
+        setProjects(rows);
+        if (rows.length > 0) setProjectId(rows[0].id);
         else setToast('你还没有可访问的项目，请联系管理员');
-      } catch (e: any) {
-        setToast(e?.message || '加载项目失败');
-      }
-    })();
+      })
+      .catch((error: Error) => setToast(error.message || '加载项目失败'));
   }, []);
 
   useEffect(() => {
-    if (scrollerRef.current) {
-      scrollerRef.current.scrollTop = scrollerRef.current.scrollHeight;
-    }
+    if (scrollerRef.current) scrollerRef.current.scrollTop = scrollerRef.current.scrollHeight;
   }, [messages]);
 
   async function send() {
-    if (!query.trim() || !projectId || busy) return;
-    const userMsg: ChatMsg = { id: `u-${Date.now()}`, role: 'user', query };
-    const pending: ChatMsg = {
-      id: `a-${Date.now()}`,
-      role: 'assistant',
-      pending: true,
-    };
-    setMessages((m) => [...m, userMsg, pending]);
-    const asked = query;
+    const asked = query.trim();
+    if (!asked || !projectId || busy) return;
+    const timestamp = Date.now();
+    const userMsg: ChatMsg = { id: `u-${timestamp}`, role: 'user', query: asked };
+    const pending: ChatMsg = { id: `a-${timestamp}`, role: 'assistant', pending: true };
+    setMessages((current) => [...current, userMsg, pending]);
     setQuery('');
     setBusy(true);
     try {
-      const ans = await answerQuestion(projectId, asked, 5);
-      setMessages((m) =>
-        m.map((x) => (x.id === pending.id ? { ...x, pending: false, answer: ans } : x)),
+      const answer = await answerQuestion(projectId, asked, 5);
+      setMessages((current) =>
+        current.map((item) => (item.id === pending.id ? { ...item, pending: false, answer } : item)),
       );
-    } catch (e: any) {
-      setMessages((m) =>
-        m.map((x) => (x.id === pending.id ? { ...x, pending: false, error: e?.message || '请求失败' } : x)),
+    } catch (error: any) {
+      setMessages((current) =>
+        current.map((item) =>
+          item.id === pending.id
+            ? { ...item, pending: false, error: error?.message || '请求失败' }
+            : item,
+        ),
       );
     } finally {
       setBusy(false);
@@ -78,138 +77,149 @@ export default function ChatPage() {
   }
 
   return (
-    <div className="flex flex-col h-screen">
-      {/* 顶栏 */}
-      <header className="px-6 py-3 border-b border-gray-200 bg-white flex items-center gap-4">
-        <div className="text-lg font-semibold text-gray-900">问答</div>
-        <div className="flex-1" />
-        <div className="flex items-center gap-2 text-sm">
-          <span className="text-gray-500">项目</span>
-          <div className="w-72">
+    <PageShell>
+      <PageHeader
+        eyebrow="PROJECT ASSISTANT"
+        icon={MessageCircleQuestion}
+        title="知识问答"
+        description="基于项目知识库和长期记忆回答问题，并保留引用来源。"
+        actions={
+          <div className="w-full sm:w-72">
             <Select
               value={projectId}
-              onChange={setProjectId}
+              onChange={(value) => {
+                setProjectId(value);
+                setMessages([]);
+              }}
               placeholder={projects.length === 0 ? '暂无可访问项目' : '选择项目'}
-              options={projects.map((p) => ({
-                value: p.id,
-                label: `${p.name} (${p.environment})`,
+              options={projects.map((project) => ({
+                value: project.id,
+                label: project.name,
               }))}
               disabled={projects.length === 0}
             />
           </div>
-        </div>
-      </header>
+        }
+      />
 
-      {/* 对话区 */}
-      <div ref={scrollerRef} className="flex-1 overflow-y-auto px-6 py-6">
-        {messages.length === 0 && (
-          <EmptyState
-            icon="💭"
-            title="提出一个问题试试"
-            hint="智慧大脑会从项目知识库里找答案,并标注来源"
-          />
-        )}
-        <div className="max-w-3xl mx-auto space-y-6">
-          {messages.map((m) =>
-            m.role === 'user' ? (
-              <div key={m.id} className="flex justify-end">
-                <div className="max-w-[80%] bg-brand-600 text-white rounded-2xl rounded-tr-md px-4 py-2.5 text-sm whitespace-pre-wrap">
-                  {m.query}
-                </div>
-              </div>
-            ) : (
-              <div key={m.id} className="flex justify-start">
-                <div className="max-w-[90%] w-full">
-                  <div className="text-xs text-gray-500 mb-1.5">🧠 智慧大脑</div>
-                  {m.pending ? (
-                    <Card className="bg-gray-50">
-                      <div className="px-4 py-3 text-sm text-gray-500">
-                        <LoadingDots /> 正在思考...
-                      </div>
-                    </Card>
-                  ) : m.error ? (
-                    <Card className="border-red-200 bg-red-50">
-                      <div className="px-4 py-3 text-sm text-red-700">{m.error}</div>
-                    </Card>
-                  ) : m.answer ? (
-                    <Card>
-                      <div className="px-5 py-4 prose-sm text-sm text-gray-900 whitespace-pre-wrap">
-                        {m.answer.synthesis}
-                      </div>
-                      {m.answer.source === 'stub' && (
-                        <div className="px-5 pb-3 text-xs text-amber-600">
-                          ⚠ LLM 暂不可用,展示的是检索结果片段
-                        </div>
-                      )}
-                      {m.answer.hits.length > 0 && (
-                        <details className="border-t border-gray-100 px-5 py-3 text-xs">
-                          <summary className="cursor-pointer text-gray-600 hover:text-gray-900">
-                            📎 {m.answer.hits.length} 个引用片段
-                          </summary>
-                          <div className="mt-3 space-y-2">
-                            {m.answer.hits.map((h, i) => (
-                              <SourceItem key={h.chunk_id} idx={i + 1} hit={h} />
-                            ))}
-                          </div>
-                        </details>
-                      )}
-                    </Card>
-                  ) : null}
-                </div>
-              </div>
-            ),
+      <div ref={scrollerRef} className="flex-1 overflow-y-auto px-4 py-6 md:px-6">
+        <div className="mx-auto max-w-[920px]">
+          {messages.length === 0 && (
+            <EmptyState
+              title="问一个和项目有关的问题"
+              hint="智慧大脑会从原始资料和已经确认的长期记忆中寻找答案。"
+            />
           )}
+          <div className="space-y-5">
+            {messages.map((message) =>
+              message.role === 'user' ? (
+                <div key={message.id} className="flex justify-end">
+                  <div className="max-w-[86%] rounded-lg bg-brand-600 px-4 py-3 text-sm leading-6 text-white shadow-sm sm:max-w-[75%]">
+                    {message.query}
+                  </div>
+                </div>
+              ) : (
+                <div key={message.id} className="flex items-start gap-3">
+                  <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand-500/10 text-brand-600">
+                    <BrainCircuit size={17} aria-hidden="true" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    {message.pending ? (
+                      <Card className="bg-[#f7f9fc] px-4 py-3 text-sm text-[#6e7d97]">
+                        <LoadingDots /> <span className="ml-2">正在整理答案</span>
+                      </Card>
+                    ) : message.error ? (
+                      <Card className="border-[#efc3c8] bg-[#fff5f6] px-4 py-3 text-sm text-[#b83d49]">
+                        {message.error}
+                      </Card>
+                    ) : message.answer ? (
+                      <Card>
+                        <div className="whitespace-pre-wrap px-5 py-4 text-sm leading-7 text-[#253655]">
+                          {message.answer.synthesis}
+                        </div>
+                        {message.answer.source === 'stub' && (
+                          <div className="px-5 pb-3 text-xs text-[#9a5a0d]">
+                            大模型暂时不可用，当前显示检索到的资料摘要。
+                          </div>
+                        )}
+                        {message.answer.hits.length > 0 && (
+                          <details className="border-t border-[#e5ebf3] px-5 py-3 text-xs">
+                            <summary className="cursor-pointer font-medium text-[#53647d] hover:text-[#10213e]">
+                              {message.answer.hits.length} 个引用片段
+                            </summary>
+                            <div className="mt-3 space-y-2">
+                              {message.answer.hits.map((hit, index) => (
+                                <SourceItem key={hit.chunk_id} idx={index + 1} hit={hit} />
+                              ))}
+                            </div>
+                          </details>
+                        )}
+                      </Card>
+                    ) : null}
+                  </div>
+                </div>
+              ),
+            )}
+          </div>
         </div>
       </div>
 
-      {/* 输入区 */}
-      <div className="border-t border-gray-200 bg-white px-6 py-4">
-        <div className="max-w-3xl mx-auto">
-          <div className="flex gap-3 items-end">
+      <form
+        className="border-t border-[#d7e0ec] bg-white px-4 py-4 md:px-6"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void send();
+        }}
+      >
+        <div className="mx-auto flex max-w-[920px] flex-col items-stretch gap-3 sm:flex-row sm:items-end">
+          <div className="min-w-0 flex-1">
+            <label htmlFor="chat-question" className="sr-only">输入问题</label>
             <Textarea
+              id="chat-question"
               value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="输入你的问题, Ctrl+Enter 发送"
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="输入你的问题，Ctrl+Enter 快速发送"
               rows={2}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                  e.preventDefault();
-                  send();
+              className="min-h-[72px]"
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+                  event.preventDefault();
+                  void send();
                 }
               }}
-              disabled={!projectId}
+              disabled={!projectId || busy}
             />
-            <Button onClick={send} disabled={busy || !projectId || !query.trim()}>
-              {busy ? <LoadingDots /> : '发送'}
-            </Button>
           </div>
-          <div className="text-xs text-gray-400 mt-1.5">
-            {projectId ? '按 Ctrl+Enter 快速发送' : '请先在右上角选择项目'}
-          </div>
+          <Button type="submit" className="w-full sm:w-auto" disabled={busy || !projectId || !query.trim()}>
+            <Send size={16} aria-hidden="true" />
+            {busy ? '回答中' : '发送'}
+          </Button>
         </div>
-      </div>
+      </form>
 
       {toast && <Toast message={toast} kind="error" />}
-    </div>
+    </PageShell>
   );
 }
 
 function SourceItem({ idx, hit }: { idx: number; hit: SearchHit }) {
-  const loc = hit.source_page
+  const location = hit.source_page
     ? `第 ${hit.source_page} 页`
     : hit.source_line
       ? `第 ${hit.source_line} 行`
       : '';
   return (
-    <div className="bg-gray-50 border border-gray-100 rounded p-2.5">
-      <div className="flex items-center justify-between text-gray-600">
-        <span>
-          <span className="font-mono text-gray-400">[{idx}]</span> {hit.document_name}
-          {loc && <span className="text-gray-400 ml-1">{loc}</span>}
+    <div className="rounded-md border border-[#d7e0ec] bg-[#f7f9fc] p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2 text-[#53647d]">
+        <span className="min-w-0 break-words">
+          <span className="font-mono text-[#8b99ae]">[{idx}]</span> {hit.document_name}
+          {location && <span className="ml-1 text-[#8b99ae]">{location}</span>}
         </span>
-        <span className="text-gray-400 text-[10px]">相关度 {(hit.score * 100).toFixed(1)}%</span>
+        <span className="shrink-0 text-[10px] text-[#8b99ae]">
+          相关度 {(hit.score * 100).toFixed(1)}%
+        </span>
       </div>
-      <div className="mt-1 text-gray-700 line-clamp-3">{hit.content}</div>
+      <div className="mt-1 line-clamp-3 leading-5 text-[#253655]">{hit.content}</div>
     </div>
   );
 }

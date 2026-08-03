@@ -22,6 +22,7 @@ import {
 import { Button } from '@/components/Button';
 import { EmptyState, LoadingDots } from '@/components/Feedback';
 import { Input } from '@/components/Input';
+import { PageHeader, PageShell } from '@/components/PageLayout';
 import {
   AIUsageOptions,
   AIUsageQueryParams,
@@ -208,33 +209,32 @@ export default function WorkdayPage() {
   }
 
   return (
-    <div className="flex h-screen min-w-0 flex-col bg-[#f6f8fb] text-[#10213e]">
-      <header className="flex min-h-16 items-center justify-between gap-4 border-b border-[#dde4ee] bg-white px-4 py-3 md:px-6">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <h1 className="text-lg font-semibold text-[#0b1930]">
-              {adminMode ? '团队 AI 使用' : '我的 AI 使用'}
-            </h1>
+    <PageShell>
+      <PageHeader
+        eyebrow={adminMode ? 'TEAM AI ACTIVITY' : 'PERSONAL AI ACTIVITY'}
+        icon={CalendarDays}
+        title={adminMode ? '团队 AI 使用' : '我的 AI 使用'}
+        description={`${options?.current_employee.name ?? '正在确认账号权限'} · Asia/Shanghai · 按员工账号统计`}
+        actions={
+          <>
             {!loadingOptions && options && (
-              <span className="rounded-full border border-[#cbd8e8] bg-[#f5f8fc] px-2 py-0.5 text-[11px] font-medium text-[#53647d]">
+              <span className="inline-flex h-8 items-center rounded-md border border-[#cbd8e8] bg-[#f5f8fc] px-3 text-xs font-medium text-[#53647d]">
                 {adminMode ? '管理员视图' : '仅本人可见'}
               </span>
             )}
-          </div>
-          <p className="mt-0.5 truncate text-xs text-[#6c7b91]">
-            {options?.current_employee.name ?? '正在确认账号权限'} · Asia/Shanghai · 按员工账号统计
-          </p>
-        </div>
-        {result && (
-          <div className="hidden text-right sm:block">
-            <p className="text-xs text-[#6c7b91]">当前统计区间</p>
-            <p className="text-sm font-medium text-[#253655]">{startDate} 至 {endDate}</p>
-          </div>
-        )}
-      </header>
+            {result && (
+              <div className="hidden text-right sm:block">
+                <p className="text-xs text-[#6c7b91]">当前统计区间</p>
+                <p className="text-sm font-medium text-[#253655]">{startDate} 至 {endDate}</p>
+              </div>
+            )}
+          </>
+        }
+      />
 
       <main className="flex-1 overflow-y-auto">
-        <form onSubmit={submitQuery} className="border-b border-[#dde4ee] bg-white px-4 py-4 md:px-6">
+        <form onSubmit={submitQuery} className="border-b border-[#d7e0ec] bg-white px-4 py-4 md:px-6">
+          <div className="mx-auto max-w-[1320px]">
           {adminMode && (
             <div className="mb-3 grid gap-3 sm:grid-cols-[minmax(260px,420px)]">
               <Field label="员工" htmlFor="usage-employee">
@@ -263,12 +263,13 @@ export default function WorkdayPage() {
               {loadingRecords ? <><LoadingDots /> 查询中</> : <><Search size={16} aria-hidden="true" /> 查询记录</>}
             </Button>
           </div>
-          <div className="mt-3 inline-flex h-8 items-center rounded-lg border border-[#d7e0ec] bg-[#f7f9fc] p-0.5">
+          <div className="mt-3 inline-flex h-9 items-center rounded-lg border border-[#d7e0ec] bg-[#f7f9fc] p-0.5">
             {[7, 30, 90].map((days) => (
-              <button key={days} type="button" onClick={() => setRange(days)} className="h-7 rounded-md px-3 text-xs font-medium text-[#53647d] hover:bg-white hover:text-[#10213e]">
+              <button key={days} type="button" onClick={() => setRange(days)} className="h-8 rounded-md px-3 text-xs font-medium text-[#53647d] hover:bg-white hover:text-[#10213e]">
                 近 {days} 天
               </button>
             ))}
+          </div>
           </div>
         </form>
 
@@ -281,7 +282,7 @@ export default function WorkdayPage() {
         )}
 
         {result && (
-          <div className="mx-auto w-full max-w-[1500px] px-4 py-5 md:px-6">
+          <div className="mx-auto w-full max-w-[1320px] px-4 py-6 md:px-6">
             <section aria-label="AI 使用概览" className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
               <Metric icon={<Zap size={17} />} label="Token 总量" value={formatCount(result.summary.total_tokens)} detail={`${formatCount(result.summary.prompt_tokens)} 输入 · ${formatCount(result.summary.completion_tokens)} 输出`} tone="blue" />
               <Metric icon={<BarChart3 size={17} />} label="自然日均值" value={formatCount(result.summary.average_tokens_per_day)} detail={`按 ${result.summary.period_days} 个自然日计算`} tone="green" />
@@ -331,7 +332,7 @@ export default function WorkdayPage() {
           </div>
         )}
       </main>
-    </div>
+    </PageShell>
   );
 }
 

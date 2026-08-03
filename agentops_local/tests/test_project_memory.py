@@ -201,6 +201,71 @@ class ProjectMemoryRouteTests(unittest.TestCase):
         self.assertTrue(any("status = 'approved'" in sql for sql in orm.executed))
         self.assertGreaterEqual(orm.commits, 1)
 
+    def test_approve_v2_draft_publishes_skills_without_reingesting_review_document(self) -> None:
+        route = _load_module("project_memory_route_v2", "api/routes/v4/project_memory.py")
+        orm = _Orm()
+        user_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        draft_id = uuid.UUID("00000000-0000-0000-0000-000000000020")
+        curated_document_id = uuid.UUID("00000000-0000-0000-0000-000000000030")
+
+        def execute(statement, params=None):
+            sql = str(statement)
+            orm.executed.append(sql)
+            orm.params.append(params or {})
+            if "FROM public.project_memory_drafts" in sql and "FOR UPDATE" in sql:
+                return _Result(
+                    SimpleNamespace(
+                        id=str(draft_id),
+                        project_id="00000000-0000-0000-0000-000000000010",
+                        department_id="research",
+                        status="pending_review",
+                        markdown_content="# Review",
+                        title="资料整理与 Skill",
+                        intake_id="00000000-0000-0000-0000-000000000040",
+                        skill_candidates=[
+                            {
+                                "title": "Deploy locally",
+                                "summary": "Start services",
+                                "markdown_content": "# Deploy locally\n\n1. Start services",
+                            }
+                        ],
+                    )
+                )
+            if "FROM public.documents" in sql and "memory_draft_id" in sql:
+                return _Result(
+                    rows=[
+                        SimpleNamespace(
+                            id=str(curated_document_id),
+                            memory_type="curated_project_source",
+                        )
+                    ]
+                )
+            return _Result()
+
+        orm.execute = execute
+        candidates = [SimpleNamespace(title="Deploy locally")]
+        with (
+            patch.object(route, "current_user_id", return_value=user_id),
+            patch.object(route, "require_admin", return_value=None),
+            patch.object(route, "ingest_markdown_memory") as ingest,
+            patch.object(route, "build_skill_candidates", return_value=candidates) as build_candidates,
+            patch.object(route, "publish_approved_candidates", return_value=[uuid.uuid4()]) as publish,
+            patch.object(route, "record_audit", return_value=None),
+        ):
+            response = route.approve_project_memory_draft(
+                request=SimpleNamespace(state=SimpleNamespace()),
+                draft_id=draft_id,
+                body=route.ReviewDraftRequest(decision="approve"),
+                orm=orm,
+            )
+
+        ingest.assert_not_called()
+        build_candidates.assert_called_once()
+        publish.assert_called_once()
+        self.assertEqual(response.document_id, curated_document_id)
+        self.assertEqual(response.wiki_page_count, 1)
+        self.assertTrue(any("project_material_intakes" in sql for sql in orm.executed))
+
 
 class KnowledgeMaterialBatchRouteTests(unittest.TestCase):
     def test_material_batch_upload_ingests_raw_documents_and_creates_review_draft(self) -> None:

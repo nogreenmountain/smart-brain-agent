@@ -154,6 +154,48 @@ class ProjectWikiServiceTests(unittest.TestCase):
         document_query = str(orm.execute.call_args.args[0])
         self.assertIn("project_wiki_processed_sources", document_query)
         self.assertIn("processed.observed_at IS DISTINCT FROM d.updated_at", document_query)
+        self.assertIn("raw_project_material", document_query)
+        self.assertIn("curated_project_source", document_query)
+
+    def test_publish_approved_candidates_applies_every_skill_without_second_review(self) -> None:
+        domain = _load_module("project_wiki_domain_for_publish_test", "project_wiki/domain.py")
+        service = _load_module("project_wiki_service_publish_under_test", "project_wiki/service.py")
+        project_id = uuid.UUID("00000000-0000-0000-0000-000000000010")
+        user_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        run_id = uuid.UUID("00000000-0000-0000-0000-000000000099")
+        candidates = [
+            domain.KnowledgeCandidate(
+                title="Deploy locally",
+                page_type="procedure",
+                summary="Start the verified stack.",
+                markdown_content="# Deploy locally\n\n1. Start services",
+                usefulness=1.0,
+                confidence=1.0,
+                source_ids=["document:doc-1"],
+                link_titles=[],
+                contradiction=False,
+                sensitive=False,
+                ephemeral=False,
+            )
+        ]
+        orm = Mock()
+
+        with (
+            patch.object(service, "_insert_compile_run", return_value=run_id),
+            patch.object(service, "_apply_candidate") as apply_candidate,
+            patch.object(service, "_finish_compile_run") as finish_run,
+        ):
+            page_ids = service.publish_approved_candidates(
+                orm,
+                project_id=project_id,
+                candidates=candidates,
+                approved_by_user_id=user_id,
+            )
+
+        self.assertEqual(len(page_ids), 1)
+        apply_candidate.assert_called_once()
+        finish_run.assert_called_once()
+        self.assertEqual(finish_run.call_args.kwargs["pending_review_count"], 0)
 
 
 if __name__ == "__main__":

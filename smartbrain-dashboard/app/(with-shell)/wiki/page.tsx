@@ -6,25 +6,29 @@ import {
   Check,
   Clock3,
   GitBranch,
+  MessageCircleQuestion,
   Network,
   RefreshCw,
+  Send,
   ShieldCheck,
-  Sparkles,
   X,
 } from 'lucide-react';
 import {
+  AnswerResult,
   ApiError,
   Project,
   ProjectWikiChange,
   ProjectWikiOverview,
   ProjectWikiPage as WikiPageRecord,
-  compileProjectWiki,
+  answerQuestion,
   getProjectWikiOverview,
   listProjects,
   reviewProjectWikiChange,
 } from '@/lib/api';
 import { Button } from '@/components/Button';
 import { LoadingDots, Toast } from '@/components/Feedback';
+import { Input } from '@/components/Input';
+import { PageBody, PageHeader, PageShell } from '@/components/PageLayout';
 import { Select } from '@/components/Select';
 
 const TYPE_LABELS: Record<string, string> = {
@@ -52,7 +56,9 @@ export default function ProjectWikiPage() {
   const [selectedPageId, setSelectedPageId] = useState('');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [compiling, setCompiling] = useState(false);
+  const [question, setQuestion] = useState('');
+  const [answer, setAnswer] = useState<AnswerResult | null>(null);
+  const [asking, setAsking] = useState(false);
   const [reviewingId, setReviewingId] = useState<string | null>(null);
   const [toast, setToast] = useState<{ msg: string; kind: 'info' | 'error' } | null>(null);
 
@@ -101,23 +107,22 @@ export default function ProjectWikiPage() {
       setOverview(null);
       return;
     }
+    setQuestion('');
+    setAnswer(null);
     void loadOverview(projectId);
   }, [loadOverview, projectId]);
 
-  async function handleCompile() {
-    if (!projectId) return;
-    setCompiling(true);
+  async function handleAsk(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const query = question.trim();
+    if (!projectId || !query) return;
+    setAsking(true);
     try {
-      const result = await compileProjectWiki(projectId);
-      setToast({
-        msg: `编译完成：自动入库 ${result.auto_applied_count}，待审批 ${result.pending_review_count}，丢弃 ${result.discarded_count}`,
-        kind: 'info',
-      });
-      await loadOverview(projectId);
+      setAnswer(await answerQuestion(projectId, query, 6));
     } catch (error: any) {
-      setToast({ msg: error?.message || '项目 Wiki 编译失败', kind: 'error' });
+      setToast({ msg: error?.message || '暂时无法回答这个问题', kind: 'error' });
     } finally {
-      setCompiling(false);
+      setAsking(false);
     }
   }
 
@@ -139,18 +144,14 @@ export default function ProjectWikiPage() {
   }
 
   return (
-    <div className="flex h-screen min-w-0 flex-col bg-[#eef3f9] text-[#10213e]">
-      <header className="border-b border-[#d7e0ec] bg-white px-5 py-4 md:px-6">
-        <div className="mx-auto flex max-w-[1440px] flex-wrap items-center gap-3">
-          <div>
-            <div className="flex items-center gap-2 text-xs font-bold text-brand-600">
-              <BookOpenText size={16} aria-hidden="true" />
-              LIVING KNOWLEDGE
-            </div>
-            <h1 className="mt-1 text-[26px] font-semibold leading-tight">项目 Wiki</h1>
-            <p className="mt-1 text-sm text-[#6e7d97]">当前项目的已验证知识、来源和关系。</p>
-          </div>
-          <div className="flex-1" />
+    <PageShell>
+      <PageHeader
+        eyebrow="LIVING KNOWLEDGE"
+        icon={BookOpenText}
+        title="项目 Wiki"
+        description="当前项目的已验证知识、来源和关系。"
+        actions={
+          <>
           <div className="w-full sm:w-72">
             <Select
               value={projectId}
@@ -163,6 +164,7 @@ export default function ProjectWikiPage() {
           <Button
             type="button"
             variant="secondary"
+            className="w-10 px-0"
             title="刷新 Wiki"
             aria-label="刷新 Wiki"
             onClick={() => loadOverview(projectId)}
@@ -170,17 +172,11 @@ export default function ProjectWikiPage() {
           >
             <RefreshCw size={17} className={refreshing ? 'animate-spin' : ''} aria-hidden="true" />
           </Button>
-          {overview?.permissions.can_compile && (
-            <Button type="button" onClick={handleCompile} disabled={compiling || refreshing}>
-              <Sparkles size={17} aria-hidden="true" />
-              {compiling ? '编译中' : '立即编译'}
-            </Button>
-          )}
-        </div>
-      </header>
+          </>
+        }
+      />
 
-      <main className="flex-1 overflow-y-auto px-5 py-5 md:px-6">
-        <div className="mx-auto grid max-w-[1440px] gap-5">
+      <PageBody contentClassName="grid gap-5">
           {loading || (refreshing && !overview) ? (
             <div className="py-24 text-center text-[#8b99ae]"><LoadingDots /></div>
           ) : !projectId ? (
@@ -194,6 +190,41 @@ export default function ProjectWikiPage() {
                 <Metric icon={Clock3} label="待审批" value={overview.summary.pending_review_count} />
                 <Metric icon={ShieldCheck} label="已处理来源" value={overview.summary.source_count} />
                 <Metric icon={GitBranch} label="知识链接" value={overview.summary.link_count} />
+              </section>
+
+              <section className="rounded-lg border border-[#d7e0ec] bg-white px-4 py-4 shadow-[0_10px_24px_rgba(15,35,66,0.04)] md:px-5">
+                <div className="flex items-center gap-2 text-sm font-semibold text-[#253655]">
+                  <MessageCircleQuestion size={18} className="text-brand-600" aria-hidden="true" />
+                  询问这个项目
+                </div>
+                <form className="mt-3 flex flex-col gap-2 sm:flex-row" onSubmit={handleAsk}>
+                  <label className="sr-only" htmlFor="project-wiki-question">询问这个项目</label>
+                  <Input
+                    id="project-wiki-question"
+                    value={question}
+                    onChange={(event) => setQuestion(event.target.value)}
+                    placeholder="例如：这个项目的部署流程是什么？"
+                    disabled={asking}
+                  />
+                  <Button type="submit" className="w-full shrink-0 sm:w-auto" disabled={asking || !question.trim()}>
+                    <Send size={16} aria-hidden="true" />
+                    {asking ? '回答中' : '提问'}
+                  </Button>
+                </form>
+                {answer && (
+                  <div className="mt-4 border-t border-[#e5ebf3] pt-4">
+                    <div className="whitespace-pre-wrap text-sm leading-7 text-[#253655]">{answer.synthesis}</div>
+                    {answer.hits.length > 0 && (
+                      <div className="mt-3 flex flex-wrap gap-2" aria-label="回答来源">
+                        {answer.hits.slice(0, 6).map((hit) => (
+                          <span key={hit.chunk_id} className="max-w-full truncate rounded-md bg-[#f1f4f8] px-2 py-1 text-xs text-[#5e6b80]">
+                            {hit.document_name}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
               </section>
 
               <section className="grid min-h-[620px] gap-4 xl:grid-cols-[280px_minmax(0,1fr)_360px]">
@@ -279,20 +310,6 @@ export default function ProjectWikiPage() {
                     </div>
                   </section>
 
-                  {overview.latest_run && (
-                    <section className="rounded-lg border border-[#1f365b] bg-[#10213e] p-4 text-white">
-                      <div className="text-xs font-semibold text-[#9fb0c8]">最近一次编译</div>
-                      <div className="mt-2 flex items-center justify-between gap-3">
-                        <span className="font-semibold">{overview.latest_run.model}</span>
-                        <span className="text-xs text-[#c7d2e1]">{fmtTime(overview.latest_run.completed_at || overview.latest_run.started_at)}</span>
-                      </div>
-                      <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs">
-                        <RunMetric label="入库" value={overview.latest_run.auto_applied_count} />
-                        <RunMetric label="审批" value={overview.latest_run.pending_review_count} />
-                        <RunMetric label="丢弃" value={overview.latest_run.discarded_count} />
-                      </div>
-                    </section>
-                  )}
                 </aside>
               </section>
 
@@ -320,16 +337,15 @@ export default function ProjectWikiPage() {
               )}
             </>
           )}
-        </div>
-      </main>
+      </PageBody>
       {toast && <Toast message={toast.msg} kind={toast.kind} />}
-    </div>
+    </PageShell>
   );
 }
 
 function Metric({ icon: Icon, label, value }: { icon: typeof BookOpenText; label: string; value: number }) {
   return (
-    <div className="flex min-h-24 items-center gap-3 rounded-lg border border-[#d7e0ec] bg-white p-4 shadow-[0_12px_28px_rgba(15,35,66,0.05)]">
+    <div className="flex min-h-24 items-center gap-3 rounded-lg border border-[#d7e0ec] bg-white p-4 shadow-[0_10px_24px_rgba(15,35,66,0.04)]">
       <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-brand-500/10 text-brand-600">
         <Icon size={19} aria-hidden="true" />
       </div>
@@ -337,15 +353,6 @@ function Metric({ icon: Icon, label, value }: { icon: typeof BookOpenText; label
         <div className="text-xs text-[#6e7d97]">{label}</div>
         <div className="mt-1 text-2xl font-semibold">{value}</div>
       </div>
-    </div>
-  );
-}
-
-function RunMetric({ label, value }: { label: string; value: number }) {
-  return (
-    <div className="rounded-md bg-white/10 px-2 py-2">
-      <div className="text-[#9fb0c8]">{label}</div>
-      <div className="mt-1 text-base font-semibold">{value}</div>
     </div>
   );
 }
