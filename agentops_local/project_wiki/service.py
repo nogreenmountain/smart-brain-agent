@@ -36,7 +36,14 @@ try:
         build_compiler_prompt,
         generate_candidates,
     )
-    from agentops.project_wiki.domain import KnowledgeCandidate, classify_candidate
+    from agentops.project_wiki.domain import (
+        MEMORY_KINDS,
+        KnowledgeCandidate,
+        classify_candidate,
+        contains_prompt_injection,
+        contains_sensitive_content,
+        sanitize_untrusted_text,
+    )
 except ModuleNotFoundError:
     _compiler = _load_local_module("project_wiki_compiler_for_service", "compiler.py")
     _domain = _load_local_module("project_wiki_domain_for_service", "domain.py")
@@ -46,6 +53,10 @@ except ModuleNotFoundError:
     generate_candidates = _compiler.generate_candidates
     KnowledgeCandidate = _domain.KnowledgeCandidate
     classify_candidate = _domain.classify_candidate
+    MEMORY_KINDS = _domain.MEMORY_KINDS
+    contains_prompt_injection = _domain.contains_prompt_injection
+    contains_sensitive_content = _domain.contains_sensitive_content
+    sanitize_untrusted_text = _domain.sanitize_untrusted_text
 
 
 logger = logging.getLogger(__name__)
@@ -216,6 +227,7 @@ def _insert_compile_run(
     project_id: uuid.UUID,
     triggered_by_user_id: uuid.UUID | None,
     model: str,
+    trigger_type: str | None = None,
 ) -> uuid.UUID:
     row = orm.execute(
         text("""
@@ -229,7 +241,7 @@ def _insert_compile_run(
         """),
         {
             "project_id": str(project_id),
-            "trigger_type": "manual" if triggered_by_user_id else "scheduled",
+            "trigger_type": trigger_type or ("manual" if triggered_by_user_id else "scheduled"),
             "user_id": str(triggered_by_user_id) if triggered_by_user_id else None,
             "model": model,
         },
@@ -291,11 +303,13 @@ def _persist_change(
         text("""
             INSERT INTO public.project_wiki_changes (
                 run_id, project_id, page_key, title, page_type,
+                memory_kind, tags, valid_from, valid_until,
                 disposition, reason_code, status, summary, proposed_markdown,
                 usefulness, confidence, contradiction, source_ids, link_titles
             )
             VALUES (
                 :run_id, :project_id, :page_key, :title, :page_type,
+                :memory_kind, CAST(:tags AS text[]), :valid_from, :valid_until,
                 :disposition, :reason_code, :status, :summary, :markdown,
                 :usefulness, :confidence, :contradiction,
                 CAST(:source_ids AS jsonb), CAST(:link_titles AS jsonb)
@@ -308,6 +322,10 @@ def _persist_change(
             "page_key": candidate.page_key,
             "title": candidate.title,
             "page_type": candidate.page_type,
+            "memory_kind": candidate.memory_kind,
+            "tags": candidate.tags,
+            "valid_from": candidate.valid_from,
+            "valid_until": candidate.valid_until,
             "disposition": disposition,
             "reason_code": reason_code,
             "status": status,
@@ -365,12 +383,22 @@ def _apply_candidate(
 
     previous_document_id = getattr(existing, "document_id", None) if existing else None
     version = int(getattr(existing, "current_version", 0) or 0) + 1
+    verified = bool(
+        change_id is not None
+        or reason_code.startswith("approved_")
+        or reason_code.startswith("review_approved")
+    )
     if existing:
         page_id = uuid.UUID(str(existing.id))
         orm.execute(
             text("""
                 UPDATE public.project_wiki_pages
                 SET title = :title, page_type = :page_type, summary = :summary,
+                    memory_kind = :memory_kind, tags = CAST(:tags AS text[]),
+                    valid_from = :valid_from, valid_until = :valid_until,
+                    verification_status = CASE WHEN :verified THEN 'verified' ELSE verification_status END,
+                    verified_by_user_id = CASE WHEN :verified THEN :user_id ELSE verified_by_user_id END,
+                    verified_at = CASE WHEN :verified THEN now() ELSE verified_at END,
                     markdown_content = :markdown, usefulness = :usefulness,
                     confidence = :confidence, current_version = :version,
                     document_id = :document_id, updated_at = now()
@@ -380,6 +408,12 @@ def _apply_candidate(
                 "page_id": str(page_id),
                 "title": candidate.title,
                 "page_type": candidate.page_type,
+                "memory_kind": candidate.memory_kind,
+                "tags": candidate.tags,
+                "valid_from": candidate.valid_from,
+                "valid_until": candidate.valid_until,
+                "verified": verified,
+                "user_id": str(created_by_user_id) if created_by_user_id else None,
                 "summary": candidate.summary,
                 "markdown": markdown,
                 "usefulness": candidate.usefulness,
@@ -392,14 +426,18 @@ def _apply_candidate(
         row = orm.execute(
             text("""
                 INSERT INTO public.project_wiki_pages (
-                    project_id, page_key, title, page_type, summary,
+                    project_id, page_key, title, page_type, memory_kind, tags,
+                    valid_from, valid_until, summary,
                     markdown_content, usefulness, confidence, current_version,
-                    document_id, created_by_user_id
+                    document_id, created_by_user_id, verification_status,
+                    verified_by_user_id, verified_at
                 )
                 VALUES (
-                    :project_id, :page_key, :title, :page_type, :summary,
+                    :project_id, :page_key, :title, :page_type, :memory_kind,
+                    CAST(:tags AS text[]), :valid_from, :valid_until, :summary,
                     :markdown, :usefulness, :confidence, :version,
-                    :document_id, :user_id
+                    :document_id, :user_id, :verification_status,
+                    :verified_by_user_id, CASE WHEN :verified THEN now() ELSE NULL END
                 )
                 RETURNING id::text
             """),
@@ -408,6 +446,10 @@ def _apply_candidate(
                 "page_key": candidate.page_key,
                 "title": candidate.title,
                 "page_type": candidate.page_type,
+                "memory_kind": candidate.memory_kind,
+                "tags": candidate.tags,
+                "valid_from": candidate.valid_from,
+                "valid_until": candidate.valid_until,
                 "summary": candidate.summary,
                 "markdown": markdown,
                 "usefulness": candidate.usefulness,
@@ -415,6 +457,9 @@ def _apply_candidate(
                 "version": version,
                 "document_id": str(ingest_result.document_id),
                 "user_id": str(created_by_user_id) if created_by_user_id else None,
+                "verification_status": "verified" if verified else "generated",
+                "verified_by_user_id": str(created_by_user_id) if verified and created_by_user_id else None,
+                "verified": verified,
             },
         ).first()
         page_id = uuid.UUID(str(row.id))
@@ -465,10 +510,20 @@ def _apply_candidate(
     for title in candidate.link_titles:
         orm.execute(
             text("""
-                INSERT INTO public.project_wiki_links (from_page_id, to_title, relation)
-                VALUES (:page_id, :to_title, 'related')
+                INSERT INTO public.project_wiki_links (
+                    from_page_id, to_page_id, to_title, relation
+                )
+                SELECT :page_id, target.id, :to_title, 'related'
+                FROM (SELECT 1) seed
+                LEFT JOIN public.project_wiki_pages target
+                  ON target.project_id = :project_id
+                 AND lower(target.title) = lower(:to_title)
             """),
-            {"page_id": str(page_id), "to_title": title},
+            {
+                "page_id": str(page_id),
+                "project_id": str(project_id),
+                "to_title": title,
+            },
         )
     orm.execute(
         text("""
@@ -496,15 +551,17 @@ def _apply_candidate(
     else:
         orm.execute(
             text("""
-                INSERT INTO public.project_wiki_changes (
-                    run_id, project_id, page_key, title, page_type,
-                    disposition, reason_code, status, summary, proposed_markdown,
+            INSERT INTO public.project_wiki_changes (
+                run_id, project_id, page_key, title, page_type,
+                memory_kind, tags, valid_from, valid_until,
+                disposition, reason_code, status, summary, proposed_markdown,
                     usefulness, confidence, contradiction, source_ids, link_titles,
                     page_id
                 )
                 VALUES (
-                    :run_id, :project_id, :page_key, :title, :page_type,
-                    'auto_apply', :reason_code, 'applied', :summary, :markdown,
+                :run_id, :project_id, :page_key, :title, :page_type,
+                :memory_kind, CAST(:tags AS text[]), :valid_from, :valid_until,
+                'auto_apply', :reason_code, 'applied', :summary, :markdown,
                     :usefulness, :confidence, :contradiction,
                     CAST(:source_ids AS jsonb), CAST(:link_titles AS jsonb), :page_id
                 )
@@ -515,6 +572,10 @@ def _apply_candidate(
                 "page_key": candidate.page_key,
                 "title": candidate.title,
                 "page_type": candidate.page_type,
+                "memory_kind": candidate.memory_kind,
+                "tags": candidate.tags,
+                "valid_from": candidate.valid_from,
+                "valid_until": candidate.valid_until,
                 "reason_code": reason_code,
                 "summary": candidate.summary,
                 "markdown": markdown,
@@ -624,6 +685,105 @@ def publish_approved_candidates(
         )
         raise
     return page_ids
+
+
+PROPOSAL_PAGE_TYPES = {
+    "workflow_template": "procedure",
+    "failure_case": "troubleshooting",
+    "success_case": "lesson",
+    "strategy": "policy",
+    "retrospective": "lesson",
+    "decision_record": "decision",
+    "checklist": "procedure",
+    "background": "fact",
+    "timeline_event": "fact",
+    "reference": "note",
+}
+
+
+def create_memory_proposal(
+    orm,
+    *,
+    project_id: uuid.UUID,
+    proposed_by_user_id: uuid.UUID,
+    title: str,
+    memory_kind: str,
+    content: str,
+    summary: str = "",
+    tags: list[str] | None = None,
+    source_page_ids: list[uuid.UUID] | None = None,
+) -> uuid.UUID:
+    clean_title = str(title or "").strip()
+    clean_content = str(content or "").strip()
+    clean_summary = str(summary or "").strip()
+    kind = str(memory_kind or "").strip().lower()
+    if not clean_title or not clean_content:
+        raise ValueError("title and content are required")
+    if len(clean_title) > 200 or len(clean_content) > 12_000:
+        raise ValueError("proposal is too large")
+    if kind not in MEMORY_KINDS:
+        raise ValueError("unsupported memory_kind")
+    combined = "\n".join([clean_title, clean_summary, clean_content])
+    if contains_sensitive_content(combined) or contains_prompt_injection(combined):
+        raise ValueError("proposal contains sensitive or unsafe content")
+
+    source_ids = [f"wiki:{page_id}" for page_id in (source_page_ids or [])]
+    source_ids.append(f"mcp-proposal:{proposed_by_user_id}")
+    candidate = KnowledgeCandidate(
+        title=sanitize_untrusted_text(clean_title),
+        page_type=PROPOSAL_PAGE_TYPES[kind],
+        memory_kind=kind,
+        tags=list(tags or []),
+        summary=sanitize_untrusted_text(clean_summary),
+        markdown_content=sanitize_untrusted_text(clean_content),
+        usefulness=0.8,
+        confidence=0.75,
+        source_ids=source_ids,
+        link_titles=[],
+        contradiction=False,
+        sensitive=False,
+        ephemeral=False,
+    )
+    run_id = _insert_compile_run(
+        orm,
+        project_id=project_id,
+        triggered_by_user_id=proposed_by_user_id,
+        model="mcp-proposal",
+        trigger_type="mcp_proposal",
+    )
+    try:
+        change_id = _persist_change(
+            orm,
+            run_id=run_id,
+            project_id=project_id,
+            candidate=candidate,
+            disposition="pending_review",
+            reason_code="mcp_proposal",
+        )
+        _finish_compile_run(
+            orm,
+            run_id=run_id,
+            status="completed",
+            source_count=len(source_ids),
+            candidate_count=1,
+            auto_applied_count=0,
+            pending_review_count=1,
+            discarded_count=0,
+        )
+        return change_id
+    except Exception as error:
+        _finish_compile_run(
+            orm,
+            run_id=run_id,
+            status="failed",
+            source_count=len(source_ids),
+            candidate_count=1,
+            auto_applied_count=0,
+            pending_review_count=0,
+            discarded_count=0,
+            error_message=str(error)[:2000],
+        )
+        raise
 
 
 def compile_project_wiki(

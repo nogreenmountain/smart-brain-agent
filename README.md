@@ -27,6 +27,7 @@
 
 - `deploy/lan/README-LAN-DEPLOY.md`
 - `deploy/lan/REUSE-GUIDE.md`
+- `docs/WIKI-MCP.md`
 
 最短流程：
 
@@ -46,6 +47,7 @@ powershell -ExecutionPolicy Bypass -File deploy/lan/Initialize-Database.ps1
 
 - 智慧大脑：`http://<服务器IP>:3002`
 - Project Wiki：`http://<服务器IP>:3002/wiki`
+- Wiki MCP：`http://<服务器IP>:8010/mcp`
 - AgentOps Trace Dashboard：`http://<服务器IP>:3001`
 - API：`http://<服务器IP>:8000`
 - OTLP Collector：`http://<服务器IP>:4318`

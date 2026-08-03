@@ -7,6 +7,8 @@ import httpx
 
 from agentops.rag import config
 
+EMBEDDING_BATCH_SIZE = 64
+
 
 class ModelServiceError(RuntimeError):
     pass
@@ -19,25 +21,34 @@ class EmbeddingServiceClient:
     expected_dim: int = config.RAG_V2_EMBEDDING_DIM
 
     def embed(self, texts: Iterable[str], *, input_type: str) -> List[List[float]]:
-        payload = {"texts": list(texts), "input_type": input_type}
-        if not payload["texts"]:
+        text_list = list(texts)
+        if not text_list:
             return []
+        vectors: List[List[float]] = []
         try:
             with httpx.Client(timeout=self.timeout_seconds) as client:
-                resp = client.post(f"{self.base_url}/embed", json=payload)
-                resp.raise_for_status()
-        except Exception as exc:
-            raise ModelServiceError(f"embedding service unavailable: {exc}") from exc
+                for start in range(0, len(text_list), EMBEDDING_BATCH_SIZE):
+                    payload = {
+                        "texts": text_list[start:start + EMBEDDING_BATCH_SIZE],
+                        "input_type": input_type,
+                    }
+                    resp = client.post(f"{self.base_url}/embed", json=payload)
+                    resp.raise_for_status()
 
-        body = resp.json()
-        vectors = body.get("vectors")
-        if not isinstance(vectors, list):
-            raise ModelServiceError("embedding service response missing vectors")
-        for vec in vectors:
-            if not isinstance(vec, list) or len(vec) != self.expected_dim:
-                raise ModelServiceError(
-                    f"embedding dimension mismatch: expected {self.expected_dim}"
-                )
+                    body = resp.json()
+                    batch_vectors = body.get("vectors")
+                    if not isinstance(batch_vectors, list):
+                        raise ModelServiceError("embedding service response missing vectors")
+                    for vec in batch_vectors:
+                        if not isinstance(vec, list) or len(vec) != self.expected_dim:
+                            raise ModelServiceError(
+                                f"embedding dimension mismatch: expected {self.expected_dim}"
+                            )
+                    vectors.extend(batch_vectors)
+        except Exception as exc:
+            if isinstance(exc, ModelServiceError):
+                raise
+            raise ModelServiceError(f"embedding service unavailable: {exc}") from exc
         return vectors
 
     def embed_documents(self, texts: Iterable[str]) -> List[List[float]]:

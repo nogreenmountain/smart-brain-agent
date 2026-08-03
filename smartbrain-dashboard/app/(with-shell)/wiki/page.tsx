@@ -5,12 +5,16 @@ import {
   BookOpenText,
   Check,
   Clock3,
+  Copy,
   GitBranch,
+  KeyRound,
   MessageCircleQuestion,
   Network,
+  PlugZap,
   RefreshCw,
   Send,
   ShieldCheck,
+  Trash2,
   X,
 } from 'lucide-react';
 import {
@@ -18,11 +22,16 @@ import {
   ApiError,
   Project,
   ProjectWikiChange,
+  ProjectWikiMcpToken,
+  ProjectWikiMcpTokenCreated,
   ProjectWikiOverview,
   ProjectWikiPage as WikiPageRecord,
   answerQuestion,
+  createProjectWikiMcpToken,
   getProjectWikiOverview,
+  listProjectWikiMcpTokens,
   listProjects,
+  revokeProjectWikiMcpToken,
   reviewProjectWikiChange,
 } from '@/lib/api';
 import { Button } from '@/components/Button';
@@ -60,6 +69,14 @@ export default function ProjectWikiPage() {
   const [answer, setAnswer] = useState<AnswerResult | null>(null);
   const [asking, setAsking] = useState(false);
   const [reviewingId, setReviewingId] = useState<string | null>(null);
+  const [mcpTokens, setMcpTokens] = useState<ProjectWikiMcpToken[]>([]);
+  const [createdMcpToken, setCreatedMcpToken] = useState<ProjectWikiMcpTokenCreated | null>(null);
+  const [mcpTokenName, setMcpTokenName] = useState('Codex');
+  const [mcpAllowPropose, setMcpAllowPropose] = useState(false);
+  const [mcpExpiresDays, setMcpExpiresDays] = useState('90');
+  const [mcpBusy, setMcpBusy] = useState(false);
+  const [mcpRevokingId, setMcpRevokingId] = useState<string | null>(null);
+  const [mcpEndpoint, setMcpEndpoint] = useState('http://localhost:8010/mcp');
   const [toast, setToast] = useState<{ msg: string; kind: 'info' | 'error' } | null>(null);
 
   const selectedPage = useMemo(
@@ -67,7 +84,18 @@ export default function ProjectWikiPage() {
     [overview, selectedPageId],
   );
 
+  const loadMcpTokens = useCallback(async () => {
+    try {
+      setMcpTokens(await listProjectWikiMcpTokens());
+    } catch (error: any) {
+      setToast({ msg: error?.message || '加载 MCP Token 失败', kind: 'error' });
+    }
+  }, []);
+
   useEffect(() => {
+    if (typeof window !== 'undefined') {
+      setMcpEndpoint(`${window.location.protocol}//${window.location.hostname}:8010/mcp`);
+    }
     listProjects()
       .then((rows) => {
         setProjects(rows);
@@ -80,7 +108,8 @@ export default function ProjectWikiPage() {
       })
       .catch((error: Error) => setToast({ msg: error.message || '加载项目失败', kind: 'error' }))
       .finally(() => setLoading(false));
-  }, []);
+    void loadMcpTokens();
+  }, [loadMcpTokens]);
 
   const loadOverview = useCallback(async (id: string) => {
     if (!id) return;
@@ -140,6 +169,50 @@ export default function ProjectWikiPage() {
       setToast({ msg: error?.message || '处理 Wiki 变更失败', kind: 'error' });
     } finally {
       setReviewingId(null);
+    }
+  }
+
+  async function handleCreateMcpToken() {
+    const name = mcpTokenName.trim();
+    if (!name) return;
+    setMcpBusy(true);
+    try {
+      const scopes: Array<'wiki:read' | 'wiki:propose'> = ['wiki:read'];
+      if (mcpAllowPropose) scopes.push('wiki:propose');
+      const created = await createProjectWikiMcpToken(name, scopes, Number(mcpExpiresDays));
+      setCreatedMcpToken(created);
+      setMcpTokens((current) => [
+        { ...created, last_used_at: null },
+        ...current.filter((token) => token.id !== created.id),
+      ]);
+      setToast({ msg: 'MCP Token 已创建，请立即保存', kind: 'info' });
+    } catch (error: any) {
+      setToast({ msg: error?.message || '创建 MCP Token 失败', kind: 'error' });
+    } finally {
+      setMcpBusy(false);
+    }
+  }
+
+  async function handleRevokeMcpToken(tokenId: string) {
+    setMcpRevokingId(tokenId);
+    try {
+      await revokeProjectWikiMcpToken(tokenId);
+      setMcpTokens((current) => current.filter((token) => token.id !== tokenId));
+      if (createdMcpToken?.id === tokenId) setCreatedMcpToken(null);
+      setToast({ msg: 'MCP Token 已撤销', kind: 'info' });
+    } catch (error: any) {
+      setToast({ msg: error?.message || '撤销 MCP Token 失败', kind: 'error' });
+    } finally {
+      setMcpRevokingId(null);
+    }
+  }
+
+  async function copyMcpValue(value: string) {
+    try {
+      await navigator.clipboard.writeText(value);
+      setToast({ msg: '已复制', kind: 'info' });
+    } catch {
+      setToast({ msg: '复制失败，请手动选择文本', kind: 'error' });
     }
   }
 
@@ -226,6 +299,23 @@ export default function ProjectWikiPage() {
                   </div>
                 )}
               </section>
+
+              <McpAccessPanel
+                endpoint={mcpEndpoint}
+                tokens={mcpTokens}
+                createdToken={createdMcpToken}
+                tokenName={mcpTokenName}
+                allowPropose={mcpAllowPropose}
+                expiresDays={mcpExpiresDays}
+                busy={mcpBusy}
+                revokingId={mcpRevokingId}
+                onTokenNameChange={setMcpTokenName}
+                onAllowProposeChange={setMcpAllowPropose}
+                onExpiresDaysChange={setMcpExpiresDays}
+                onCreate={handleCreateMcpToken}
+                onRevoke={handleRevokeMcpToken}
+                onCopy={copyMcpValue}
+              />
 
               <section className="grid min-h-[620px] gap-4 xl:grid-cols-[280px_minmax(0,1fr)_360px]">
                 <aside className="overflow-hidden rounded-lg border border-[#d7e0ec] bg-white">
@@ -340,6 +430,164 @@ export default function ProjectWikiPage() {
       </PageBody>
       {toast && <Toast message={toast.msg} kind={toast.kind} />}
     </PageShell>
+  );
+}
+
+function McpAccessPanel({
+  endpoint,
+  tokens,
+  createdToken,
+  tokenName,
+  allowPropose,
+  expiresDays,
+  busy,
+  revokingId,
+  onTokenNameChange,
+  onAllowProposeChange,
+  onExpiresDaysChange,
+  onCreate,
+  onRevoke,
+  onCopy,
+}: {
+  endpoint: string;
+  tokens: ProjectWikiMcpToken[];
+  createdToken: ProjectWikiMcpTokenCreated | null;
+  tokenName: string;
+  allowPropose: boolean;
+  expiresDays: string;
+  busy: boolean;
+  revokingId: string | null;
+  onTokenNameChange: (value: string) => void;
+  onAllowProposeChange: (value: boolean) => void;
+  onExpiresDaysChange: (value: string) => void;
+  onCreate: () => void;
+  onRevoke: (tokenId: string) => void;
+  onCopy: (value: string) => void;
+}) {
+  return (
+    <section className="overflow-hidden rounded-lg border border-[#d7e0ec] bg-white shadow-[0_10px_24px_rgba(15,35,66,0.04)]">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#d7e0ec] bg-[#f7faff] px-4 py-3 md:px-5">
+        <div className="flex items-center gap-2 text-sm font-semibold text-[#253655]">
+          <PlugZap size={18} className="text-brand-600" aria-hidden="true" />
+          MCP 接入
+        </div>
+        <div className="text-xs text-[#6e7d97]">{tokens.length} 个有效 Token</div>
+      </div>
+
+      <div className="grid gap-4 px-4 py-4 md:px-5 xl:grid-cols-[minmax(0,1fr)_420px]">
+        <div className="grid content-start gap-3">
+          <div>
+            <label htmlFor="wiki-mcp-endpoint" className="text-xs font-medium text-[#6e7d97]">服务地址</label>
+            <div className="mt-1.5 flex gap-2">
+              <Input id="wiki-mcp-endpoint" readOnly value={endpoint} />
+              <Button
+                type="button"
+                variant="secondary"
+                className="w-10 shrink-0 px-0"
+                aria-label="复制 MCP 服务地址"
+                title="复制 MCP 服务地址"
+                onClick={() => onCopy(endpoint)}
+              >
+                <Copy size={16} aria-hidden="true" />
+              </Button>
+            </div>
+          </div>
+
+          {createdToken && (
+            <div className="border-t border-[#e5ebf3] pt-3">
+              <div className="flex items-center gap-2 text-xs font-medium text-[#9a5a0d]">
+                <KeyRound size={15} aria-hidden="true" />
+                新 Token 仅显示一次
+              </div>
+              <div className="mt-1.5 flex gap-2">
+                <Input aria-label="新 MCP Token" readOnly value={createdToken.token} />
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="w-10 shrink-0 px-0"
+                  aria-label="复制新 MCP Token"
+                  title="复制新 MCP Token"
+                  onClick={() => onCopy(createdToken.token)}
+                >
+                  <Copy size={16} aria-hidden="true" />
+                </Button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_120px]">
+          <div>
+            <label htmlFor="wiki-mcp-token-name" className="text-xs font-medium text-[#6e7d97]">Token 名称</label>
+            <Input
+              id="wiki-mcp-token-name"
+              className="mt-1.5"
+              value={tokenName}
+              maxLength={100}
+              onChange={(event) => onTokenNameChange(event.target.value)}
+            />
+          </div>
+          <div>
+            <label htmlFor="wiki-mcp-token-expiry" className="text-xs font-medium text-[#6e7d97]">有效期</label>
+            <Select
+              value={expiresDays}
+              onChange={onExpiresDaysChange}
+              options={[
+                { value: '30', label: '30 天' },
+                { value: '90', label: '90 天' },
+                { value: '365', label: '365 天' },
+              ]}
+            />
+          </div>
+          <label className="flex min-h-10 items-center gap-2 text-sm text-[#253655] sm:col-span-2">
+            <input
+              type="checkbox"
+              checked={allowPropose}
+              onChange={(event) => onAllowProposeChange(event.target.checked)}
+              className="h-4 w-4 rounded border-[#b8c6da] text-brand-600 focus:ring-brand-500"
+            />
+            允许提交待审批记忆
+          </label>
+          <Button
+            type="button"
+            className="sm:col-span-2"
+            aria-label="创建 MCP Token"
+            disabled={busy || !tokenName.trim()}
+            onClick={onCreate}
+          >
+            <KeyRound size={16} aria-hidden="true" />
+            {busy ? '创建中' : '创建 Token'}
+          </Button>
+        </div>
+      </div>
+
+      {tokens.length > 0 && (
+        <div className="border-t border-[#d7e0ec]">
+          {tokens.map((token) => (
+            <div key={token.id} className="flex flex-wrap items-center gap-3 border-b border-[#edf1f6] px-4 py-3 last:border-b-0 md:px-5">
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-sm font-medium text-[#253655]">{token.name}</div>
+                <div className="mt-1 text-xs text-[#8b99ae]">
+                  {token.scopes.includes('wiki:propose') ? '读取 + 提案' : '只读'} · 到期 {fmtTime(token.expires_at)} · 最近使用 {fmtTime(token.last_used_at)}
+                </div>
+              </div>
+              <Button
+                type="button"
+                variant="danger"
+                size="sm"
+                className="w-9 px-0"
+                aria-label={`撤销 ${token.name}`}
+                title={`撤销 ${token.name}`}
+                disabled={revokingId === token.id}
+                onClick={() => onRevoke(token.id)}
+              >
+                <Trash2 size={15} aria-hidden="true" />
+              </Button>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }
 

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Company Memory"
+  short_description: "Search and reuse reviewed company knowledge"
+  default_prompt: "Search company memory for relevant decisions, examples, and proven workflows before solving this task."

@@ -1,0 +1,27 @@
+{
+  "name": "company-memory",
+  "version": "0.1.0+codex.20260803050954",
+  "description": "Search reviewed SmartBrain project memory and submit reusable knowledge for administrator review.",
+  "author": {
+    "name": "SmartBrain"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Company Memory",
+    "shortDescription": "Search reviewed company knowledge on demand.",
+    "longDescription": "Retrieves project decisions, workflows, strategies, examples, and retrospectives from SmartBrain Wiki without loading the whole knowledge base into context.",
+    "developerName": "SmartBrain",
+    "category": "Productivity",
+    "capabilities": [
+      "Search",
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Find the most relevant company decisions and proven workflows for this task.",
+      "Search prior failure cases before changing this system.",
+      "Summarize recent Wiki updates for this project."
+    ]
+  },
+  "mcpServers": "./.mcp.json"
+}

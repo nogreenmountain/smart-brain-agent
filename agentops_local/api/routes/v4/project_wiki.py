@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import uuid
 from typing import Literal
 
@@ -16,6 +17,7 @@ from agentops.project_wiki.service import (
     _apply_candidate,
     compile_project_wiki,
 )
+from agentops.project_wiki.tokens import issue_token
 from agentops.rag.audit import record_audit
 from agentops.rag.authz import (
     AuthzError,
@@ -50,6 +52,7 @@ class WikiSourceSchema(BaseModel):
 
 
 class WikiLinkSchema(BaseModel):
+    node_id: uuid.UUID | None = None
     to_title: str
     relation: str
 
@@ -59,11 +62,16 @@ class WikiPageSchema(BaseModel):
     page_key: str
     title: str
     page_type: str
+    memory_kind: str
+    tags: list[str]
     summary: str
     markdown_content: str
     usefulness: float
     confidence: float
     current_version: int
+    verification_status: str
+    valid_from: str | None = None
+    valid_until: str | None = None
     sources: list[WikiSourceSchema]
     links: list[WikiLinkSchema]
     created_at: str
@@ -74,6 +82,8 @@ class WikiChangeSchema(BaseModel):
     id: uuid.UUID
     title: str
     page_type: str
+    memory_kind: str
+    tags: list[str]
     reason_code: str
     status: str
     summary: str
@@ -134,6 +144,37 @@ class ReviewWikiChangeResponse(BaseModel):
     page_id: uuid.UUID | None = None
 
 
+class CreateMcpTokenRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+    scopes: list[Literal["wiki:read", "wiki:propose"]] = ["wiki:read"]
+    expires_days: int = Field(90, ge=1, le=365)
+
+
+class CreateMcpTokenResponse(BaseModel):
+    id: uuid.UUID
+    name: str
+    token: str
+    scopes: list[str]
+    created_at: str
+    expires_at: str | None = None
+
+
+class McpTokenSchema(BaseModel):
+    id: uuid.UUID
+    name: str
+    scopes: list[str]
+    created_at: str
+    expires_at: str | None = None
+    last_used_at: str | None = None
+
+
+def _mcp_token_secret() -> str:
+    value = os.getenv("WIKI_MCP_TOKEN_SECRET", os.getenv("AUTH_COOKIE_SECRET", "")).strip()
+    if not value:
+        raise HTTPException(status_code=503, detail="Wiki MCP token secret is not configured")
+    return value
+
+
 def _project(orm: Session, project_id: uuid.UUID):
     row = orm.execute(
         text("""
@@ -172,11 +213,16 @@ def _page_from_row(row) -> WikiPageSchema:
         page_key=str(row.page_key),
         title=str(row.title),
         page_type=str(row.page_type),
+        memory_kind=str(row.memory_kind),
+        tags=[str(item) for item in (row.tags or [])],
         summary=str(row.summary or ""),
         markdown_content=str(row.markdown_content),
         usefulness=float(row.usefulness),
         confidence=float(row.confidence),
         current_version=int(row.current_version),
+        verification_status=str(row.verification_status),
+        valid_from=str(row.valid_from) if row.valid_from else None,
+        valid_until=str(row.valid_until) if row.valid_until else None,
         sources=[WikiSourceSchema.model_validate(item) for item in (row.sources or [])],
         links=[WikiLinkSchema.model_validate(item) for item in (row.links or [])],
         created_at=str(row.created_at),
@@ -189,6 +235,8 @@ def _change_from_row(row) -> WikiChangeSchema:
         id=uuid.UUID(str(row.id)),
         title=str(row.title),
         page_type=str(row.page_type),
+        memory_kind=str(row.memory_kind),
+        tags=[str(item) for item in (row.tags or [])],
         reason_code=str(row.reason_code),
         status=str(row.status),
         summary=str(row.summary or ""),
@@ -290,9 +338,12 @@ def get_wiki_overview(
     pages = orm.execute(
         text("""
             SELECT
-                p.id::text, p.page_key, p.title, p.page_type, p.summary,
+                p.id::text, p.page_key, p.title, p.page_type, p.memory_kind,
+                p.tags, p.summary,
                 p.markdown_content, p.usefulness, p.confidence,
-                p.current_version, p.created_at::text, p.updated_at::text,
+                p.current_version, p.verification_status,
+                p.valid_from::text, p.valid_until::text,
+                p.created_at::text, p.updated_at::text,
                 (
                     SELECT COALESCE(jsonb_agg(jsonb_build_object(
                         'source_type', s.source_type,
@@ -304,6 +355,7 @@ def get_wiki_overview(
                 ) AS sources,
                 (
                     SELECT COALESCE(jsonb_agg(jsonb_build_object(
+                        'node_id', l.to_page_id::text,
                         'to_title', l.to_title,
                         'relation', l.relation
                     ) ORDER BY l.to_title), '[]'::jsonb)
@@ -320,7 +372,8 @@ def get_wiki_overview(
     if can_review:
         pending_rows = orm.execute(
             text("""
-                SELECT id::text, title, page_type, reason_code, status, summary,
+                SELECT id::text, title, page_type, memory_kind, tags,
+                       reason_code, status, summary,
                        proposed_markdown, usefulness, confidence, contradiction,
                        source_ids, link_titles, created_at::text
                 FROM public.project_wiki_changes
@@ -402,7 +455,8 @@ def review_wiki_change(
     row = orm.execute(
         text("""
             SELECT id::text, run_id::text, project_id::text, page_key, title,
-                   page_type, status, summary, proposed_markdown, usefulness,
+                   page_type, memory_kind, tags, valid_from::text,
+                   valid_until::text, status, summary, proposed_markdown, usefulness,
                    confidence, contradiction, source_ids, link_titles, reason_code
             FROM public.project_wiki_changes
             WHERE id = :change_id
@@ -441,6 +495,10 @@ def review_wiki_change(
         candidate = KnowledgeCandidate(
             title=row.title,
             page_type=row.page_type,
+            memory_kind=row.memory_kind,
+            tags=list(row.tags or []),
+            valid_from=str(row.valid_from) if row.valid_from else None,
+            valid_until=str(row.valid_until) if row.valid_until else None,
             summary=row.summary,
             markdown_content=row.proposed_markdown,
             usefulness=row.usefulness,
@@ -489,3 +547,100 @@ def review_wiki_change(
         request=request,
     )
     return ReviewWikiChangeResponse(id=change_id, status=status, page_id=page_id)
+
+
+@router.post("/project-wiki/mcp-tokens", response_model=CreateMcpTokenResponse)
+def create_mcp_token(
+    request: Request,
+    body: CreateMcpTokenRequest,
+    orm: Session = Depends(get_orm_session),
+) -> CreateMcpTokenResponse:
+    try:
+        user_id = current_user_id(request)
+    except AuthzError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    scopes = list(dict.fromkeys(body.scopes))
+    if "wiki:read" not in scopes:
+        scopes.insert(0, "wiki:read")
+    raw_token, token_hash = issue_token(secret=_mcp_token_secret())
+    row = orm.execute(
+        text("""
+            INSERT INTO public.wiki_mcp_tokens (
+                user_id, name, token_hash, scopes, expires_at
+            )
+            VALUES (
+                :user_id, :name, :token_hash, CAST(:scopes AS text[]),
+                now() + make_interval(days => :expires_days)
+            )
+            RETURNING id::text, created_at::text, expires_at::text
+        """),
+        {
+            "user_id": str(user_id),
+            "name": body.name.strip(),
+            "token_hash": token_hash,
+            "scopes": scopes,
+            "expires_days": body.expires_days,
+        },
+    ).first()
+    orm.commit()
+    return CreateMcpTokenResponse(
+        id=uuid.UUID(str(row.id)),
+        name=body.name.strip(),
+        token=raw_token,
+        scopes=scopes,
+        created_at=str(row.created_at),
+        expires_at=str(row.expires_at) if row.expires_at else None,
+    )
+
+
+@router.get("/project-wiki/mcp-tokens", response_model=list[McpTokenSchema])
+def list_mcp_tokens(
+    request: Request,
+    orm: Session = Depends(get_orm_session),
+) -> list[McpTokenSchema]:
+    try:
+        user_id = current_user_id(request)
+    except AuthzError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    rows = orm.execute(
+        text("""
+            SELECT id::text, name, scopes, created_at::text,
+                   expires_at::text, last_used_at::text
+            FROM public.wiki_mcp_tokens
+            WHERE user_id = :user_id AND revoked_at IS NULL
+            ORDER BY created_at DESC
+        """),
+        {"user_id": str(user_id)},
+    ).all()
+    return [McpTokenSchema(
+        id=uuid.UUID(str(row.id)),
+        name=str(row.name),
+        scopes=[str(item) for item in (row.scopes or [])],
+        created_at=str(row.created_at),
+        expires_at=str(row.expires_at) if row.expires_at else None,
+        last_used_at=str(row.last_used_at) if row.last_used_at else None,
+    ) for row in rows]
+
+
+@router.delete("/project-wiki/mcp-tokens/{token_id}", status_code=204)
+def revoke_mcp_token(
+    request: Request,
+    token_id: uuid.UUID,
+    orm: Session = Depends(get_orm_session),
+) -> None:
+    try:
+        user_id = current_user_id(request)
+    except AuthzError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    row = orm.execute(
+        text("""
+            UPDATE public.wiki_mcp_tokens
+            SET revoked_at = now()
+            WHERE id = :token_id AND user_id = :user_id AND revoked_at IS NULL
+            RETURNING id
+        """),
+        {"token_id": str(token_id), "user_id": str(user_id)},
+    ).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Wiki MCP token not found")
+    orm.commit()

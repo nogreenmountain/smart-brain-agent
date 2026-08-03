@@ -6,8 +6,11 @@ import ProjectWikiPage from './page';
 
 const mocks = vi.hoisted(() => ({
   answerQuestion: vi.fn(),
+  createProjectWikiMcpToken: vi.fn(),
   getProjectWikiOverview: vi.fn(),
+  listProjectWikiMcpTokens: vi.fn(),
   listProjects: vi.fn(),
+  revokeProjectWikiMcpToken: vi.fn(),
   reviewProjectWikiChange: vi.fn(),
 }));
 
@@ -16,8 +19,11 @@ vi.mock('@/lib/api', async (importOriginal) => {
   return {
     ...actual,
     answerQuestion: mocks.answerQuestion,
+    createProjectWikiMcpToken: mocks.createProjectWikiMcpToken,
     getProjectWikiOverview: mocks.getProjectWikiOverview,
+    listProjectWikiMcpTokens: mocks.listProjectWikiMcpTokens,
     listProjects: mocks.listProjects,
+    revokeProjectWikiMcpToken: mocks.revokeProjectWikiMcpToken,
     reviewProjectWikiChange: mocks.reviewProjectWikiChange,
   };
 });
@@ -99,8 +105,11 @@ const overview = {
 describe('ProjectWikiPage', () => {
   beforeEach(() => {
     mocks.answerQuestion.mockReset();
+    mocks.createProjectWikiMcpToken.mockReset();
     mocks.getProjectWikiOverview.mockReset();
+    mocks.listProjectWikiMcpTokens.mockReset();
     mocks.listProjects.mockReset();
+    mocks.revokeProjectWikiMcpToken.mockReset();
     mocks.reviewProjectWikiChange.mockReset();
     mocks.listProjects.mockResolvedValue([
       {
@@ -113,6 +122,16 @@ describe('ProjectWikiPage', () => {
       },
     ]);
     mocks.getProjectWikiOverview.mockResolvedValue(overview);
+    mocks.listProjectWikiMcpTokens.mockResolvedValue([]);
+    mocks.createProjectWikiMcpToken.mockResolvedValue({
+      id: 'token-1',
+      name: 'Codex',
+      token: 'sbmcp_visible_once',
+      scopes: ['wiki:read'],
+      created_at: '2026-08-03T04:00:00Z',
+      expires_at: '2026-11-01T04:00:00Z',
+    });
+    mocks.revokeProjectWikiMcpToken.mockResolvedValue(undefined);
     mocks.answerQuestion.mockResolvedValue({
       query: '如何启动后台同步？',
       synthesis: '使用 wscript 隐藏启动同步脚本，并检查后台任务状态。',
@@ -156,5 +175,17 @@ describe('ProjectWikiPage', () => {
         '管理员确认进入项目 Wiki',
       );
     });
+  });
+
+  it('creates a Wiki MCP token and shows the secret once', async () => {
+    const user = userEvent.setup();
+    render(<ProjectWikiPage />);
+
+    await user.click(await screen.findByRole('button', { name: '创建 MCP Token' }));
+
+    await waitFor(() => {
+      expect(mocks.createProjectWikiMcpToken).toHaveBeenCalledWith('Codex', ['wiki:read'], 90);
+    });
+    expect(screen.getByDisplayValue('sbmcp_visible_once')).toBeInTheDocument();
   });
 });

@@ -58,6 +58,10 @@ class _Orm:
                     page_key="decision-abc",
                     title="权限口径",
                     page_type="decision",
+                    memory_kind="decision_record",
+                    tags=["permissions", "installation"],
+                    valid_from="2026-08-03",
+                    valid_until=None,
                     status="pending_review",
                     summary="项目成员才能访问。",
                     proposed_markdown="# 权限口径\n\n项目成员才能访问。",
@@ -73,6 +77,20 @@ class _Orm:
 
     def commit(self):
         self.commits += 1
+
+
+class _TokenOrm(_Orm):
+    def execute(self, statement, params=None):
+        sql = str(statement)
+        values = params or {}
+        self.calls.append((sql, values))
+        if "INSERT INTO public.wiki_mcp_tokens" in sql:
+            return _Result(SimpleNamespace(
+                id="00000000-0000-0000-0000-000000000050",
+                created_at="2026-08-03T04:00:00+00:00",
+                expires_at="2026-11-01T04:00:00+00:00",
+            ))
+        return _Result()
 
 
 class ProjectWikiRouteTests(unittest.TestCase):
@@ -131,6 +149,58 @@ class ProjectWikiRouteTests(unittest.TestCase):
         apply_candidate.assert_not_called()
         self.assertEqual(response.status, "rejected")
         self.assertTrue(any("status = 'rejected'" in sql for sql, _ in orm.calls))
+
+    def test_approve_pending_change_preserves_memory_metadata(self) -> None:
+        route = _load_route()
+        orm = _Orm()
+        user_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        change_id = uuid.UUID("00000000-0000-0000-0000-000000000040")
+        page_id = uuid.UUID("00000000-0000-0000-0000-000000000041")
+
+        with (
+            patch.object(route, "current_user_id", return_value=user_id),
+            patch.object(route, "require_admin", return_value=None),
+            patch.object(route, "_apply_candidate", return_value=page_id) as apply_candidate,
+            patch.object(route, "record_audit", return_value=None),
+        ):
+            response = route.review_wiki_change(
+                request=SimpleNamespace(state=SimpleNamespace()),
+                change_id=change_id,
+                body=route.ReviewWikiChangeRequest(decision="approve", comment="approved"),
+                orm=orm,
+            )
+
+        candidate = apply_candidate.call_args.kwargs["candidate"]
+        self.assertEqual(candidate.memory_kind, "decision_record")
+        self.assertEqual(candidate.tags, ["permissions", "installation"])
+        self.assertEqual(candidate.valid_from, "2026-08-03")
+        self.assertEqual(response.status, "applied")
+        self.assertEqual(response.page_id, page_id)
+
+    def test_create_mcp_token_returns_secret_once_and_persists_only_hash(self) -> None:
+        route = _load_route()
+        orm = _TokenOrm()
+        user_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+
+        with (
+            patch.object(route, "current_user_id", return_value=user_id),
+            patch.object(route, "_mcp_token_secret", return_value="server-secret"),
+            patch.object(route, "issue_token", return_value=("sbmcp_visible-once", "stored-digest")),
+        ):
+            response = route.create_mcp_token(
+                request=SimpleNamespace(state=SimpleNamespace()),
+                body=route.CreateMcpTokenRequest(
+                    name="Codex",
+                    scopes=["wiki:read", "wiki:propose"],
+                    expires_days=90,
+                ),
+                orm=orm,
+            )
+
+        self.assertEqual(response.token, "sbmcp_visible-once")
+        insert_params = next(values for sql, values in orm.calls if "INSERT INTO public.wiki_mcp_tokens" in sql)
+        self.assertEqual(insert_params["token_hash"], "stored-digest")
+        self.assertNotIn("sbmcp_visible-once", insert_params.values())
 
 
 if __name__ == "__main__":

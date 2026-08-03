@@ -177,6 +177,37 @@ class ProjectWikiDomainTests(unittest.TestCase):
         self.assertEqual(candidates[0].link_titles, ["BGE-M3"])
         self.assertTrue(candidates[0].page_key.startswith("procedure-"))
 
+    def test_model_output_preserves_enterprise_memory_metadata(self) -> None:
+        domain = _load_domain()
+        raw = r"""{
+          "items": [
+            {
+              "title": "安装包首次同步失败",
+              "page_type": "troubleshooting",
+              "memory_kind": "failure_case",
+              "tags": ["AI Monitor", "安装", "AI Monitor"],
+              "summary": "旧记录同步失败不应阻断安装。",
+              "markdown_content": "# 安装包首次同步失败\n\n首次同步错误应后台重试。",
+              "usefulness": 0.93,
+              "confidence": 0.96,
+              "source_ids": ["document:doc-7"],
+              "link_titles": ["AI Monitor 安装流程"],
+              "contradiction": false,
+              "sensitive": false,
+              "ephemeral": false,
+              "valid_from": "2026-07-29",
+              "valid_until": null
+            }
+          ]
+        }"""
+
+        candidate = domain.parse_candidate_response(raw)[0]
+
+        self.assertEqual(candidate.memory_kind, "failure_case")
+        self.assertEqual(candidate.tags, ["AI Monitor", "安装"])
+        self.assertEqual(candidate.valid_from, "2026-07-29")
+        self.assertIsNone(candidate.valid_until)
+
 
 if __name__ == "__main__":
     unittest.main()

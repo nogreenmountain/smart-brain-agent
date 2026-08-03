@@ -52,6 +52,9 @@ class ProjectWikiCompilerTests(unittest.TestCase):
         self.assertIn("auto_apply", prompt)
         self.assertIn("最多返回 6 项候选知识", prompt)
         self.assertIn("Markdown 正文不超过 1200 字", prompt)
+        self.assertIn("memory_kind", prompt)
+        self.assertIn("failure_case", prompt)
+        self.assertIn("失败案例必须包含", prompt)
 
     def test_generate_candidates_calls_minimax_anthropic_gateway(self) -> None:
         compiler = _load_module("project_wiki_compiler_llm_under_test", "project_wiki/compiler.py")

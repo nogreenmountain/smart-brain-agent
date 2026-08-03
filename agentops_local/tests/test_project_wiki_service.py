@@ -197,6 +197,38 @@ class ProjectWikiServiceTests(unittest.TestCase):
         finish_run.assert_called_once()
         self.assertEqual(finish_run.call_args.kwargs["pending_review_count"], 0)
 
+    def test_mcp_memory_proposal_is_always_sent_to_admin_review(self) -> None:
+        service = _load_module("project_wiki_service_proposal_under_test", "project_wiki/service.py")
+        project_id = uuid.UUID("00000000-0000-0000-0000-000000000010")
+        user_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        run_id = uuid.UUID("00000000-0000-0000-0000-000000000099")
+        change_id = uuid.UUID("00000000-0000-0000-0000-000000000040")
+
+        with (
+            patch.object(service, "_insert_compile_run", return_value=run_id),
+            patch.object(service, "_persist_change", return_value=change_id) as persist,
+            patch.object(service, "_finish_compile_run") as finish,
+        ):
+            result = service.create_memory_proposal(
+                Mock(),
+                project_id=project_id,
+                proposed_by_user_id=user_id,
+                title="安装包首次同步失败",
+                memory_kind="failure_case",
+                content="# 安装包首次同步失败\n\n旧记录同步失败不应阻断安装。",
+                summary="旧记录同步失败应后台重试。",
+                tags=["AI Monitor", "安装"],
+                source_page_ids=[],
+            )
+
+        self.assertEqual(result, change_id)
+        candidate = persist.call_args.kwargs["candidate"]
+        self.assertEqual(candidate.memory_kind, "failure_case")
+        self.assertEqual(candidate.tags, ["AI Monitor", "安装"])
+        self.assertEqual(persist.call_args.kwargs["disposition"], "pending_review")
+        self.assertEqual(persist.call_args.kwargs["reason_code"], "mcp_proposal")
+        self.assertEqual(finish.call_args.kwargs["pending_review_count"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,0 +1,11 @@
+FROM agentops-api-local:patched-2026-08-03-wiki-mcp
+
+RUN pip install --no-cache-dir \
+    --target=/app/.venv/lib/python3.12/site-packages \
+    mcp==2.0.0
+
+COPY agentops_local/wiki_mcp/ /app/agentops/wiki_mcp/
+
+EXPOSE 8010
+
+CMD ["/app/.venv/bin/python", "-m", "agentops.wiki_mcp.server"]

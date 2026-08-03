@@ -2,9 +2,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   compileProjectWiki,
+  createProjectWikiMcpToken,
   getProjectWikiOverview,
   getWorkdaySummary,
+  listProjectWikiMcpTokens,
   login,
+  revokeProjectWikiMcpToken,
   reviewProjectWikiChange,
 } from './api';
 
@@ -143,5 +146,29 @@ describe('project Wiki API', () => {
       decision: 'approve',
       comment: '证据充分',
     });
+  });
+
+  it('creates lists and revokes Wiki MCP tokens', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify([]), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ token: 'sbmcp_once' }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await listProjectWikiMcpTokens();
+    await createProjectWikiMcpToken('Codex', ['wiki:read', 'wiki:propose'], 90);
+    await revokeProjectWikiMcpToken('token/one');
+
+    expect(fetchMock.mock.calls[0][0]).toBe('http://localhost:8000/v4/project-wiki/mcp-tokens');
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body as string)).toEqual({
+      name: 'Codex',
+      scopes: ['wiki:read', 'wiki:propose'],
+      expires_days: 90,
+    });
+    expect(fetchMock.mock.calls[2][0]).toBe(
+      'http://localhost:8000/v4/project-wiki/mcp-tokens/token%2Fone',
+    );
+    expect(fetchMock.mock.calls[2][1]).toMatchObject({ method: 'DELETE' });
   });
 });

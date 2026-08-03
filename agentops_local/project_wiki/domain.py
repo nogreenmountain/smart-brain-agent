@@ -10,6 +10,29 @@ from typing import Literal
 
 Disposition = Literal["auto_apply", "pending_review", "discard"]
 
+MEMORY_KINDS = {
+    "workflow_template",
+    "failure_case",
+    "success_case",
+    "strategy",
+    "retrospective",
+    "decision_record",
+    "checklist",
+    "background",
+    "timeline_event",
+    "reference",
+}
+
+PAGE_TYPE_DEFAULT_MEMORY_KIND = {
+    "procedure": "workflow_template",
+    "troubleshooting": "failure_case",
+    "lesson": "retrospective",
+    "decision": "decision_record",
+    "policy": "strategy",
+    "architecture": "background",
+    "requirement": "reference",
+}
+
 AUTO_USEFULNESS_THRESHOLD = 0.88
 AUTO_CONFIDENCE_THRESHOLD = 0.88
 MIN_USEFULNESS_THRESHOLD = 0.65
@@ -102,6 +125,10 @@ class KnowledgeCandidate:
     contradiction: bool
     sensitive: bool
     ephemeral: bool
+    memory_kind: str = ""
+    tags: list[str] = field(default_factory=list)
+    valid_from: str | None = None
+    valid_until: str | None = None
     page_key: str = field(init=False)
 
     def __post_init__(self) -> None:
@@ -113,6 +140,15 @@ class KnowledgeCandidate:
         self.confidence = _clamp_score(self.confidence)
         self.source_ids = _unique_text(self.source_ids)
         self.link_titles = _unique_text(self.link_titles)
+        requested_kind = _clean_text(self.memory_kind).lower()
+        self.memory_kind = (
+            requested_kind
+            if requested_kind in MEMORY_KINDS
+            else PAGE_TYPE_DEFAULT_MEMORY_KIND.get(self.page_type, "reference")
+        )
+        self.tags = _unique_text(self.tags)[:20]
+        self.valid_from = _clean_text(self.valid_from) or None
+        self.valid_until = _clean_text(self.valid_until) or None
         self.contradiction = bool(self.contradiction)
         self.sensitive = bool(self.sensitive)
         self.ephemeral = bool(self.ephemeral)
@@ -204,6 +240,10 @@ def parse_candidate_response(raw: str) -> list[KnowledgeCandidate]:
             contradiction=item.get("contradiction", False),
             sensitive=item.get("sensitive", False),
             ephemeral=item.get("ephemeral", False),
+            memory_kind=item.get("memory_kind", ""),
+            tags=item.get("tags", []),
+            valid_from=item.get("valid_from"),
+            valid_until=item.get("valid_until"),
         )
         if candidate.title and candidate.markdown_content:
             candidates.append(candidate)

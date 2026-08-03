@@ -533,6 +533,7 @@ export interface ProjectWikiSource {
 }
 
 export interface ProjectWikiLink {
+  node_id?: string | null;
   to_title: string;
   relation: string;
 }
@@ -542,11 +543,16 @@ export interface ProjectWikiPage {
   page_key: string;
   title: string;
   page_type: string;
+  memory_kind: string;
+  tags: string[];
   summary: string;
   markdown_content: string;
   usefulness: number;
   confidence: number;
   current_version: number;
+  verification_status: 'generated' | 'verified' | 'stale';
+  valid_from: string | null;
+  valid_until: string | null;
   sources: ProjectWikiSource[];
   links: ProjectWikiLink[];
   created_at: string;
@@ -557,6 +563,8 @@ export interface ProjectWikiChange {
   id: string;
   title: string;
   page_type: string;
+  memory_kind: string;
+  tags: string[];
   reason_code: string;
   status: string;
   summary: string;
@@ -572,7 +580,7 @@ export interface ProjectWikiChange {
 export interface ProjectWikiRun {
   id: string;
   status: 'running' | 'completed' | 'failed';
-  trigger_type: 'manual' | 'scheduled';
+  trigger_type: 'manual' | 'scheduled' | 'mcp_proposal';
   model: string;
   source_count: number;
   candidate_count: number;
@@ -833,6 +841,19 @@ export async function uploadProjectMaterialsBatch(
   });
 }
 
+export interface ProjectWikiMcpToken {
+  id: string;
+  name: string;
+  scopes: string[];
+  created_at: string;
+  expires_at: string | null;
+  last_used_at: string | null;
+}
+
+export interface ProjectWikiMcpTokenCreated extends Omit<ProjectWikiMcpToken, 'last_used_at'> {
+  token: string;
+}
+
 export async function previewProjectMaterials(
   projectId: string,
   departmentId: DepartmentId,
@@ -1057,6 +1078,28 @@ export async function reviewProjectWikiChange(
       body: JSON.stringify({ decision, comment }),
     },
   );
+}
+
+export async function listProjectWikiMcpTokens(): Promise<ProjectWikiMcpToken[]> {
+  return call<ProjectWikiMcpToken[]>('/v4/project-wiki/mcp-tokens');
+}
+
+export async function createProjectWikiMcpToken(
+  name: string,
+  scopes: Array<'wiki:read' | 'wiki:propose'>,
+  expiresDays: number,
+): Promise<ProjectWikiMcpTokenCreated> {
+  return call<ProjectWikiMcpTokenCreated>('/v4/project-wiki/mcp-tokens', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, scopes, expires_days: expiresDays }),
+  });
+}
+
+export async function revokeProjectWikiMcpToken(tokenId: string): Promise<void> {
+  await call<void>(`/v4/project-wiki/mcp-tokens/${encodeURIComponent(tokenId)}`, {
+    method: 'DELETE',
+  });
 }
 
 // AI Monitor 安装检测
