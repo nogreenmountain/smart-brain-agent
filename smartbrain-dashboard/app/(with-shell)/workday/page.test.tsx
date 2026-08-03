@@ -135,6 +135,15 @@ describe('WorkdayPage', () => {
     ));
   });
 
+  it('gives daily token columns a full-height plotting area', async () => {
+    render(<WorkdayPage />);
+
+    const chart = await screen.findByRole('img', { name: '每日 Token 趋势' });
+    const firstDay = chart.querySelector('[title^="2026-07-28"]');
+
+    expect(firstDay).toHaveClass('h-full');
+  });
+
   it('lets administrators select an employee without department or project filters', async () => {
     const user = userEvent.setup();
     const adminOptions = {
