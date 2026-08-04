@@ -1,11 +1,9 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import WorkdayPage from './page';
 
 const mocks = vi.hoisted(() => ({
-  getAIDailyWorkLogs: vi.fn(),
   getAIUsageOptions: vi.fn(),
   getAIUsageRecords: vi.fn(),
 }));
@@ -14,7 +12,6 @@ vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>();
   return {
     ...actual,
-    getAIDailyWorkLogs: mocks.getAIDailyWorkLogs,
     getAIUsageOptions: mocks.getAIUsageOptions,
     getAIUsageRecords: mocks.getAIUsageRecords,
   };
@@ -100,63 +97,18 @@ const usageResult = {
   warnings: [],
 };
 
-const dailyLogs = {
-  employee,
-  timezone: 'Asia/Shanghai' as const,
-  items: [{
-    id: 'log-1',
-    work_date: '2026-07-29',
-    employee_id: employee.id,
-    employee_name: employee.name,
-    report_markdown: '## 完成登录模块修复\n\n**解决问题**\n登录返回 401。',
-    work_items: [{
-      title: '完成登录模块修复',
-      problem: '登录返回 401',
-      actions: ['修改 auth.py'],
-      result: '登录恢复正常',
-      artifacts: ['auth.py'],
-      validation: ['12 tests passed'],
-    }],
-    source_count: 1,
-    model: 'claude-sonnet-4-6-20250514',
-    generated_at: '2026-07-29T12:00:00Z',
-  }],
-};
-
 describe('WorkdayPage', () => {
   beforeEach(() => {
     mocks.getAIUsageOptions.mockResolvedValue(selfOptions);
     mocks.getAIUsageRecords.mockResolvedValue(usageResult);
-    mocks.getAIDailyWorkLogs.mockResolvedValue(dailyLogs);
   });
 
-  it('queries one daily work log by date and keeps details collapsed by default', async () => {
-    const user = userEvent.setup();
+  it('shows AI work records without embedding the daily work-log panel', async () => {
     render(<WorkdayPage />);
 
-    expect(await screen.findByText('我的 AI 使用')).toBeInTheDocument();
-    expect(await screen.findByText('每日 AI 工作日志')).toBeInTheDocument();
-    expect(screen.queryByText('完成登录模块修复')).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: '生成区间工作报告' })).not.toBeInTheDocument();
-
-    const toggle = screen.getByRole('button', { name: '展开 2026-07-29 工作日志' });
-    await user.click(toggle);
-    expect(screen.getByText('完成登录模块修复')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '收起 2026-07-29 工作日志' })).toBeInTheDocument();
-
-    await user.click(screen.getByRole('button', { name: '收起 2026-07-29 工作日志' }));
-    expect(screen.queryByText('完成登录模块修复')).not.toBeInTheDocument();
-
-    fireEvent.change(screen.getByLabelText('开始日期'), { target: { value: '2026-07-20' } });
-    expect(screen.getByText('每日 AI 工作日志')).toBeInTheDocument();
-
-    fireEvent.change(screen.getByLabelText('日报日期'), { target: { value: '2026-07-20' } });
-    await user.click(screen.getByRole('button', { name: '查询日报' }));
-    await waitFor(() => expect(mocks.getAIDailyWorkLogs).toHaveBeenLastCalledWith({
-      employeeId: undefined,
-      startDate: '2026-07-20',
-      endDate: '2026-07-20',
-    }));
+    expect(await screen.findByText('我的 AI 工作记录')).toBeInTheDocument();
+    expect(screen.queryByText('每日 AI 工作日志')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('日报日期')).not.toBeInTheDocument();
   });
 
   it('gives daily token columns a full-height plotting area', async () => {
@@ -168,7 +120,7 @@ describe('WorkdayPage', () => {
     expect(firstDay).toHaveClass('h-full');
   });
 
-  it('lets administrators select an employee and loads that employees daily logs', async () => {
+  it('lets administrators select an employee and view team AI work records', async () => {
     const adminOptions = {
       ...selfOptions,
       mode: 'admin' as const,
@@ -180,15 +132,8 @@ describe('WorkdayPage', () => {
 
     render(<WorkdayPage />);
 
-    expect(await screen.findByText('团队 AI 使用')).toBeInTheDocument();
+    expect(await screen.findByText('团队 AI 工作记录')).toBeInTheDocument();
     expect(screen.getByLabelText('员工')).toHaveValue('tangweixiang');
-    expect(screen.queryByRole('button', { name: '生成区间工作报告' })).not.toBeInTheDocument();
-    await waitFor(() => expect(mocks.getAIDailyWorkLogs).toHaveBeenCalledWith({
-      employeeId: 'tangweixiang',
-      startDate: expect.any(String),
-      endDate: expect.any(String),
-    }));
-    const adminCall = mocks.getAIDailyWorkLogs.mock.calls.at(-1)?.[0];
-    expect(adminCall.startDate).toBe(adminCall.endDate);
+    expect(screen.queryByText('每日 AI 工作日志')).not.toBeInTheDocument();
   });
 });

@@ -5,6 +5,7 @@ import { useRouter, usePathname } from 'next/navigation';
 import {
   BrainCircuit,
   CalendarClock,
+  FileText,
   Activity,
   LibraryBig,
   LogOut,
@@ -32,7 +33,8 @@ const NAV: {
   { href: '/chat', label: '问答', icon: MessageCircle },
   { href: '/knowledge', label: '知识库', icon: LibraryBig },
   { href: '/wiki', label: '项目 Wiki', icon: Network },
-  { href: '/workday', label: 'AI 工作日', icon: CalendarClock },
+  { href: '/workday', label: 'AI 工作记录', icon: CalendarClock },
+  { href: '/worklogs', label: 'AI 工作日志', icon: FileText },
   { href: '/monitor/setup', label: 'AI Monitor', icon: Activity },
   { href: '/members', label: '成员管理', icon: Users },
   { href: '/admin', label: '项目管理', icon: Settings },

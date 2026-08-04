@@ -386,7 +386,7 @@ export default function MonitorSetupPage() {
                     className="inline-flex h-10 w-full items-center justify-center gap-1.5 rounded-lg border border-[#d7e0ec] bg-white px-4 text-sm font-medium text-[#253655] hover:bg-[#f7f9fc] sm:w-auto"
                   >
                     <ExternalLink size={17} aria-hidden="true" />
-                    打开 AI 工作日
+                    打开 AI 工作记录
                   </a>
                 </div>
               </div>

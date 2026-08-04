@@ -964,7 +964,7 @@ export async function listAuditLogs(
   return call<AuditLog[]>(`/v4/admin/audit-logs?${qs}`);
 }
 
-// AI 工作日
+// AI 工作记录
 export async function getWorkdaySummary(
   projectId: string,
   params: WorkdaySummaryParams,

@@ -21,13 +21,13 @@ vi.mock('@/lib/api', () => ({
   logout: vi.fn(),
 }));
 
-describe('Shell workday navigation', () => {
+describe('Shell AI record navigation', () => {
   beforeEach(() => {
     mocks.push.mockReset();
     mocks.refresh.mockReset();
   });
 
-  it('renders an active icon navigation button and opens the workday page', async () => {
+  it('renames the workday entry and adds a separate work-log page', async () => {
     const user = userEvent.setup();
     render(
       <Shell
@@ -42,13 +42,17 @@ describe('Shell workday navigation', () => {
       </Shell>,
     );
 
-    const link = screen.getByRole('button', { name: 'AI 工作日' });
+    const link = screen.getByRole('button', { name: 'AI 工作记录' });
     expect(link).toHaveClass('bg-brand-500/10');
     expect(link.querySelector('svg')).not.toBeNull();
+    const worklogLink = screen.getByRole('button', { name: 'AI 工作日志' });
     expect(screen.getByRole('button', { name: '成员管理' })).toBeInTheDocument();
 
     await user.click(link);
     expect(mocks.push).toHaveBeenCalledWith('/workday');
+
+    await user.click(worklogLink);
+    expect(mocks.push).toHaveBeenCalledWith('/worklogs');
   });
 
   it('opens the member-management navigation for project members', async () => {
