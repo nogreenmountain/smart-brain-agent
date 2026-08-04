@@ -130,21 +130,32 @@ describe('WorkdayPage', () => {
     mocks.getAIDailyWorkLogs.mockResolvedValue(dailyLogs);
   });
 
-  it('shows automatic daily work logs without manual report controls', async () => {
+  it('queries one daily work log by date and keeps details collapsed by default', async () => {
     const user = userEvent.setup();
     render(<WorkdayPage />);
 
     expect(await screen.findByText('我的 AI 使用')).toBeInTheDocument();
     expect(await screen.findByText('每日 AI 工作日志')).toBeInTheDocument();
-    expect(screen.getByText('完成登录模块修复')).toBeInTheDocument();
+    expect(screen.queryByText('完成登录模块修复')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '生成区间工作报告' })).not.toBeInTheDocument();
 
+    const toggle = screen.getByRole('button', { name: '展开 2026-07-29 工作日志' });
+    await user.click(toggle);
+    expect(screen.getByText('完成登录模块修复')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '收起 2026-07-29 工作日志' })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: '收起 2026-07-29 工作日志' }));
+    expect(screen.queryByText('完成登录模块修复')).not.toBeInTheDocument();
+
     fireEvent.change(screen.getByLabelText('开始日期'), { target: { value: '2026-07-20' } });
-    await user.click(screen.getByRole('button', { name: '查询记录' }));
+    expect(screen.getByText('每日 AI 工作日志')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('日报日期'), { target: { value: '2026-07-20' } });
+    await user.click(screen.getByRole('button', { name: '查询日报' }));
     await waitFor(() => expect(mocks.getAIDailyWorkLogs).toHaveBeenLastCalledWith({
       employeeId: undefined,
       startDate: '2026-07-20',
-      endDate: expect.any(String),
+      endDate: '2026-07-20',
     }));
   });
 
@@ -177,5 +188,7 @@ describe('WorkdayPage', () => {
       startDate: expect.any(String),
       endDate: expect.any(String),
     }));
+    const adminCall = mocks.getAIDailyWorkLogs.mock.calls.at(-1)?.[0];
+    expect(adminCall.startDate).toBe(adminCall.endDate);
   });
 });

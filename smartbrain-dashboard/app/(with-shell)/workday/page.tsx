@@ -101,16 +101,22 @@ export default function WorkdayPage() {
   const [employeeId, setEmployeeId] = useState('');
   const [startDate, setStartDate] = useState(() => shiftDate(today, -6));
   const [endDate, setEndDate] = useState(today);
+  const [worklogDate, setWorklogDate] = useState(today);
   const [source, setSource] = useState<AIUsageSource | ''>('');
   const [result, setResult] = useState<AIUsageQueryResult | null>(null);
   const [dailyLogs, setDailyLogs] = useState<AIDailyWorkLogList | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [expandedDailyLogs, setExpandedDailyLogs] = useState<Set<string>>(new Set());
   const [loadingOptions, setLoadingOptions] = useState(true);
   const [loadingRecords, setLoadingRecords] = useState(false);
+  const [loadingDailyLogs, setLoadingDailyLogs] = useState(false);
   const [error, setError] = useState('');
 
   const adminMode = options?.mode === 'admin';
   const employeeOptions = options?.employees ?? [];
+  const worklogEmployeeName = adminMode
+    ? employeeOptions.find((item) => item.id === employeeId)?.name
+    : options?.current_employee.name;
 
   useEffect(() => {
     let active = true;
@@ -156,14 +162,16 @@ export default function WorkdayPage() {
       limit: 100,
     };
     setLoadingRecords(true);
+    setLoadingDailyLogs(true);
     setError('');
     setDailyLogs(null);
+    setExpandedDailyLogs(new Set());
     try {
       const [records, logs] = await Promise.all([
         getAIUsageRecords(params),
         getAIDailyWorkLogs({
-          startDate,
-          endDate,
+          startDate: worklogDate,
+          endDate: worklogDate,
           employeeId: mode === 'admin' ? selectedEmployee : undefined,
         }),
       ]);
@@ -173,6 +181,28 @@ export default function WorkdayPage() {
       setError(requestError instanceof Error ? requestError.message : 'AI 使用记录查询失败');
     } finally {
       setLoadingRecords(false);
+      setLoadingDailyLogs(false);
+    }
+  }
+
+  async function loadDailyLogs(dateOverride?: string) {
+    const mode = options?.mode;
+    if (!mode || loadingDailyLogs) return;
+    if (mode === 'admin' && !employeeId) return;
+    const selectedDate = dateOverride ?? worklogDate;
+    setLoadingDailyLogs(true);
+    setError('');
+    setExpandedDailyLogs(new Set());
+    try {
+      setDailyLogs(await getAIDailyWorkLogs({
+        startDate: selectedDate,
+        endDate: selectedDate,
+        employeeId: mode === 'admin' ? employeeId : undefined,
+      }));
+    } catch (requestError: unknown) {
+      setError(requestError instanceof Error ? requestError.message : 'AI 工作日志查询失败');
+    } finally {
+      setLoadingDailyLogs(false);
     }
   }
 
@@ -181,15 +211,28 @@ export default function WorkdayPage() {
     void loadRecords();
   }
 
+  function submitDailyLogQuery(event: FormEvent) {
+    event.preventDefault();
+    void loadDailyLogs();
+  }
+
   function setRange(days: number) {
     setStartDate(shiftDate(today, -(days - 1)));
     setEndDate(today);
     setResult(null);
-    setDailyLogs(null);
   }
 
   function toggleRecord(id: string) {
     setExpanded((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleDailyLog(id: string) {
+    setExpandedDailyLogs((current) => {
       const next = new Set(current);
       if (next.has(id)) next.delete(id);
       else next.add(id);
@@ -227,7 +270,7 @@ export default function WorkdayPage() {
           {adminMode && (
             <div className="mb-3 grid gap-3 sm:grid-cols-[minmax(260px,420px)]">
               <Field label="员工" htmlFor="usage-employee">
-                <select id="usage-employee" className={selectClass} value={employeeId} onChange={(event) => { setEmployeeId(event.target.value); setResult(null); setDailyLogs(null); }}>
+                <select id="usage-employee" className={selectClass} value={employeeId} onChange={(event) => { setEmployeeId(event.target.value); setResult(null); setDailyLogs(null); setExpandedDailyLogs(new Set()); }}>
                   {employeeOptions.length === 0 && <option value="">暂无可查询员工</option>}
                   {employeeOptions.map((item) => <option key={item.id} value={item.id}>{item.name} ({item.email.split('@')[0]})</option>)}
                 </select>
@@ -237,13 +280,13 @@ export default function WorkdayPage() {
 
           <div className="grid items-end gap-3 sm:grid-cols-2 lg:grid-cols-[150px_150px_minmax(190px,1fr)_auto]">
             <Field label="开始日期" htmlFor="usage-start-date">
-              <Input id="usage-start-date" type="date" value={startDate} max={endDate} onChange={(event) => { setStartDate(event.target.value); setResult(null); setDailyLogs(null); }} />
+              <Input id="usage-start-date" type="date" value={startDate} max={endDate} onChange={(event) => { setStartDate(event.target.value); setResult(null); }} />
             </Field>
             <Field label="结束日期" htmlFor="usage-end-date">
-              <Input id="usage-end-date" type="date" value={endDate} min={startDate} onChange={(event) => { setEndDate(event.target.value); setResult(null); setDailyLogs(null); }} />
+              <Input id="usage-end-date" type="date" value={endDate} min={startDate} onChange={(event) => { setEndDate(event.target.value); setResult(null); }} />
             </Field>
             <Field label="AI 来源" htmlFor="usage-source">
-              <select id="usage-source" className={selectClass} value={source} onChange={(event) => { setSource(event.target.value as AIUsageSource | ''); setResult(null); setDailyLogs(null); }}>
+              <select id="usage-source" className={selectClass} value={source} onChange={(event) => { setSource(event.target.value as AIUsageSource | ''); setResult(null); }}>
                 <option value="">全部来源</option>
                 {Object.entries(SOURCE_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
               </select>
@@ -263,6 +306,25 @@ export default function WorkdayPage() {
         </form>
 
         {error && <ErrorBanner message={error} />}
+        {!loadingOptions && options && (
+          <div className="mx-auto w-full max-w-[1320px] px-4 pt-6 md:px-6">
+            <DailyWorkLogsPanel
+              date={worklogDate}
+              employeeName={worklogEmployeeName ?? '当前员工'}
+              expanded={expandedDailyLogs}
+              loading={loadingDailyLogs}
+              logs={dailyLogs}
+              maxDate={today}
+              onDateChange={(value) => {
+                setWorklogDate(value);
+                setDailyLogs(null);
+                setExpandedDailyLogs(new Set());
+              }}
+              onQuery={submitDailyLogQuery}
+              onToggle={toggleDailyLog}
+            />
+          </div>
+        )}
         {(loadingOptions || loadingRecords) && !result && (
           <div className="flex items-center justify-center gap-3 py-24 text-sm text-[#6c7b91]"><LoadingDots />正在汇总 AI 使用记录</div>
         )}
@@ -285,8 +347,6 @@ export default function WorkdayPage() {
                 {result.warnings.map((warning) => <div key={warning} className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900"><AlertTriangle className="mt-0.5 shrink-0" size={15} />{warning}</div>)}
               </div>
             )}
-
-            <DailyWorkLogsPanel logs={dailyLogs} />
 
             {result.summary.record_count === 0 ? (
               <EmptyState icon="" title="所选区间没有 AI 使用记录" hint="可调整日期或 AI 来源后重新查询" />
@@ -339,53 +399,97 @@ function Metric({ icon, label, value, detail, tone }: { icon: ReactNode; label: 
   return <div className="min-w-0 rounded-lg border border-[#dde4ee] bg-white p-4"><div className="flex items-center gap-2 text-xs font-medium text-[#6c7b91]"><span className={`flex h-7 w-7 items-center justify-center rounded-md ${TONES[tone]}`}>{icon}</span>{label}</div><p className="mt-3 truncate text-2xl font-semibold text-[#0b1930]">{value}</p><p className="mt-1 truncate text-[11px] text-[#8491a4]" title={detail}>{detail}</p></div>;
 }
 
-function DailyWorkLogsPanel({ logs }: { logs: AIDailyWorkLogList | null }) {
+function DailyWorkLogsPanel({
+  date,
+  employeeName,
+  expanded,
+  loading,
+  logs,
+  maxDate,
+  onDateChange,
+  onQuery,
+  onToggle,
+}: {
+  date: string;
+  employeeName: string;
+  expanded: Set<string>;
+  loading: boolean;
+  logs: AIDailyWorkLogList | null;
+  maxDate: string;
+  onDateChange: (value: string) => void;
+  onQuery: (event: FormEvent) => void;
+  onToggle: (id: string) => void;
+}) {
   const items = logs?.items ?? [];
   return (
-    <section className="mt-6 border-t border-[#cfd9e6] pt-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+    <section className="border-t border-[#cfd9e6] pt-5">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
         <div className="flex items-center gap-2">
           <span className="flex h-8 w-8 items-center justify-center rounded-md bg-[#eaf2ff] text-[#2463a9]"><FileText size={17} /></span>
           <div>
             <h2 className="text-base font-semibold text-[#0b1930]">每日 AI 工作日志</h2>
-            <p className="mt-0.5 text-xs text-[#6c7b91]">{logs?.employee.name ?? '当前员工'} · Asia/Shanghai</p>
+            <p className="mt-0.5 text-xs text-[#6c7b91]">{logs?.employee.name ?? employeeName} · Asia/Shanghai</p>
           </div>
         </div>
-        <span className="inline-flex h-8 items-center rounded-md border border-[#cbd8e8] bg-white px-3 text-xs font-medium text-[#53647d]">{items.length} 天</span>
+        <form onSubmit={onQuery} className="flex w-full items-end gap-2 sm:w-auto">
+          <label className="min-w-0 flex-1 sm:w-44 sm:flex-none" htmlFor="daily-worklog-date">
+            <span className="mb-1.5 block text-xs font-medium text-[#53647d]">日报日期</span>
+            <Input id="daily-worklog-date" type="date" value={date} max={maxDate} onChange={(event) => onDateChange(event.target.value)} />
+          </label>
+          <Button type="submit" className="shrink-0" disabled={loading}>
+            {loading ? <><LoadingDots /> 查询中</> : <><Search size={16} aria-hidden="true" /> 查询日报</>}
+          </Button>
+        </form>
       </div>
 
-      {items.length === 0 ? (
-        <div className="mt-3 border-y border-[#dde4ee] bg-white px-4 py-7 text-center text-sm text-[#6c7b91]">所选日期范围暂无有效 Agent 工作日志</div>
+      {logs === null ? (
+        <div className="mt-3 border-y border-[#dde4ee] bg-white px-4 py-5 text-center text-sm text-[#6c7b91]">选择日期后查询当天 Agent 工作日志</div>
+      ) : items.length === 0 ? (
+        <div className="mt-3 border-y border-[#dde4ee] bg-white px-4 py-5 text-center text-sm text-[#6c7b91]">{date} 暂无有效 Agent 工作日志</div>
       ) : (
         <div className="mt-3 divide-y divide-[#dde4ee] border-y border-[#dde4ee] bg-white">
-          {items.map((log) => (
-            <article key={log.id} className="px-4 py-5 md:px-5">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <h3 className="text-sm font-semibold text-[#172844]">{log.work_date}</h3>
-                  <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-[#6c7b91]">
-                    <span>{log.work_items.length} 项工作</span>
-                    <span>{log.source_count} 个来源会话</span>
-                    <span className="inline-flex items-center gap-1"><Clock3 size={12} />{formatDateTime(log.generated_at)}</span>
-                  </p>
-                </div>
-                <span className="max-w-full truncate rounded-md border border-[#d7e0ec] bg-[#f8fafc] px-2 py-1 text-[11px] text-[#6c7b91]" title={log.model}>{log.model}</span>
-              </div>
+          {items.map((log) => {
+            const isExpanded = expanded.has(log.id);
+            return (
+              <article key={log.id}>
+                <button
+                  type="button"
+                  onClick={() => onToggle(log.id)}
+                  aria-expanded={isExpanded}
+                  aria-label={`${isExpanded ? '收起' : '展开'} ${log.work_date} 工作日志`}
+                  className="flex w-full items-center gap-3 px-4 py-3.5 text-left hover:bg-[#f8fafc] md:px-5"
+                >
+                  {isExpanded ? <ChevronDown className="shrink-0 text-[#607086]" size={17} /> : <ChevronRight className="shrink-0 text-[#607086]" size={17} />}
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-sm font-semibold text-[#172844]">{log.work_date}</span>
+                    <span className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-[#6c7b91]">
+                      <span>{log.work_items.length} 项工作</span>
+                      <span>{log.source_count} 个来源会话</span>
+                      <span className="inline-flex items-center gap-1"><Clock3 size={12} />{formatDateTime(log.generated_at)}</span>
+                    </span>
+                  </span>
+                  <span className="hidden max-w-52 truncate rounded-md border border-[#d7e0ec] bg-[#f8fafc] px-2 py-1 text-[11px] text-[#6c7b91] sm:inline" title={log.model}>{log.model}</span>
+                </button>
 
-              <div className="mt-5 grid gap-x-8 gap-y-6 lg:grid-cols-2">
-                {log.work_items.map((item) => (
-                  <div key={`${log.id}-${item.title}`} className="min-w-0 border-l-2 border-[#8eb4dd] pl-4">
-                    <h4 className="text-sm font-semibold text-[#172844]">{item.title}</h4>
-                    {item.problem && <p className="mt-2 text-sm leading-6 text-[#53647d]">{item.problem}</p>}
-                    {item.actions.length > 0 && <WorklogList label="执行" values={item.actions} />}
-                    {item.result && <div className="mt-3"><p className="text-[11px] font-medium text-[#7a879a]">结果</p><p className="mt-1 text-sm leading-6 text-[#334760]">{item.result}</p></div>}
-                    {item.artifacts.length > 0 && <WorklogList label="产出" values={item.artifacts} />}
-                    {item.validation.length > 0 && <WorklogList label="验证" values={item.validation} />}
+                {isExpanded && (
+                  <div className="border-t border-[#edf1f6] bg-[#fbfcfe] px-4 py-5 md:px-5">
+                    <div className="grid gap-x-8 gap-y-6 lg:grid-cols-2">
+                      {log.work_items.map((item) => (
+                        <div key={`${log.id}-${item.title}`} className="min-w-0 border-l-2 border-[#8eb4dd] pl-4">
+                          <h4 className="text-sm font-semibold text-[#172844]">{item.title}</h4>
+                          {item.problem && <p className="mt-2 text-sm leading-6 text-[#53647d]">{item.problem}</p>}
+                          {item.actions.length > 0 && <WorklogList label="执行" values={item.actions} />}
+                          {item.result && <div className="mt-3"><p className="text-[11px] font-medium text-[#7a879a]">结果</p><p className="mt-1 text-sm leading-6 text-[#334760]">{item.result}</p></div>}
+                          {item.artifacts.length > 0 && <WorklogList label="产出" values={item.artifacts} />}
+                          {item.validation.length > 0 && <WorklogList label="验证" values={item.validation} />}
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                ))}
-              </div>
-            </article>
-          ))}
+                )}
+              </article>
+            );
+          })}
         </div>
       )}
     </section>
