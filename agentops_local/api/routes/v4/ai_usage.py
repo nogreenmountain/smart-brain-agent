@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from agentops.ai_usage.access import (
     UsageAccessError,
+    is_employee_account_email,
     resolve_employee_scope,
     validate_date_range,
 )
@@ -309,6 +310,8 @@ def _employee_options(
     ).all()
     employees: dict[str, UsageEmployeeOption] = {}
     for row in rows:
+        if not is_employee_account_email(row.email):
+            continue
         employee_id, employee_name = derive_employee_identity(
             user_id=row.user_id,
             email=row.email,

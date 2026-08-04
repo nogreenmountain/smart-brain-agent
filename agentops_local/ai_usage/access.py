@@ -3,6 +3,14 @@ from __future__ import annotations
 from datetime import date
 
 
+SYSTEM_ACCOUNT_EMAILS = frozenset({"admin@agentops.local"})
+
+
+def is_employee_account_email(email: str | None) -> bool:
+    normalized = (email or "").strip().lower()
+    return bool(normalized) and normalized not in SYSTEM_ACCOUNT_EMAILS
+
+
 class UsageAccessError(Exception):
     def __init__(self, status_code: int, detail: str) -> None:
         self.status_code = status_code

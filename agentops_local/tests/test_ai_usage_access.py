@@ -22,6 +22,12 @@ access = _load("access")
 
 
 class AIUsageAccessTests(unittest.TestCase):
+    def test_system_accounts_are_not_employee_accounts(self) -> None:
+        self.assertFalse(access.is_employee_account_email("admin@agentops.local"))
+        self.assertFalse(access.is_employee_account_email(" ADMIN@AGENTOPS.LOCAL "))
+        self.assertFalse(access.is_employee_account_email(None))
+        self.assertTrue(access.is_employee_account_email("hanshangbo@local.dev"))
+
     def test_regular_employee_scope_is_always_self(self) -> None:
         self.assertEqual(
             access.resolve_employee_scope(
