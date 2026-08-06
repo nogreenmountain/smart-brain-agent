@@ -44,6 +44,9 @@ AIUsageSource = Literal[
     "openai_compliance",
     "smartbrain",
 ]
+AIUsageMode = Literal["self", "admin", "statistics"]
+
+CONVERSATION_SYNC_GRACE_PERIOD = timedelta(minutes=15)
 
 DEPARTMENTS = (
     ("research", "研发"),
@@ -68,10 +71,11 @@ class UsageEmployeeOption(BaseModel):
     name: str
     email: str
     project_ids: list[uuid.UUID] = Field(default_factory=list)
+    detail_visible_to_admin: bool = False
 
 
 class UsageOptionsResponse(BaseModel):
-    mode: Literal["self", "admin"]
+    mode: AIUsageMode
     current_employee: UsageEmployeeOption
     departments: list[UsageDepartmentOption]
     projects: list[UsageProjectOption]
@@ -150,7 +154,7 @@ class UsageSummaryResponse(BaseModel):
 
 
 class UsageQueryResponse(BaseModel):
-    mode: Literal["self", "admin"]
+    mode: AIUsageMode
     employee: UsageEmployeeOption
     projects: list[UsageProjectOption]
     timezone: Literal["Asia/Shanghai"] = "Asia/Shanghai"
@@ -158,6 +162,7 @@ class UsageQueryResponse(BaseModel):
     records: list[UsageRecordResponse]
     has_more: bool
     warnings: list[str]
+    detail_visible: bool = True
 
 
 class UsageReportRequest(BaseModel):
@@ -206,7 +211,8 @@ class DailyWorkLogListResponse(BaseModel):
 def _profile_for_user(orm: Session, user_id: uuid.UUID):
     return orm.execute(
         text("""
-            SELECT au.email, pu.full_name
+            SELECT au.email, pu.full_name, pu.nickname,
+                   COALESCE(pu.ai_detail_visible_to_admin, false) AS ai_detail_visible_to_admin
             FROM auth.users au
             LEFT JOIN public.users pu ON pu.id = au.id
             WHERE au.id = :uid
@@ -222,13 +228,14 @@ def _current_employee(orm: Session, user_id: uuid.UUID) -> UsageEmployeeOption:
     employee_id, employee_name = derive_employee_identity(
         user_id=user_id,
         email=profile.email,
-        full_name=profile.full_name,
+        full_name=getattr(profile, "nickname", None) or profile.full_name,
     )
     return UsageEmployeeOption(
         id=employee_id,
         name=employee_name,
         email=profile.email,
         project_ids=[],
+        detail_visible_to_admin=bool(getattr(profile, "ai_detail_visible_to_admin", False)),
     )
 
 
@@ -301,11 +308,12 @@ def _employee_options(
 ) -> list[UsageEmployeeOption]:
     rows = orm.execute(
         text("""
-            SELECT au.id AS user_id, au.email, pu.full_name
+            SELECT au.id AS user_id, au.email, pu.full_name, pu.nickname,
+                   COALESCE(pu.ai_detail_visible_to_admin, false) AS ai_detail_visible_to_admin
             FROM auth.users au
             LEFT JOIN public.users pu ON pu.id = au.id
             WHERE au.email IS NOT NULL
-            ORDER BY COALESCE(pu.full_name, au.email), au.email
+            ORDER BY COALESCE(NULLIF(BTRIM(pu.nickname), ''), pu.full_name, au.email), au.email
         """),
     ).all()
     employees: dict[str, UsageEmployeeOption] = {}
@@ -315,7 +323,7 @@ def _employee_options(
         employee_id, employee_name = derive_employee_identity(
             user_id=row.user_id,
             email=row.email,
-            full_name=row.full_name,
+            full_name=getattr(row, "nickname", None) or row.full_name,
         )
         if employee_id not in employees:
             employees[employee_id] = UsageEmployeeOption(
@@ -323,6 +331,7 @@ def _employee_options(
                 name=employee_name,
                 email=row.email,
                 project_ids=[],
+                detail_visible_to_admin=bool(getattr(row, "ai_detail_visible_to_admin", False)),
             )
     return sorted(employees.values(), key=lambda item: (item.name, item.email))
 
@@ -333,9 +342,9 @@ def _usage_options(
 ) -> UsageOptionsResponse:
     is_admin = _is_org_admin(orm, user_id)
     current = _current_employee(orm, user_id)
-    employees = _employee_options(orm) if is_admin else []
+    employees = _employee_options(orm)
     return UsageOptionsResponse(
-        mode="admin" if is_admin else "self",
+        mode="admin" if is_admin else "statistics",
         current_employee=current,
         departments=[UsageDepartmentOption(id=item[0], name=item[1]) for item in DEPARTMENTS],
         projects=[],
@@ -354,21 +363,20 @@ def _resolve_scope(
     department_id: str | None,
     project_id: uuid.UUID | None,
     requested_employee_id: str | None,
-) -> tuple[Literal["self", "admin"], UsageEmployeeOption, list[UsageProjectOption]]:
+) -> tuple[AIUsageMode, UsageEmployeeOption, list[UsageProjectOption]]:
     options = _usage_options(orm, user_id)
 
-    try:
-        employee_id = resolve_employee_scope(
-            is_admin=options.mode == "admin",
-            own_employee_id=options.current_employee.id,
-            requested_employee_id=requested_employee_id,
-        )
-    except UsageAccessError as error:
-        _raise_access(error)
-
-    if options.mode == "self":
-        employee = options.current_employee
-        return "self", employee, []
+    if options.mode == "admin":
+        try:
+            employee_id = resolve_employee_scope(
+                is_admin=True,
+                own_employee_id=options.current_employee.id,
+                requested_employee_id=requested_employee_id,
+            )
+        except UsageAccessError as error:
+            _raise_access(error)
+    else:
+        employee_id = requested_employee_id or options.current_employee.id
 
     employee = next(
         (
@@ -380,7 +388,46 @@ def _resolve_scope(
     )
     if employee is None:
         raise HTTPException(status_code=404, detail="employee account not found")
+    return options.mode, employee, []
+
+
+def _resolve_daily_log_scope(
+    orm: Session,
+    *,
+    user_id: uuid.UUID,
+    requested_employee_id: str | None,
+) -> tuple[Literal["self", "admin"], UsageEmployeeOption, list[UsageProjectOption]]:
+    options = _usage_options(orm, user_id)
+    if options.mode != "admin":
+        if requested_employee_id and requested_employee_id != options.current_employee.id:
+            raise HTTPException(
+                status_code=403,
+                detail="AI work logs are visible only to the employee and administrators",
+            )
+        return "self", options.current_employee, []
+
+    try:
+        employee_id = resolve_employee_scope(
+            is_admin=True,
+            own_employee_id=options.current_employee.id,
+            requested_employee_id=requested_employee_id,
+        )
+    except UsageAccessError as error:
+        _raise_access(error)
+    employee = next((item for item in options.employees if item.id == employee_id), None)
+    if employee is None:
+        raise HTTPException(status_code=404, detail="employee account not found")
     return "admin", employee, []
+
+
+def _can_view_detailed_records(
+    mode: AIUsageMode,
+    current: UsageEmployeeOption,
+    employee: UsageEmployeeOption,
+) -> bool:
+    if current.id == employee.id:
+        return True
+    return mode == "admin" and employee.detail_visible_to_admin
 
 
 def _chat_records(
@@ -664,6 +711,20 @@ def _merge_synced_conversations(
     return merged_chats, remaining_traces
 
 
+def _has_stale_unsynced_trace(
+    chat_records: list[UsageRecord],
+    trace_records: list[UsageRecord],
+) -> bool:
+    if not trace_records:
+        return False
+    synced_chats = [item for item in chat_records if item.source == "cc_switch"]
+    if not synced_chats:
+        return True
+    latest_sync = max(item.ended_at or item.started_at for item in synced_chats)
+    latest_trace = max(item.ended_at or item.started_at for item in trace_records)
+    return latest_trace > latest_sync + CONVERSATION_SYNC_GRACE_PERIOD
+
+
 def _collect_usage(
     orm: Session,
     clickhouse: Any,
@@ -703,7 +764,10 @@ def _collect_usage(
         trace_records,
     )
     all_records = sorted(
-        [*chat_records, *trace_records],
+        [
+            replace(item, employee_name=employee.name)
+            for item in [*chat_records, *trace_records]
+        ],
         key=lambda item: item.started_at,
         reverse=True,
     )
@@ -716,7 +780,7 @@ def _collect_usage(
     visible_records = all_records[:record_limit]
     if include_messages:
         visible_records = _attach_messages(orm, visible_records)
-    if any(item.record_type == "trace" for item in visible_records):
+    if _has_stale_unsynced_trace(chat_records, trace_records):
         warnings.append(
             "检测到尚未完成正文同步的 CC Switch 记录，请确认员工端对话同步组件在线。"
         )
@@ -804,6 +868,8 @@ def get_ai_usage_records(
         project_id=project_id,
         requested_employee_id=employee_id,
     )
+    options = _usage_options(orm, user_id)
+    detail_visible = _can_view_detailed_records(mode, options.current_employee, employee)
     summary, records, has_more, warnings = _collect_usage(
         orm,
         clickhouse,
@@ -812,8 +878,15 @@ def get_ai_usage_records(
         end_date=end_date,
         source=source,
         record_limit=limit,
-        include_messages=include_messages,
+        include_messages=include_messages and detail_visible,
     )
+    if not detail_visible:
+        records = []
+        has_more = False
+        if mode == "admin":
+            warnings.append("该成员未向管理员公开详细 AI 工作记录；当前仅显示 Token 统计。")
+        else:
+            warnings.append("当前仅显示 Token 统计；其他成员的具体对话和 AI 工作日志仅本人及管理员可见。")
     _audit(
         orm,
         request,
@@ -833,6 +906,7 @@ def get_ai_usage_records(
         records=[_record_response(item) for item in records],
         has_more=has_more,
         warnings=warnings,
+        detail_visible=detail_visible,
     )
 
 
@@ -853,11 +927,9 @@ def get_ai_daily_work_logs(
     except AuthzError as error:
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error
 
-    _, employee, projects = _resolve_scope(
+    _, employee, projects = _resolve_daily_log_scope(
         orm,
         user_id=user_id,
-        department_id=None,
-        project_id=None,
         requested_employee_id=employee_id,
     )
     rows = orm.execute(
@@ -887,7 +959,7 @@ def get_ai_daily_work_logs(
                 id=row.id,
                 work_date=row.work_date,
                 employee_id=row.employee_id,
-                employee_name=row.employee_name,
+                employee_name=employee.name,
                 report_markdown=row.report_markdown,
                 work_items=work_items or [],
                 source_count=row.source_count,
@@ -949,6 +1021,9 @@ def create_ai_usage_report(
     )
     if mode != "admin":
         raise HTTPException(status_code=403, detail="only administrators can generate AI usage reports")
+    options = _usage_options(orm, user_id)
+    if not _can_view_detailed_records(mode, options.current_employee, employee):
+        raise HTTPException(status_code=403, detail="member has not shared detailed AI records with administrators")
     summary, records, _, _ = _collect_usage(
         orm,
         clickhouse,

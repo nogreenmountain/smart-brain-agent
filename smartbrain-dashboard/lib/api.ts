@@ -20,6 +20,9 @@ export interface Me {
   user_id: string;
   email: string;
   full_name: string | null;
+  nickname?: string | null;
+  display_name?: string;
+  ai_detail_visible_to_admin?: boolean;
   memberships: OrgMembership[];
 }
 
@@ -39,6 +42,8 @@ export type ProjectRole = 'owner' | 'admin' | 'developer' | 'business_user';
 export interface ProjectMember {
   user_id: string;
   email: string;
+  nickname?: string | null;
+  display_name?: string;
   role: ProjectRole;
 }
 
@@ -130,11 +135,7 @@ export interface MaterialIntakeConfirmResult {
   intake_id: string;
   status: 'pending_review';
   raw_document_count: number;
-  curated_document_id: string;
   draft_id: string;
-  skill_count: number;
-  generation_model: string | null;
-  generation_used_fallback: boolean;
 }
 
 export type KnowledgeApprovalStatus = 'raw_uploaded' | 'pending_review' | 'approved' | 'rejected';
@@ -370,10 +371,11 @@ export interface AIUsageEmployeeOption {
   name: string;
   email: string;
   project_ids: string[];
+  detail_visible_to_admin?: boolean;
 }
 
 export interface AIUsageOptions {
-  mode: 'self' | 'admin';
+  mode: 'self' | 'admin' | 'statistics';
   current_employee: AIUsageEmployeeOption;
   departments: AIUsageDepartmentOption[];
   projects: AIUsageProjectOption[];
@@ -452,7 +454,7 @@ export interface AIUsageSummary {
 }
 
 export interface AIUsageQueryResult {
-  mode: 'self' | 'admin';
+  mode: 'self' | 'admin' | 'statistics';
   employee: AIUsageEmployeeOption;
   projects: AIUsageProjectOption[];
   timezone: 'Asia/Shanghai';
@@ -460,6 +462,7 @@ export interface AIUsageQueryResult {
   records: AIUsageRecord[];
   has_more: boolean;
   warnings: string[];
+  detail_visible?: boolean;
 }
 
 export interface AIUsageQueryParams {
@@ -520,6 +523,131 @@ export interface AIDailyWorkLogParams {
   employeeId?: string;
 }
 
+export type MemberWikiTaskType =
+  | 'development'
+  | 'debugging'
+  | 'deployment'
+  | 'configuration'
+  | 'data_processing'
+  | 'documentation'
+  | 'testing'
+  | 'research'
+  | 'operations'
+  | 'other';
+
+export type MemberWikiOutcome = 'success' | 'partial' | 'failure';
+
+export interface MemberWikiMember {
+  user_id: string;
+  employee_id: string;
+  name: string;
+  email: string;
+}
+
+export interface MemberWikiOptions {
+  mode: 'self' | 'admin';
+  current_member: MemberWikiMember;
+  members: MemberWikiMember[];
+}
+
+export interface MemberWikiExperience {
+  id: string;
+  employee_id: string;
+  employee_name: string;
+  experience_key: string;
+  title: string;
+  task_type: MemberWikiTaskType;
+  outcome: MemberWikiOutcome;
+  summary: string;
+  markdown_content: string;
+  tags: string[];
+  tools: string[];
+  confidence: number;
+  first_observed: string;
+  last_observed: string;
+  observation_count: number;
+  current_version: number;
+  updated_at: string;
+  lexical_score: number;
+  vector_score: number | null;
+}
+
+export interface MemberWikiOverview {
+  mode: 'self' | 'admin';
+  member: MemberWikiMember;
+  timezone: 'Asia/Shanghai';
+  summary: {
+    experience_count: number;
+    success_count: number;
+    failure_count: number;
+    latest_observed: string | null;
+  };
+  experiences: MemberWikiExperience[];
+  latest_run: {
+    id: string;
+    status: string;
+    cutoff_at: string;
+    updated_member_count: number;
+    session_count: number;
+    experience_count: number;
+    completed_at: string | null;
+  } | null;
+}
+
+export interface MemberWikiOverviewParams {
+  employeeId?: string;
+  query?: string;
+  taskType?: MemberWikiTaskType;
+  outcome?: MemberWikiOutcome;
+  tag?: string;
+  limit?: number;
+}
+
+export interface MeetingSummary {
+  id: string;
+  project_id: string;
+  project_name: string;
+  title: string;
+  meeting_date: string;
+  participants: string[];
+  tags: string[];
+  summary_markdown: string;
+  decisions: string[];
+  action_items: string[];
+  source_filename: string | null;
+  created_by: string;
+  created_by_name: string;
+  created_at: string;
+  updated_at: string;
+  lexical_score: number;
+  vector_score: number | null;
+}
+
+export interface MeetingSummaryList {
+  items: MeetingSummary[];
+}
+
+export interface MeetingSummaryListParams {
+  projectId: string;
+  query?: string;
+  tag?: string;
+  meetingDateFrom?: string;
+  meetingDateTo?: string;
+  limit?: number;
+}
+
+export interface CreateMeetingSummaryInput {
+  projectId: string;
+  title: string;
+  meetingDate: string;
+  participants: string;
+  tags: string;
+  summary: string;
+  decisions: string;
+  actionItems: string;
+  file: File | null;
+}
+
 export type DepartmentId = 'research' | 'marketing' | 'business';
 
 export interface Department {
@@ -571,6 +699,12 @@ export interface ProjectWikiLink {
   relation: string;
 }
 
+export interface ProjectWikiUploader {
+  user_id: string;
+  name: string;
+  email: string;
+}
+
 export interface ProjectWikiPage {
   id: string;
   page_key: string;
@@ -586,6 +720,7 @@ export interface ProjectWikiPage {
   verification_status: 'generated' | 'verified' | 'stale';
   valid_from: string | null;
   valid_until: string | null;
+  uploaded_by: ProjectWikiUploader | null;
   sources: ProjectWikiSource[];
   links: ProjectWikiLink[];
   created_at: string;
@@ -607,6 +742,7 @@ export interface ProjectWikiChange {
   contradiction: boolean;
   source_ids: string[];
   link_titles: string[];
+  uploaded_by: ProjectWikiUploader | null;
   created_at: string;
 }
 
@@ -748,9 +884,41 @@ export async function getMe(): Promise<Me> {
   return call<Me>('/v4/auth/me');
 }
 
+export async function updateMyProfile(
+  nickname: string | null,
+  aiDetailVisibleToAdmin: boolean,
+): Promise<Me> {
+  return call<Me>('/v4/auth/me/profile', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      nickname,
+      ai_detail_visible_to_admin: aiDetailVisibleToAdmin,
+    }),
+  });
+}
+
+export async function changeMyPassword(
+  currentPassword: string,
+  newPassword: string,
+): Promise<{ status: 'updated' }> {
+  return call<{ status: 'updated' }>('/v4/auth/me/password', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      current_password: currentPassword,
+      new_password: newPassword,
+    }),
+  });
+}
+
 // 项目
 export async function listProjects(): Promise<Project[]> {
   return call<Project[]>('/v4/projects');
+}
+
+export async function listProjectCatalog(): Promise<Project[]> {
+  return call<Project[]>('/v4/projects/catalog');
 }
 
 export async function createProject(input: {
@@ -916,6 +1084,12 @@ export async function confirmMaterialIntake(
   );
 }
 
+export async function cancelMaterialIntake(intakeId: string): Promise<void> {
+  return call<void>(`/v4/knowledge/material-intakes/${encodeURIComponent(intakeId)}`, {
+    method: 'DELETE',
+  });
+}
+
 export function originalMaterialDownloadUrl(intakeId: string, fileId: string): string {
   return `${getApiBase()}/v4/knowledge/material-intakes/${encodeURIComponent(intakeId)}/files/${encodeURIComponent(fileId)}/download`;
 }
@@ -1008,6 +1182,51 @@ export async function getAIDailyWorkLogs(
   });
   if (params.employeeId) qs.set('employee_id', params.employeeId);
   return call<AIDailyWorkLogList>(`/v4/ai-usage/daily-logs?${qs.toString()}`);
+}
+
+export async function getMemberWikiOptions(): Promise<MemberWikiOptions> {
+  return call<MemberWikiOptions>('/v4/member-wiki/options');
+}
+
+export async function getMemberWikiOverview(
+  params: MemberWikiOverviewParams = {},
+): Promise<MemberWikiOverview> {
+  const qs = new URLSearchParams();
+  if (params.employeeId) qs.set('employee_id', params.employeeId);
+  if (params.query) qs.set('query', params.query);
+  if (params.taskType) qs.set('task_type', params.taskType);
+  if (params.outcome) qs.set('outcome', params.outcome);
+  if (params.tag) qs.set('tag', params.tag);
+  qs.set('limit', String(params.limit ?? 50));
+  return call<MemberWikiOverview>(`/v4/member-wiki/overview?${qs.toString()}`);
+}
+
+export async function listMeetingSummaries(
+  params: MeetingSummaryListParams,
+): Promise<MeetingSummaryList> {
+  const qs = new URLSearchParams({ project_id: params.projectId });
+  if (params.query) qs.set('query', params.query);
+  if (params.tag) qs.set('tag', params.tag);
+  if (params.meetingDateFrom) qs.set('meeting_date_from', params.meetingDateFrom);
+  if (params.meetingDateTo) qs.set('meeting_date_to', params.meetingDateTo);
+  if (params.limit !== undefined) qs.set('limit', String(params.limit));
+  return call<MeetingSummaryList>(`/v4/meeting-summaries?${qs.toString()}`);
+}
+
+export async function createMeetingSummary(
+  input: CreateMeetingSummaryInput,
+): Promise<MeetingSummary> {
+  const body = new FormData();
+  body.set('project_id', input.projectId);
+  body.set('title', input.title);
+  body.set('meeting_date', input.meetingDate);
+  body.set('participants', input.participants);
+  body.set('tags', input.tags);
+  body.set('summary', input.summary);
+  body.set('decisions', input.decisions);
+  body.set('action_items', input.actionItems);
+  if (input.file) body.set('file', input.file);
+  return call<MeetingSummary>('/v4/meeting-summaries', { method: 'POST', body });
 }
 
 export async function createAIUsageReport(

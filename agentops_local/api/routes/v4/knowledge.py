@@ -182,10 +182,9 @@ def get_knowledge_ledger(
     reviewed_to: str | None = None,
     orm: Session = Depends(get_orm_session),
 ) -> KnowledgeLedgerResponse:
-    """Return a read-only project material ledger for project members."""
+    """Return a read-only project material ledger for any authenticated user."""
     try:
         user_id = current_user_id(request)
-        require_member(orm, user_id=user_id, project_id=project_id)
     except AuthzError as e:
         raise HTTPException(status_code=e.status_code, detail=e.detail)
 

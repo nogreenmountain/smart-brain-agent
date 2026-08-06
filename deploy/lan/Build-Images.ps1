@@ -23,7 +23,11 @@ Invoke-Step "Build AgentOps API base image" {
 }
 
 Invoke-Step "Build SmartBrain patched API image" {
-    docker build -f Dockerfile.api-workday -t agentops-api-local:patched-2026-07-28-material-memory-flow .
+    docker build -f Dockerfile.api-workday -t agentops-api-local:patched-2026-08-06-global-read .
+}
+
+Invoke-Step "Build SmartBrain Wiki MCP image" {
+    docker build -f Dockerfile.wiki-mcp -t smartbrain-wiki-mcp-local:latest .
 }
 
 if (-not $SkipAgentOpsDashboard) {

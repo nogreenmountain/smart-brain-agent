@@ -38,6 +38,7 @@ import {
   Project,
   MaterialIntakePreview,
   ProjectMemoryDraft,
+  cancelMaterialIntake,
   confirmMaterialIntake,
   previewProjectMaterials,
   reviewProjectMemoryDraft,
@@ -52,11 +53,11 @@ const statusLabel: Record<ProjectMemoryDraft['status'], string> = {
 };
 
 const materialRecommendationLabel = {
-  keep: '建议保留',
-  review: '建议确认',
+  keep: '通过检查',
+  review: '风险待确认',
   duplicate: '重复资料',
   sensitive: '包含敏感信息',
-  low_value: '价值较低',
+  low_value: '未通过检查',
 } as const;
 
 const materialRecommendationTone = {
@@ -126,7 +127,7 @@ export default function AdminPage() {
   const [uploadingMaterials, setUploadingMaterials] = useState(false);
   const [confirmingMaterials, setConfirmingMaterials] = useState(false);
   const [materialPreview, setMaterialPreview] = useState<MaterialIntakePreview | null>(null);
-  const [selectedMaterialIds, setSelectedMaterialIds] = useState<Set<string>>(new Set());
+  const [materialScanOpen, setMaterialScanOpen] = useState(false);
   const [toast, setToast] = useState<{ msg: string; kind: 'info' | 'error' } | null>(null);
 
   const departmentOptions = departments.map((department) => ({
@@ -198,14 +199,14 @@ export default function AdminPage() {
       setSelectedDraftId('');
       setSelectedMaterialFiles([]);
       setMaterialPreview(null);
-      setSelectedMaterialIds(new Set());
+      setMaterialScanOpen(false);
       return;
     }
     setEditProjectName(selectedProject.name);
     setEditCompletedAt(selectedProject.completed_at ? selectedProject.completed_at.slice(0, 10) : '');
     setSelectedMaterialFiles([]);
     setMaterialPreview(null);
-    setSelectedMaterialIds(new Set());
+    setMaterialScanOpen(false);
     if (materialFileRef.current) materialFileRef.current.value = '';
     void loadProjectMemory(selectedProject.id, canManageProject(selectedProject));
   }, [selectedProject]);
@@ -315,6 +316,8 @@ export default function AdminPage() {
 
   async function inspectMaterials() {
     if (!selectedProject || selectedMaterialFiles.length === 0 || uploadingMaterials) return;
+    setMaterialScanOpen(true);
+    setMaterialPreview(null);
     setUploadingMaterials(true);
     try {
       const result = await previewProjectMaterials(
@@ -323,8 +326,8 @@ export default function AdminPage() {
         selectedMaterialFiles,
       );
       setMaterialPreview(result);
-      setSelectedMaterialIds(new Set(result.items.filter((item) => item.included).map((item) => item.id)));
     } catch (error: unknown) {
+      setMaterialScanOpen(false);
       setToast({ msg: error instanceof Error ? error.message : '资料检查失败', kind: 'error' });
     } finally {
       setUploadingMaterials(false);
@@ -332,35 +335,44 @@ export default function AdminPage() {
   }
 
   async function confirmMaterials() {
-    if (!materialPreview || selectedMaterialIds.size === 0 || confirmingMaterials) return;
+    if (!materialPreview || confirmingMaterials) return;
+    const safeFileIds = materialPreview.items
+      .filter((item) => item.recommendation === 'keep' && item.included)
+      .map((item) => item.id);
+    if (safeFileIds.length === 0) return;
     setConfirmingMaterials(true);
     try {
-      const result = await confirmMaterialIntake(materialPreview.id, Array.from(selectedMaterialIds));
+      const result = await confirmMaterialIntake(materialPreview.id, safeFileIds);
       setSelectedMaterialFiles([]);
       setMaterialPreview(null);
-      setSelectedMaterialIds(new Set());
+      setMaterialScanOpen(false);
       if (materialFileRef.current) materialFileRef.current.value = '';
       if (selectedProjectCanManage && selectedProject) {
         await loadProjectMemory(selectedProject.id);
       }
       setToast({
-        msg: `已保存 ${result.raw_document_count} 份原始资料，提炼 ${result.skill_count} 个 Skill，等待负责人一次确认`,
+        msg: `已提交 ${result.raw_document_count} 份原始资料，等待管理员审批后入库`,
         kind: 'info',
       });
     } catch (error: unknown) {
-      setToast({ msg: error instanceof Error ? error.message : '保存和提炼失败', kind: 'error' });
+      setToast({ msg: error instanceof Error ? error.message : '提交资料失败', kind: 'error' });
     } finally {
       setConfirmingMaterials(false);
     }
   }
 
-  function togglePreviewItem(fileId: string, checked: boolean) {
-    setSelectedMaterialIds((current) => {
-      const next = new Set(current);
-      if (checked) next.add(fileId);
-      else next.delete(fileId);
-      return next;
-    });
+  async function cancelMaterials() {
+    if (uploadingMaterials || confirmingMaterials) return;
+    try {
+      if (materialPreview) await cancelMaterialIntake(materialPreview.id);
+      setMaterialPreview(null);
+      setMaterialScanOpen(false);
+      setSelectedMaterialFiles([]);
+      if (materialFileRef.current) materialFileRef.current.value = '';
+      setToast({ msg: '本批文件已全部取消，不会上传', kind: 'info' });
+    } catch (error: unknown) {
+      setToast({ msg: error instanceof Error ? error.message : '取消上传失败', kind: 'error' });
+    }
   }
 
   async function submitReview(decision: 'approve' | 'reject') {
@@ -381,8 +393,8 @@ export default function AdminPage() {
       );
       setToast({
         msg: decision === 'approve'
-          ? `已采用并发布 ${result.wiki_page_count} 个 Wiki Skill`
-          : '本批长期记忆候选已驳回',
+          ? `已批准原始资料入库，共写入 ${result.chunk_count} 个知识片段`
+          : '本批原始资料已驳回',
         kind: 'info',
       });
     } catch (error: unknown) {
@@ -671,7 +683,7 @@ export default function AdminPage() {
                           onChange={(event) => {
                             setSelectedMaterialFiles(Array.from(event.target.files || []));
                             setMaterialPreview(null);
-                            setSelectedMaterialIds(new Set());
+                            setMaterialScanOpen(false);
                           }}
                         />
                       </Field>
@@ -688,75 +700,11 @@ export default function AdminPage() {
                           {uploadingMaterials ? <LoadingDots /> : (
                             <>
                               <Sparkles size={16} aria-hidden={true} />
-                              AI 检查资料
+                              上传资料
                             </>
                           )}
                         </Button>
                       </div>
-                      {materialPreview && (
-                        <div className="border-t border-[#d7e0ec] pt-4">
-                          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                            <div>
-                              <h3 className="text-base font-semibold text-[#10213e]">资料体检</h3>
-                              <p className="mt-1 text-sm leading-6 text-[#6e7d97]">{materialPreview.summary}</p>
-                            </div>
-                            <span className="text-xs text-[#8b99ae]">
-                              {materialPreview.used_fallback ? '基础规则检查' : materialPreview.model || 'AI 检查'}
-                            </span>
-                          </div>
-                          <div className="mt-4 divide-y divide-[#e3e9f1] border-y border-[#e3e9f1]">
-                            {materialPreview.items.map((item) => {
-                              const blocked = item.recommendation === 'duplicate'
-                                || item.recommendation === 'sensitive'
-                                || item.recommendation === 'low_value';
-                              return (
-                                <label key={item.id} className="flex cursor-pointer items-start gap-3 py-3">
-                                  <input
-                                    type="checkbox"
-                                    className="mt-1 h-4 w-4 shrink-0 accent-[#4a7bff]"
-                                    checked={selectedMaterialIds.has(item.id)}
-                                    disabled={blocked}
-                                    onChange={(event) => togglePreviewItem(item.id, event.target.checked)}
-                                  />
-                                  <span className="min-w-0 flex-1">
-                                    <span className="flex flex-wrap items-center gap-2">
-                                      <span className="break-all text-sm font-medium text-[#10213e]">{item.filename}</span>
-                                      <span className={`rounded border px-2 py-0.5 text-xs font-medium ${materialRecommendationTone[item.recommendation]}`}>
-                                        {materialRecommendationLabel[item.recommendation]}
-                                      </span>
-                                    </span>
-                                    <span className="mt-1 block text-sm leading-6 text-[#6e7d97]">{item.reason}</span>
-                                  </span>
-                                </label>
-                              );
-                            })}
-                          </div>
-                          <div className="mt-4 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-                            <Button
-                              type="button"
-                              variant="secondary"
-                              onClick={() => {
-                                setMaterialPreview(null);
-                                setSelectedMaterialIds(new Set());
-                              }}
-                            >
-                              重新选择
-                            </Button>
-                            <Button
-                              type="button"
-                              disabled={selectedMaterialIds.size === 0 || confirmingMaterials}
-                              onClick={confirmMaterials}
-                            >
-                              {confirmingMaterials ? <LoadingDots /> : (
-                                <>
-                                  <CheckCircle2 size={16} aria-hidden={true} />
-                                  确认保存并提炼
-                                </>
-                              )}
-                            </Button>
-                          </div>
-                        </div>
-                      )}
                     </div>
                   </div>
                 )}
@@ -768,7 +716,7 @@ export default function AdminPage() {
                   <div className="flex items-center justify-between gap-2 border-b border-[#d7e0ec] bg-[#f7faff] px-5 py-4">
                     <div className="flex items-center gap-2 text-sm font-semibold text-[#10213e]">
                       <RefreshCw size={18} className="text-brand-600" aria-hidden="true" />
-                      待确认记忆
+                      待审批资料
                     </div>
                     <Button size="sm" variant="ghost" onClick={() => loadProjectMemory(selectedProject.id)}>
                       刷新
@@ -776,7 +724,7 @@ export default function AdminPage() {
                   </div>
                   <div className="p-4">
                     {drafts.length === 0 ? (
-                      <EmptyState title="当前没有待确认内容" hint="员工确认保存资料后，AI 提炼结果会出现在这里" />
+                      <EmptyState title="当前没有待审批资料" hint="员工提交通过安全检查的原始文件后，会出现在这里" />
                     ) : (
                       <div className="space-y-2">
                         {drafts.map((draft) => (
@@ -795,7 +743,7 @@ export default function AdminPage() {
                               <StatusBadge status={draft.status} />
                             </div>
                             <div className="mt-1 text-xs text-[#6e7d97]">
-                              {draft.source_count} 个资料 · {draft.skill_count || 0} 个 Skill · {fmtTime(draft.created_at)}
+                              {draft.source_count} 个原始文件 · {fmtTime(draft.created_at)}
                             </div>
                           </button>
                         ))}
@@ -826,7 +774,7 @@ export default function AdminPage() {
                             </Button>
                             <Button disabled={reviewing} onClick={() => submitReview('approve')}>
                               <CheckCircle2 size={17} aria-hidden="true" />
-                              采用并发布到 Wiki
+                              批准并入库
                             </Button>
                           </div>
                         )}
@@ -845,7 +793,7 @@ export default function AdminPage() {
                       </pre>
                     </div>
                   ) : (
-                    <EmptyState title="选择一个待确认批次" />
+                    <EmptyState title="选择一个待审批批次" />
                   )}
                 </div>
                 </section>
@@ -856,6 +804,86 @@ export default function AdminPage() {
           )}
         </div>
       </main>
+
+      {materialScanOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#10213e]/55 p-3 backdrop-blur-[2px] sm:p-6">
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="material-security-dialog-title"
+            className="max-h-[calc(100vh-1.5rem)] w-full max-w-3xl overflow-y-auto rounded-xl border border-white/70 bg-white shadow-[0_28px_80px_rgba(15,35,66,0.32)] sm:max-h-[calc(100vh-3rem)]"
+          >
+            <div className="border-b border-[#d7e0ec] px-5 py-4 sm:px-6">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h2 id="material-security-dialog-title" className="text-xl font-semibold text-[#10213e]">文件安全检查</h2>
+                  <p className="mt-1 text-sm leading-6 text-[#6e7d97]">
+                    大模型只检查隐私、个人信息、Token、凭据和敏感链接，不总结文件内容。
+                  </p>
+                </div>
+                {materialPreview && (
+                  <span className="shrink-0 text-xs text-[#8b99ae]">
+                    {materialPreview.used_fallback ? '基础规则检查' : materialPreview.model || 'AI 检查'}
+                  </span>
+                )}
+              </div>
+            </div>
+            <div className="px-5 py-5 sm:px-6">
+              {uploadingMaterials && !materialPreview ? (
+                <div className="flex min-h-48 flex-col items-center justify-center gap-3 text-sm text-[#6e7d97]">
+                  <LoadingDots />
+                  正在逐个读取文件并检查敏感信息…
+                </div>
+              ) : materialPreview ? (
+                <>
+                  <p className="text-sm leading-6 text-[#50627b]">{materialPreview.summary}</p>
+                  <div className="mt-4 divide-y divide-[#e3e9f1] border-y border-[#e3e9f1]">
+                    {materialPreview.items.map((item) => (
+                      <div key={item.id} className="flex items-start gap-3 py-3">
+                        <span className="min-w-0 flex-1">
+                          <span className="flex flex-wrap items-center gap-2">
+                            <span className="break-all text-sm font-medium text-[#10213e]">{item.filename}</span>
+                            <span className={`rounded border px-2 py-0.5 text-xs font-medium ${materialRecommendationTone[item.recommendation]}`}>
+                              {materialRecommendationLabel[item.recommendation]}
+                            </span>
+                          </span>
+                          <span className="mt-1 block text-sm leading-6 text-[#6e7d97]">{item.reason}</span>
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              ) : null}
+            </div>
+            <div className="flex flex-col-reverse gap-2 border-t border-[#d7e0ec] bg-[#f7faff] px-5 py-4 sm:flex-row sm:justify-end sm:px-6">
+              <Button
+                type="button"
+                variant="secondary"
+                disabled={uploadingMaterials || confirmingMaterials || !materialPreview}
+                onClick={cancelMaterials}
+              >
+                全部不上传
+              </Button>
+              <Button
+                type="button"
+                disabled={
+                  uploadingMaterials
+                  || confirmingMaterials
+                  || !materialPreview?.items.some((item) => item.recommendation === 'keep' && item.included)
+                }
+                onClick={confirmMaterials}
+              >
+                {confirmingMaterials ? <LoadingDots /> : (
+                  <>
+                    <CheckCircle2 size={16} aria-hidden={true} />
+                    上传通过检测的文件
+                  </>
+                )}
+              </Button>
+            </div>
+          </section>
+        </div>
+      )}
 
       {toast && <Toast message={toast.msg} kind={toast.kind} />}
     </div>

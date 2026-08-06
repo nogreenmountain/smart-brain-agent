@@ -85,19 +85,41 @@ describe('WorklogsPage', () => {
   });
 
   it('lets administrators query an employees work log', async () => {
+    const adminEmployee = { id: 'hanshangbo', name: '韩尚博', email: 'hanshangbo@local.dev', project_ids: [] };
     mocks.getAIUsageOptions.mockResolvedValueOnce({
       ...selfOptions,
       mode: 'admin' as const,
-      current_employee: { id: 'hanshangbo', name: '韩尚波', email: 'hanshangbo@local.dev', project_ids: [] },
-      employees: [employee],
+      current_employee: adminEmployee,
+      employees: [employee, adminEmployee],
     });
 
     render(<WorklogsPage />);
 
     expect(await screen.findByText('团队 AI 工作日志')).toBeInTheDocument();
-    expect(screen.getByLabelText('员工')).toHaveValue('tangweixiang');
+    expect(screen.getByLabelText('员工')).toHaveValue('hanshangbo');
     await waitFor(() => expect(mocks.getAIDailyWorkLogs).toHaveBeenCalledWith({
-      employeeId: 'tangweixiang',
+      employeeId: 'hanshangbo',
+      startDate: expect.any(String),
+      endDate: expect.any(String),
+    }));
+  });
+
+  it('keeps regular users on their own work log when statistics options include everyone', async () => {
+    mocks.getAIUsageOptions.mockResolvedValueOnce({
+      ...selfOptions,
+      mode: 'statistics' as const,
+      employees: [
+        employee,
+        { id: 'test2', name: 'Test 2', email: 'test2@local.dev', project_ids: [] },
+      ],
+    });
+
+    render(<WorklogsPage />);
+
+    expect(await screen.findByText('我的 AI 工作日志')).toBeInTheDocument();
+    expect(screen.queryByLabelText('员工')).not.toBeInTheDocument();
+    await waitFor(() => expect(mocks.getAIDailyWorkLogs).toHaveBeenCalledWith({
+      employeeId: undefined,
       startDate: expect.any(String),
       endDate: expect.any(String),
     }));

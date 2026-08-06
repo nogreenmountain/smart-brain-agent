@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   reviewProjectMemoryDraft: vi.fn(),
   previewProjectMaterials: vi.fn(),
   confirmMaterialIntake: vi.fn(),
+  cancelMaterialIntake: vi.fn(),
   updateProject: vi.fn(),
   uploadProjectMaterialsBatch: vi.fn(),
   upsertProjectRepository: vi.fn(),
@@ -41,6 +42,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     reviewProjectMemoryDraft: mocks.reviewProjectMemoryDraft,
     previewProjectMaterials: mocks.previewProjectMaterials,
     confirmMaterialIntake: mocks.confirmMaterialIntake,
+    cancelMaterialIntake: mocks.cancelMaterialIntake,
     updateProject: mocks.updateProject,
     uploadProjectMaterialsBatch: mocks.uploadProjectMaterialsBatch,
     upsertProjectRepository: mocks.upsertProjectRepository,
@@ -74,6 +76,7 @@ describe('ProjectMemoryPage', () => {
     mocks.reviewProjectMemoryDraft.mockReset();
     mocks.previewProjectMaterials.mockReset();
     mocks.confirmMaterialIntake.mockReset();
+    mocks.cancelMaterialIntake.mockReset();
     mocks.updateProject.mockReset();
     mocks.uploadProjectMaterialsBatch.mockReset();
     mocks.upsertProjectRepository.mockReset();
@@ -127,7 +130,7 @@ describe('ProjectMemoryPage', () => {
       id: 'intake-1',
       project_id: 'project-1',
       status: 'preview_ready',
-      summary: '建议保存 1 个，排除 1 个',
+      summary: '1 个文件通过安全检查，1 个文件被拦截',
       model: 'MiniMax-M3',
       used_fallback: false,
       items: [
@@ -144,14 +147,14 @@ describe('ProjectMemoryPage', () => {
         },
         {
           id: 'file-2',
-          filename: 'debug.log',
-          format: 'log',
+          filename: 'contacts.txt',
+          format: 'txt',
           size_bytes: 64,
           content_hash: 'hash-2',
-          recommendation: 'low_value',
+          recommendation: 'sensitive',
           included: false,
-          reason: '临时日志不适合长期保存',
-          issues: ['low_value'],
+          reason: '检测到个人信息',
+          issues: ['sensitive', 'personal_information'],
         },
       ],
     });
@@ -159,12 +162,9 @@ describe('ProjectMemoryPage', () => {
       intake_id: 'intake-1',
       status: 'pending_review',
       raw_document_count: 1,
-      curated_document_id: 'doc-curated',
       draft_id: 'draft-2',
-      skill_count: 1,
-      generation_model: 'MiniMax-M3',
-      generation_used_fallback: false,
     });
+    mocks.cancelMaterialIntake.mockResolvedValue(undefined);
     mocks.updateProject.mockResolvedValue({
       id: 'project-1',
       org_id: 'org-1',
@@ -221,7 +221,7 @@ describe('ProjectMemoryPage', () => {
     fireEvent.change(screen.getByLabelText('备注（可选）'), {
       target: { value: '格式统一，可以入库' },
     });
-    await user.click(screen.getByRole('button', { name: '采用并发布到 Wiki' }));
+    await user.click(screen.getByRole('button', { name: '批准并入库' }));
     await waitFor(() => {
       expect(mocks.reviewProjectMemoryDraft).toHaveBeenCalledWith(
         'draft-1',
@@ -326,7 +326,7 @@ describe('ProjectMemoryPage', () => {
     expect(screen.queryByLabelText('当前项目结项日期')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '删除项目' })).not.toBeInTheDocument();
     expect(screen.queryByText('待确认记忆')).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: '采用并发布到 Wiki' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '批准并入库' })).not.toBeInTheDocument();
 
     const repoInput = await screen.findByDisplayValue('https://github.com/example/smartbrain.git');
     await user.clear(repoInput);
@@ -341,15 +341,31 @@ describe('ProjectMemoryPage', () => {
 
     const files = [new File(['项目资料'], 'readme.md', { type: 'text/markdown' })];
     await user.upload(screen.getByLabelText('项目原始资料'), files);
-    await user.click(screen.getByRole('button', { name: 'AI 检查资料' }));
+    await user.click(screen.getByRole('button', { name: '上传资料' }));
     await waitFor(() => {
       expect(mocks.previewProjectMaterials).toHaveBeenCalledWith('project-1', 'research', files);
     });
-    expect(await screen.findByText('资料体检')).toBeInTheDocument();
-    expect(screen.getByText('临时日志不适合长期保存')).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: '确认保存并提炼' }));
+    expect(await screen.findByRole('dialog', { name: '文件安全检查' })).toBeInTheDocument();
+    expect(screen.getByText('检测到个人信息')).toBeInTheDocument();
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '上传通过检测的文件' }));
     await waitFor(() => {
       expect(mocks.confirmMaterialIntake).toHaveBeenCalledWith('intake-1', ['file-1']);
     });
+  });
+
+  it('lets a member cancel the entire staged upload from the security dialog', async () => {
+    const user = userEvent.setup();
+    render(<ProjectMemoryPage />);
+
+    await screen.findByRole('heading', { name: '项目管理' });
+    const files = [new File(['项目资料'], 'readme.md', { type: 'text/markdown' })];
+    await user.upload(screen.getByLabelText('项目原始资料'), files);
+    await user.click(screen.getByRole('button', { name: '上传资料' }));
+    await screen.findByRole('dialog', { name: '文件安全检查' });
+    await user.click(screen.getByRole('button', { name: '全部不上传' }));
+
+    await waitFor(() => expect(mocks.cancelMaterialIntake).toHaveBeenCalledWith('intake-1'));
+    expect(mocks.confirmMaterialIntake).not.toHaveBeenCalled();
   });
 });

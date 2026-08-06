@@ -11,7 +11,7 @@ import {
   getMe,
   listProjectMemoryDepartments,
   listProjectMembers,
-  listProjects,
+  listProjectCatalog,
   Me,
   Project,
   ProjectMember,
@@ -111,8 +111,6 @@ export default function MembersPage() {
       setMembers([]);
       if (e instanceof ApiError && e.status === 401) {
         router.replace('/login');
-      } else if (e instanceof ApiError && e.status === 403) {
-        setToast({ msg: '你还不是该项目成员，无法查看成员列表', kind: 'error' });
       } else {
         setToast({ msg: e?.message || '加载成员失败', kind: 'error' });
       }
@@ -130,7 +128,7 @@ export default function MembersPage() {
         const [currentUser, departmentRows, projectRows] = await Promise.all([
           getMe(),
           listProjectMemoryDepartments(),
-          listProjects(),
+          listProjectCatalog(),
         ]);
         setMe(currentUser);
         setDepartments(departmentRows);
@@ -394,7 +392,12 @@ export default function MembersPage() {
                         return (
                       <div className={`grid grid-cols-1 gap-3 lg:items-center ${selectedProjectCanManage ? 'lg:grid-cols-[minmax(220px,1.35fr)_120px_220px]' : 'lg:grid-cols-[minmax(220px,1.35fr)_160px]'}`}>
                         <div className="min-w-0">
-                          <div className="break-words font-medium text-[#10213e]">{member.email}</div>
+                          <div className="break-words font-medium text-[#10213e]">
+                            {member.display_name || member.nickname || member.email}
+                          </div>
+                          {(member.display_name || member.nickname) && (
+                            <div className="mt-0.5 break-all text-xs text-[#6e7d97]">{member.email}</div>
+                          )}
                           <div className="mt-1 break-all font-mono text-[11px] text-[#8b99ae]">{member.user_id}</div>
                         </div>
                         <span className={`w-fit rounded-full border px-2.5 py-1 text-xs font-medium ${roleTone(member.role)}`}>

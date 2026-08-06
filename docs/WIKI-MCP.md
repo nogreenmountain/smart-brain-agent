@@ -60,7 +60,7 @@ AI 使用记录和 `ai_chat_sessions` 默认不参与 Project Wiki 自动编译�
 
 ```powershell
 docker build -f Dockerfile.api-workday `
-  -t agentops-api-local:patched-2026-08-03-wiki-mcp .
+  -t agentops-api-local:patched-2026-08-06-global-read .
 
 docker compose -f compose.server.yaml -f compose.server.override.yaml build wiki-mcp
 

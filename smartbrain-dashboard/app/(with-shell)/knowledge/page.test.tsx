@@ -8,7 +8,7 @@ const mocks = vi.hoisted(() => ({
   deleteKnowledgeDocument: vi.fn(),
   listKnowledgeLedger: vi.fn(),
   listProjectMemoryDepartments: vi.fn(),
-  listProjects: vi.fn(),
+  listProjectCatalog: vi.fn(),
   push: vi.fn(),
 }));
 
@@ -25,7 +25,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     deleteKnowledgeDocument: mocks.deleteKnowledgeDocument,
     listKnowledgeLedger: mocks.listKnowledgeLedger,
     listProjectMemoryDepartments: mocks.listProjectMemoryDepartments,
-    listProjects: mocks.listProjects,
+    listProjectCatalog: mocks.listProjectCatalog,
   };
 });
 
@@ -34,7 +34,7 @@ describe('KnowledgePage', () => {
     mocks.deleteKnowledgeDocument.mockReset();
     mocks.listKnowledgeLedger.mockReset();
     mocks.listProjectMemoryDepartments.mockReset();
-    mocks.listProjects.mockReset();
+    mocks.listProjectCatalog.mockReset();
     mocks.push.mockReset();
     mocks.deleteKnowledgeDocument.mockResolvedValue(undefined);
     mocks.listProjectMemoryDepartments.mockResolvedValue([
@@ -42,7 +42,7 @@ describe('KnowledgePage', () => {
       { id: 'marketing', name: '市场', sort_order: 2 },
       { id: 'business', name: '业务', sort_order: 3 },
     ]);
-    mocks.listProjects.mockResolvedValue([
+    mocks.listProjectCatalog.mockResolvedValue([
       {
         id: 'project-1',
         org_id: 'org-1',

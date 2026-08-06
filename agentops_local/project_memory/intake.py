@@ -5,7 +5,7 @@ from typing import Iterable, Protocol, TypeVar
 
 MAX_FILE_BYTES = 20 * 1024 * 1024
 MAX_BATCH_BYTES = 50 * 1024 * 1024
-HARD_BLOCKED_RECOMMENDATIONS = {"duplicate", "sensitive", "low_value"}
+HARD_BLOCKED_RECOMMENDATIONS = {"review", "duplicate", "sensitive", "low_value"}
 
 
 class _ConfirmableFile(Protocol):
@@ -14,9 +14,11 @@ class _ConfirmableFile(Protocol):
     included: bool
 
 
-class _Skill(Protocol):
-    title: str
-    markdown_content: str
+class _ReviewFile(Protocol):
+    filename: str
+    format: str
+    size_bytes: int
+    reason: str
 
 
 TFile = TypeVar("TFile", bound=_ConfirmableFile)
@@ -52,25 +54,25 @@ def select_confirmed_files(
     return selected
 
 
-def build_review_markdown(
+def build_original_material_review_markdown(
     *,
     project_name: str,
-    curated_markdown: str,
-    skills: Iterable[_Skill],
+    files: Iterable[_ReviewFile],
 ) -> str:
-    skill_blocks = []
-    for index, skill in enumerate(skills, start=1):
-        skill_blocks.append(
-            f"### {index}. {skill.title}\n\n{skill.markdown_content.strip()}"
-        )
-    rendered_skills = "\n\n".join(skill_blocks) or "本批资料没有形成可复用 Skill。"
-    return f"""# {project_name} 资料整理与长期记忆候选
+    rows = list(files)
+    rendered_files = "\n".join(
+        f"- {row.filename}（{row.format.upper()}，{row.size_bytes} 字节）：{row.reason}"
+        for row in rows
+    ) or "- 无可提交文件"
+    return f"""# {project_name} 原始项目资料审批
 
-## 整理后的项目资料
+本批资料仅完成敏感信息安全检查，未进行 AI 总结或归纳。
 
-{curated_markdown.strip()}
+## 待审批原始文件
 
-## 可复用 Skill
+{rendered_files}
 
-{rendered_skills}
+## 审批说明
+
+管理员采用后，以上原始文件才会写入项目知识库；驳回则不会入库。
 """.strip() + "\n"

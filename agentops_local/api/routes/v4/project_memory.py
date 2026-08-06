@@ -31,6 +31,7 @@ from agentops.rag.authz import (
     require_member,
     require_writer,
 )
+from agentops.rag.ingest import ingest_file
 from agentops.project_wiki.service import publish_approved_candidates
 
 
@@ -128,6 +129,13 @@ def _repository_for_project(orm: Session, project_id: uuid.UUID) -> dict[str, st
 def _copy_upload_to_temp(file: UploadFile, suffix: str) -> Path:
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
         shutil.copyfileobj(file.file, tmp)
+        return Path(tmp.name)
+
+
+def _write_material_to_temp(filename: str, fmt: str, raw: bytes) -> Path:
+    suffix = Path(filename).suffix or f".{fmt}"
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        tmp.write(raw)
         return Path(tmp.name)
 
 
@@ -385,7 +393,7 @@ def approve_project_memory_draft(
     row = orm.execute(
         text("""
             SELECT id::text, project_id::text, department_id, status, markdown_content, title,
-                   intake_id::text, skill_candidates
+                   template_version, intake_id::text, skill_candidates, created_by_user_id::text
             FROM public.project_memory_drafts
             WHERE id = :draft_id
             FOR UPDATE
@@ -425,6 +433,15 @@ def approve_project_memory_draft(
                 """),
                 {"intake_id": str(row.intake_id)},
             )
+            if getattr(row, "template_version", None) == "project-material-original-v1":
+                orm.execute(
+                    text("""
+                        UPDATE public.project_material_intake_files
+                        SET raw_content = ''::bytea, extracted_text = ''
+                        WHERE intake_id = :intake_id AND document_id IS NULL
+                    """),
+                    {"intake_id": str(row.intake_id)},
+                )
         orm.commit()
         status: DraftStatus = "rejected"
         document_id = None
@@ -432,7 +449,103 @@ def approve_project_memory_draft(
         wiki_page_count = 0
     else:
         intake_id = getattr(row, "intake_id", None)
-        if intake_id:
+        if intake_id and getattr(row, "template_version", None) == "project-material-original-v1":
+            material_rows = orm.execute(
+                text("""
+                    SELECT id::text, filename, format, size_bytes, content_hash,
+                           raw_content, recommendation, included
+                    FROM public.project_material_intake_files
+                    WHERE intake_id = :intake_id
+                      AND included = true
+                      AND recommendation = 'keep'
+                      AND document_id IS NULL
+                    ORDER BY created_at, filename
+                """),
+                {"intake_id": str(intake_id)},
+            ).all()
+            if not material_rows:
+                raise HTTPException(status_code=500, detail="approved original material files are missing")
+            ingested: list[tuple[object, uuid.UUID, int]] = []
+            uploaded_by_user_id = uuid.UUID(str(row.created_by_user_id or user_id))
+            for material in material_rows:
+                temp_path = _write_material_to_temp(
+                    str(material.filename),
+                    str(material.format),
+                    bytes(material.raw_content),
+                )
+                try:
+                    result = ingest_file(
+                        temp_path,
+                        project_id=project_id,
+                        display_name=str(material.filename),
+                        created_by_user_id=uploaded_by_user_id,
+                    )
+                finally:
+                    temp_path.unlink(missing_ok=True)
+                if result.error:
+                    raise HTTPException(status_code=500, detail=f"original material ingest failed: {result.error}")
+                ingested.append((material, result.document_id, int(result.chunk_count or 0)))
+
+            for material, ingested_document_id, _ in ingested:
+                orm.execute(
+                    text("""
+                        UPDATE public.documents
+                        SET department_id = :department_id,
+                            memory_type = 'raw_project_material',
+                            memory_draft_id = :draft_id,
+                            template_version = 'project-material-original-v1'
+                        WHERE id = :document_id
+                    """),
+                    {
+                        "department_id": row.department_id,
+                        "draft_id": str(draft_id),
+                        "document_id": str(ingested_document_id),
+                    },
+                )
+                orm.execute(
+                    text("""
+                        UPDATE public.project_material_intake_files
+                        SET document_id = :document_id
+                        WHERE id = :file_id
+                    """),
+                    {"document_id": str(ingested_document_id), "file_id": str(material.id)},
+                )
+                orm.execute(
+                    text("""
+                        INSERT INTO public.project_material_documents (
+                            project_id, document_id, draft_id, uploaded_by_user_id,
+                            content_hash, original_file_id
+                        )
+                        VALUES (
+                            :project_id, :document_id, :draft_id, :user_id,
+                            :content_hash, :file_id
+                        )
+                        ON CONFLICT (document_id) DO UPDATE SET
+                            draft_id = excluded.draft_id,
+                            content_hash = excluded.content_hash,
+                            original_file_id = excluded.original_file_id
+                    """),
+                    {
+                        "project_id": str(project_id),
+                        "document_id": str(ingested_document_id),
+                        "draft_id": str(draft_id),
+                        "user_id": str(uploaded_by_user_id),
+                        "content_hash": str(material.content_hash),
+                        "file_id": str(material.id),
+                    },
+                )
+            document_id = ingested[0][1]
+            chunk_count = sum(item[2] for item in ingested)
+            wiki_page_count = 0
+            orm.execute(
+                text("""
+                    UPDATE public.project_material_intakes
+                    SET status = 'approved', updated_at = now()
+                    WHERE id = :intake_id
+                """),
+                {"intake_id": str(intake_id)},
+            )
+        elif intake_id:
             document_rows = orm.execute(
                 text("""
                     SELECT id::text, memory_type

@@ -9,7 +9,7 @@
 # After any backend code change, rebuild with:
 #   cd D:\AgentOpsServer\AgentOps\app
 #   docker build -f Dockerfile.api-workday \
-#     -t agentops-api-local:patched-2026-08-03-ai-daily-worklog-batched .
+#     -t agentops-api-local:patched-2026-08-06-global-read .
 #
 # Setup (PowerShell, in a fresh session):
 #   $env:ANTHROPIC_AUTH_TOKEN = "your-gateway-token"
@@ -64,7 +64,7 @@ services:
       - rag_model_cache:/models
 
   api:
-    image: agentops-api-local:patched-2026-08-03-ai-daily-worklog-batched
+    image: agentops-api-local:patched-2026-08-06-global-read
     depends_on:
       - clickhouse
     environment:
@@ -94,7 +94,7 @@ services:
       PROJECT_WIKI_INCLUDE_AI_CHAT_SOURCES: ${PROJECT_WIKI_INCLUDE_AI_CHAT_SOURCES:-false}
 
   project-wiki-worker:
-    image: agentops-api-local:patched-2026-08-03-ai-daily-worklog-batched
+    image: agentops-api-local:patched-2026-08-06-global-read
     restart: unless-stopped
     command: ["/app/.venv/bin/python", "-m", "agentops.project_wiki.worker"]
     networks:
@@ -133,7 +133,7 @@ services:
       PROJECT_WIKI_INTERVAL_SECONDS: ${PROJECT_WIKI_INTERVAL_SECONDS:-86400}
 
   ai-worklog-worker:
-    image: agentops-api-local:patched-2026-08-03-ai-daily-worklog-batched
+    image: agentops-api-local:patched-2026-08-06-global-read
     restart: unless-stopped
     command: ["/app/.venv/bin/python", "-m", "agentops.ai_usage.daily_log_worker"]
     networks:
@@ -160,6 +160,39 @@ services:
       AI_WORKLOG_RUN_HOUR: ${AI_WORKLOG_RUN_HOUR:-20}
       AI_WORKLOG_RUN_MINUTE: ${AI_WORKLOG_RUN_MINUTE:-0}
       AI_WORKLOG_RETRY_SECONDS: ${AI_WORKLOG_RETRY_SECONDS:-900}
+
+  member-wiki-worker:
+    image: agentops-api-local:patched-2026-08-06-global-read
+    restart: unless-stopped
+    command: ["/app/.venv/bin/python", "-m", "agentops.member_wiki.worker"]
+    networks:
+      - default
+      - supabase
+    environment:
+      SUPABASE_URL: "http://supabase_kong_database:8000"
+      SUPABASE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+      SUPABASE_HOST: "supabase_db_database"
+      SUPABASE_PORT: "5432"
+      SUPABASE_DATABASE: "postgres"
+      SUPABASE_USER: "postgres"
+      SUPABASE_PASSWORD: "postgres"
+      SUPABASE_SSLMODE: "disable"
+      SUPABASE_MAX_POOL_SIZE: "10"
+      LOGGING_LEVEL: "INFO"
+      SQLALCHEMY_LOG_LEVEL: "WARNING"
+      ANTHROPIC_AUTH_TOKEN: ${ANTHROPIC_AUTH_TOKEN:-local-proxy}
+      ANTHROPIC_BASE_URL: ${ANTHROPIC_DOCKER_BASE_URL:-http://host.docker.internal:9000}
+      ANTHROPIC_DEFAULT_SONNET_MODEL: ${ANTHROPIC_DEFAULT_SONNET_MODEL:-claude-sonnet-4-6-20250514}
+      RAG_LLM_MODEL: ${RAG_LLM_MODEL:-claude-sonnet-4-6-20250514}
+      MEMBER_WIKI_MODEL: ${MEMBER_WIKI_MODEL:-claude-sonnet-4-6-20250514}
+      MEMBER_WIKI_MAX_TOKENS: ${MEMBER_WIKI_MAX_TOKENS:-2400}
+      MEMBER_WIKI_RUN_HOUR: ${MEMBER_WIKI_RUN_HOUR:-21}
+      MEMBER_WIKI_RUN_MINUTE: ${MEMBER_WIKI_RUN_MINUTE:-0}
+      MEMBER_WIKI_RETRY_SECONDS: ${MEMBER_WIKI_RETRY_SECONDS:-900}
+      MEMBER_WIKI_SESSION_LIMIT: ${MEMBER_WIKI_SESSION_LIMIT:-500}
+      RAG_EMBEDDING_SERVICE_URL: ${RAG_EMBEDDING_SERVICE_URL:-http://rag-embedding-service:8080}
+      RAG_V2_EMBEDDING_MODEL: ${RAG_V2_EMBEDDING_MODEL:-BAAI/bge-m3}
+      RAG_V2_EMBEDDING_VERSION: ${RAG_V2_EMBEDDING_VERSION:-2026-07-21-bge-m3}
 
   wiki-mcp:
     image: smartbrain-wiki-mcp-local:latest

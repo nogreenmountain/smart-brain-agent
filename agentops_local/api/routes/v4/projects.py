@@ -74,6 +74,8 @@ class AddMemberRequest(BaseModel):
 class MemberSchema(BaseModel):
     user_id: uuid.UUID
     email: str
+    nickname: Optional[str] = None
+    display_name: str
     role: str
 
 
@@ -428,6 +430,34 @@ def list_projects(
     return [_project_from_row(r) for r in rows]
 
 
+@router.get("/projects/catalog", response_model=List[ProjectSchema])
+def list_project_catalog(
+    request: Request,
+    orm: Session = Depends(get_orm_session),
+) -> List[ProjectSchema]:
+    """List every project for authenticated read-only catalogue pages."""
+    try:
+        user_id = current_user_id(request)
+    except AuthzError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail)
+
+    rows = orm.execute(
+        text("""
+            SELECT p.id::text AS id, p.org_id::text AS org_id, p.name,
+                   p.environment::text, COALESCE(p.department_id, 'research') AS department_id,
+                   p.created_at::text AS created_at, p.completed_at::text AS completed_at,
+                   pm.role::text AS role
+            FROM public.projects p
+            LEFT JOIN public.project_members pm
+              ON pm.project_id = p.id
+             AND pm.user_id = :u
+            ORDER BY p.name, p.id
+        """),
+        {"u": str(user_id)},
+    ).all()
+    return [_project_from_row(r) for r in rows]
+
+
 @router.patch("/projects/{project_id}", response_model=ProjectSchema)
 def update_project(
     request: Request,
@@ -553,7 +583,13 @@ def add_member(
         role=body.role,
     )
 
-    return MemberSchema(user_id=target_user_id, email=target.email, role=body.role)
+    return MemberSchema(
+        user_id=target_user_id,
+        email=target.email,
+        nickname=None,
+        display_name=target.email,
+        role=body.role,
+    )
 
 
 @router.delete("/projects/{project_id}/members/{user_id}", status_code=204)
@@ -645,24 +681,37 @@ def list_members(
     project_id: uuid.UUID,
     orm: Session = Depends(get_orm_session),
 ) -> List[MemberSchema]:
-    """List members of a project. Caller must be a project member."""
+    """List members of a project for any authenticated user."""
     try:
-        user_id = current_user_id(request)
-        require_member(orm, user_id=user_id, project_id=project_id)
+        current_user_id(request)
     except AuthzError as e:
         raise HTTPException(status_code=e.status_code, detail=e.detail)
 
     rows = orm.execute(
         text("""
-            SELECT pm.user_id::text AS user_id, au.email, pm.role::text
+            SELECT pm.user_id::text AS user_id,
+                   au.email,
+                   pu.nickname,
+                   COALESCE(NULLIF(BTRIM(pu.nickname), ''), au.email) AS display_name,
+                   pm.role::text
             FROM public.project_members pm
             JOIN auth.users au ON au.id = pm.user_id
+            LEFT JOIN public.users pu ON pu.id = pm.user_id
             WHERE pm.project_id = :p
-            ORDER BY pm.role DESC, au.email
+            ORDER BY pm.role DESC, display_name, au.email
         """),
         {"p": str(project_id)},
     ).all()
-    return [MemberSchema(user_id=uuid.UUID(r.user_id), email=r.email, role=r.role) for r in rows]
+    return [
+        MemberSchema(
+            user_id=uuid.UUID(r.user_id),
+            email=r.email,
+            nickname=r.nickname,
+            display_name=r.display_name,
+            role=r.role,
+        )
+        for r in rows
+    ]
 
 
 class DocumentRowSchema(BaseModel):

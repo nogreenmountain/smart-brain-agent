@@ -23,7 +23,6 @@ from agentops.rag.authz import (
     AuthzError,
     current_user_id,
     require_admin,
-    require_member,
 )
 
 
@@ -57,6 +56,12 @@ class WikiLinkSchema(BaseModel):
     relation: str
 
 
+class WikiUploaderSchema(BaseModel):
+    user_id: uuid.UUID
+    name: str
+    email: str
+
+
 class WikiPageSchema(BaseModel):
     id: uuid.UUID
     page_key: str
@@ -72,6 +77,7 @@ class WikiPageSchema(BaseModel):
     verification_status: str
     valid_from: str | None = None
     valid_until: str | None = None
+    uploaded_by: WikiUploaderSchema | None = None
     sources: list[WikiSourceSchema]
     links: list[WikiLinkSchema]
     created_at: str
@@ -93,6 +99,7 @@ class WikiChangeSchema(BaseModel):
     contradiction: bool
     source_ids: list[str]
     link_titles: list[str]
+    uploaded_by: WikiUploaderSchema | None = None
     created_at: str
 
 
@@ -223,6 +230,8 @@ def _page_from_row(row) -> WikiPageSchema:
         verification_status=str(row.verification_status),
         valid_from=str(row.valid_from) if row.valid_from else None,
         valid_until=str(row.valid_until) if row.valid_until else None,
+        uploaded_by=WikiUploaderSchema.model_validate(row.uploaded_by)
+        if getattr(row, "uploaded_by", None) else None,
         sources=[WikiSourceSchema.model_validate(item) for item in (row.sources or [])],
         links=[WikiLinkSchema.model_validate(item) for item in (row.links or [])],
         created_at=str(row.created_at),
@@ -246,6 +255,8 @@ def _change_from_row(row) -> WikiChangeSchema:
         contradiction=bool(row.contradiction),
         source_ids=[str(item) for item in (row.source_ids or [])],
         link_titles=[str(item) for item in (row.link_titles or [])],
+        uploaded_by=WikiUploaderSchema.model_validate(row.uploaded_by)
+        if getattr(row, "uploaded_by", None) else None,
         created_at=str(row.created_at),
     )
 
@@ -329,7 +340,6 @@ def get_wiki_overview(
 ) -> WikiOverviewResponse:
     try:
         user_id = current_user_id(request)
-        require_member(orm, user_id=user_id, project_id=project_id)
     except AuthzError as error:
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error
 
@@ -344,6 +354,16 @@ def get_wiki_overview(
                 p.current_version, p.verification_status,
                 p.valid_from::text, p.valid_until::text,
                 p.created_at::text, p.updated_at::text,
+                CASE WHEN p.created_by_user_id IS NULL THEN NULL ELSE jsonb_build_object(
+                    'user_id', p.created_by_user_id::text,
+                    'name', COALESCE(
+                        NULLIF(BTRIM(pu.nickname), ''),
+                        NULLIF(BTRIM(pu.full_name), ''),
+                        au.email,
+                        p.created_by_user_id::text
+                    ),
+                    'email', COALESCE(au.email, '')
+                ) END AS uploaded_by,
                 (
                     SELECT COALESCE(jsonb_agg(jsonb_build_object(
                         'source_type', s.source_type,
@@ -363,6 +383,8 @@ def get_wiki_overview(
                     WHERE l.from_page_id = p.id
                 ) AS links
             FROM public.project_wiki_pages p
+            LEFT JOIN public.users pu ON pu.id = p.created_by_user_id
+            LEFT JOIN auth.users au ON au.id = p.created_by_user_id
             WHERE p.project_id = :project_id AND p.status = 'active'
             ORDER BY p.updated_at DESC
         """),
@@ -372,13 +394,26 @@ def get_wiki_overview(
     if can_review:
         pending_rows = orm.execute(
             text("""
-                SELECT id::text, title, page_type, memory_kind, tags,
-                       reason_code, status, summary,
-                       proposed_markdown, usefulness, confidence, contradiction,
-                       source_ids, link_titles, created_at::text
-                FROM public.project_wiki_changes
-                WHERE project_id = :project_id AND status = 'pending_review'
-                ORDER BY created_at DESC
+                SELECT c.id::text, c.title, c.page_type, c.memory_kind, c.tags,
+                       c.reason_code, c.status, c.summary,
+                       c.proposed_markdown, c.usefulness, c.confidence, c.contradiction,
+                       c.source_ids, c.link_titles, c.created_at::text,
+                       CASE WHEN r.triggered_by_user_id IS NULL THEN NULL ELSE jsonb_build_object(
+                           'user_id', r.triggered_by_user_id::text,
+                           'name', COALESCE(
+                               NULLIF(BTRIM(pu.nickname), ''),
+                               NULLIF(BTRIM(pu.full_name), ''),
+                               au.email,
+                               r.triggered_by_user_id::text
+                           ),
+                           'email', COALESCE(au.email, '')
+                       ) END AS uploaded_by
+                FROM public.project_wiki_changes c
+                JOIN public.project_wiki_compile_runs r ON r.id = c.run_id
+                LEFT JOIN public.users pu ON pu.id = r.triggered_by_user_id
+                LEFT JOIN auth.users au ON au.id = r.triggered_by_user_id
+                WHERE c.project_id = :project_id AND c.status = 'pending_review'
+                ORDER BY c.created_at DESC
             """),
             {"project_id": str(project_id)},
         ).all()
@@ -454,12 +489,14 @@ def review_wiki_change(
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error
     row = orm.execute(
         text("""
-            SELECT id::text, run_id::text, project_id::text, page_key, title,
-                   page_type, memory_kind, tags, valid_from::text,
-                   valid_until::text, status, summary, proposed_markdown, usefulness,
-                   confidence, contradiction, source_ids, link_titles, reason_code
-            FROM public.project_wiki_changes
-            WHERE id = :change_id
+            SELECT c.id::text, c.run_id::text, c.project_id::text, c.page_key, c.title,
+                   c.page_type, c.memory_kind, c.tags, c.valid_from::text,
+                   c.valid_until::text, c.status, c.summary, c.proposed_markdown, c.usefulness,
+                   c.confidence, c.contradiction, c.source_ids, c.link_titles, c.reason_code,
+                   r.triggered_by_user_id::text
+            FROM public.project_wiki_changes c
+            JOIN public.project_wiki_compile_runs r ON r.id = c.run_id
+            WHERE c.id = :change_id
             FOR UPDATE
         """),
         {"change_id": str(change_id)},
@@ -509,12 +546,15 @@ def review_wiki_change(
             sensitive=False,
             ephemeral=False,
         )
+        uploaded_by_user_id = user_id
+        if row.reason_code == "mcp_proposal" and row.triggered_by_user_id:
+            uploaded_by_user_id = uuid.UUID(str(row.triggered_by_user_id))
         page_id = _apply_candidate(
             orm,
             run_id=uuid.UUID(str(row.run_id)),
             project_id=project_id,
             candidate=candidate,
-            created_by_user_id=user_id,
+            created_by_user_id=uploaded_by_user_id,
             reason_code=f"review_approved:{row.reason_code}",
             change_id=change_id,
         )

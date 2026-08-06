@@ -121,11 +121,12 @@ describe('WorkdayPage', () => {
   });
 
   it('lets administrators select an employee and view team AI work records', async () => {
+    const adminEmployee = { id: 'hanshangbo', name: '韩尚博', email: 'hanshangbo@local.dev', project_ids: [] };
     const adminOptions = {
       ...selfOptions,
       mode: 'admin' as const,
-      current_employee: { id: 'hanshangbo', name: '韩尚波', email: 'hanshangbo@local.dev', project_ids: [] },
-      employees: [employee],
+      current_employee: adminEmployee,
+      employees: [employee, adminEmployee],
     };
     mocks.getAIUsageOptions.mockResolvedValueOnce(adminOptions);
     mocks.getAIUsageRecords.mockResolvedValueOnce({ ...usageResult, mode: 'admin' });
@@ -133,7 +134,30 @@ describe('WorkdayPage', () => {
     render(<WorkdayPage />);
 
     expect(await screen.findByText('团队 AI 工作记录')).toBeInTheDocument();
-    expect(screen.getByLabelText('员工')).toHaveValue('tangweixiang');
+    expect(screen.getByLabelText('员工')).toHaveValue('hanshangbo');
     expect(screen.queryByText('每日 AI 工作日志')).not.toBeInTheDocument();
+  });
+
+  it('lets regular users select another employee but only shows token statistics', async () => {
+    const otherEmployee = { id: 'test2', name: 'Test 2', email: 'test2@local.dev', project_ids: [] };
+    mocks.getAIUsageOptions.mockResolvedValueOnce({
+      ...selfOptions,
+      mode: 'statistics' as const,
+      employees: [employee, otherEmployee],
+    });
+    mocks.getAIUsageRecords.mockResolvedValueOnce({
+      ...usageResult,
+      mode: 'statistics' as const,
+      employee: otherEmployee,
+      records: [],
+      detail_visible: false,
+      warnings: ['Token statistics only'],
+    });
+
+    render(<WorkdayPage />);
+
+    expect(await screen.findByText('AI Token 使用统计')).toBeInTheDocument();
+    expect(screen.getByLabelText('员工')).toHaveValue('tangweixiang');
+    expect(screen.getByText('12,600')).toBeInTheDocument();
   });
 });

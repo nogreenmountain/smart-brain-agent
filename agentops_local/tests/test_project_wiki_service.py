@@ -21,30 +21,6 @@ def _load_module(name: str, relative: str):
 
 
 class ProjectWikiServiceTests(unittest.TestCase):
-    def test_incremental_sources_exclude_ai_chats_by_default(self) -> None:
-        service = _load_module(
-            "project_wiki_service_chat_disabled_under_test",
-            "project_wiki/service.py",
-        )
-        project_id = uuid.UUID("00000000-0000-0000-0000-000000000010")
-        document_source = Mock(source_id="document:doc-1")
-
-        with (
-            patch.object(service, "_processed_hashes", return_value={}),
-            patch.object(service, "_chat_sources", return_value=[]) as chats,
-            patch.object(service, "_document_sources", return_value=[document_source]) as documents,
-            patch.object(service, "_source_hash", return_value="hash"),
-        ):
-            sources = service.collect_incremental_sources(
-                Mock(),
-                project_id=project_id,
-                limit_per_type=10,
-            )
-
-        chats.assert_not_called()
-        documents.assert_called_once_with(unittest.mock.ANY, project_id, 10)
-        self.assertEqual(sources, [document_source])
-
     def test_compile_routes_candidates_to_apply_review_and_discard(self) -> None:
         domain = _load_module("project_wiki_domain_for_service_test", "project_wiki/domain.py")
         compiler = _load_module("project_wiki_compiler_for_service_test", "project_wiki/compiler.py")

@@ -105,7 +105,6 @@ class ProjectMaterialsRouteTests(unittest.TestCase):
             patch.object(route, "require_member", return_value=None),
             patch.object(route, "_extract_source", side_effect=sources),
             patch.object(route, "preview_materials", return_value=preview),
-            patch.object(route, "ingest_file") as ingest,
         ):
             response = route.preview_project_materials(
                 request=object(),
@@ -115,7 +114,6 @@ class ProjectMaterialsRouteTests(unittest.TestCase):
                 orm=orm,
             )
 
-        ingest.assert_not_called()
         self.assertEqual(response.status, "preview_ready")
         self.assertEqual(len(response.items), 2)
         self.assertEqual(orm.file_insert_count, 2)
@@ -129,7 +127,7 @@ class ProjectMaterialsRouteTests(unittest.TestCase):
         self.assertEqual(inserts[1]["raw_content"], b"")
         self.assertEqual(inserts[1]["extracted_text"], "")
 
-    def test_confirm_ignores_sensitive_file_even_when_client_requests_it(self) -> None:
+    def test_confirm_stages_only_safe_original_files_for_admin_review(self) -> None:
         route = _load_route()
         orm = _Orm()
         user_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -145,32 +143,12 @@ class ProjectMaterialsRouteTests(unittest.TestCase):
             created_by_user_id=str(user_id),
         )
         orm.files = [
-            SimpleNamespace(id=keep_id, filename="README.md", format="md", size_bytes=30, content_hash="hash-1", raw_content=b"# Project\n\nRun Docker", extracted_text="# Project\n\nRun Docker", recommendation="keep", included=True),
-            SimpleNamespace(id=secret_id, filename=".env.txt", format="txt", size_bytes=30, content_hash="hash-2", raw_content=b"TOKEN=secret", extracted_text="TOKEN=secret", recommendation="sensitive", included=False),
+            SimpleNamespace(id=keep_id, filename="README.md", format="md", size_bytes=30, content_hash="hash-1", raw_content=b"# Project\n\nRun Docker", extracted_text="# Project\n\nRun Docker", recommendation="keep", included=True, reason="safe"),
+            SimpleNamespace(id=secret_id, filename=".env.txt", format="txt", size_bytes=30, content_hash="hash-2", raw_content=b"TOKEN=secret", extracted_text="TOKEN=secret", recommendation="sensitive", included=False, reason="blocked"),
         ]
-        skill = SimpleNamespace(
-            title="Run locally",
-            summary="Start the project",
-            markdown_content="# Run locally\n\n1. Start services",
-            source_filenames=("README.md",),
-        )
-        package = SimpleNamespace(
-            curated_markdown="# Curated\n\nRun Docker.\n",
-            skills=(skill,),
-            model="MiniMax-M3",
-            used_fallback=False,
-        )
-        raw_document_id = uuid.UUID("00000000-0000-0000-0000-000000000060")
-        curated_document_id = uuid.UUID("00000000-0000-0000-0000-000000000061")
-
         with (
             patch.object(route, "current_user_id", return_value=user_id),
             patch.object(route, "require_member", return_value=None),
-            patch.object(route, "generate_knowledge_package", return_value=package),
-            patch.object(route, "_write_temp_file", return_value=Path(__file__)),
-            patch.object(route.Path, "unlink", return_value=None),
-            patch.object(route, "ingest_file", return_value=SimpleNamespace(document_id=raw_document_id, chunk_count=1, status="ready", error=None)) as ingest,
-            patch.object(route, "ingest_markdown_memory", return_value=SimpleNamespace(document_id=curated_document_id, chunk_count=1, status="ready", error=None)),
             patch.object(route, "record_audit", return_value=None),
         ):
             response = route.confirm_project_materials(
@@ -182,9 +160,48 @@ class ProjectMaterialsRouteTests(unittest.TestCase):
                 orm=orm,
             )
 
-        self.assertEqual(ingest.call_count, 1)
         self.assertEqual(response.raw_document_count, 1)
-        self.assertEqual(response.skill_count, 1)
+        self.assertEqual(response.status, "pending_review")
+        self.assertEqual(
+            response.draft_id,
+            uuid.UUID("00000000-0000-0000-0000-000000000050"),
+        )
+        self.assertFalse(hasattr(response, "curated_document_id"))
+        draft_inserts = [
+            params for sql, params in orm.calls
+            if "INSERT INTO public.project_memory_drafts" in sql
+        ]
+        self.assertEqual(len(draft_inserts), 1)
+        self.assertEqual(draft_inserts[0]["source_count"], 1)
+        self.assertNotIn("curated_markdown", draft_inserts[0])
+        self.assertNotIn("skills", draft_inserts[0])
+
+    def test_cancel_preview_deletes_staged_payloads(self) -> None:
+        route = _load_route()
+        orm = _Orm()
+        user_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        intake_id = uuid.UUID("00000000-0000-0000-0000-000000000040")
+        project_id = uuid.UUID("00000000-0000-0000-0000-000000000010")
+        orm.intake = SimpleNamespace(
+            id=str(intake_id),
+            project_id=str(project_id),
+            status="preview_ready",
+            created_by_user_id=str(user_id),
+        )
+
+        with (
+            patch.object(route, "current_user_id", return_value=user_id),
+            patch.object(route, "require_member", return_value=None),
+            patch.object(route, "record_audit", return_value=None),
+        ):
+            response = route.cancel_project_materials(
+                request=object(),
+                intake_id=intake_id,
+                orm=orm,
+            )
+
+        self.assertEqual(response.status_code, 204)
+        self.assertTrue(any("DELETE FROM public.project_material_intakes" in sql for sql, _ in orm.calls))
 
 
 if __name__ == "__main__":

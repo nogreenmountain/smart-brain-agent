@@ -105,7 +105,12 @@ export default function WorkdayPage() {
   const [error, setError] = useState('');
 
   const adminMode = options?.mode === 'admin';
+  const statisticsMode = options?.mode === 'statistics';
+  const selectableEmployeeMode = adminMode || statisticsMode;
   const employeeOptions = options?.employees ?? [];
+  const selectedEmployeeName = selectableEmployeeMode
+    ? employeeOptions.find((item) => item.id === employeeId)?.name ?? options?.current_employee.name
+    : options?.current_employee.name;
 
   useEffect(() => {
     let active = true;
@@ -113,7 +118,11 @@ export default function WorkdayPage() {
       .then(async (loaded) => {
         if (!active) return;
         setOptions(loaded);
-        const initialEmployee = loaded.mode === 'admin' ? loaded.employees[0]?.id ?? '' : '';
+        const initialEmployee = loaded.mode !== 'self'
+          ? loaded.employees.find((item) => item.id === loaded.current_employee.id)?.id
+            ?? loaded.employees[0]?.id
+            ?? ''
+          : '';
         if (initialEmployee) setEmployeeId(initialEmployee);
         if (loaded.mode === 'self' || initialEmployee) {
           await loadRecords(loaded.mode, initialEmployee);
@@ -132,7 +141,7 @@ export default function WorkdayPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function loadRecords(modeOverride?: 'self' | 'admin', employeeOverride?: string) {
+  async function loadRecords(modeOverride?: AIUsageOptions['mode'], employeeOverride?: string) {
     const mode = modeOverride ?? options?.mode;
     if (!mode || loadingRecords) return;
     const selectedEmployee = employeeOverride ?? employeeId;
@@ -140,12 +149,12 @@ export default function WorkdayPage() {
       setError('开始日期不能晚于结束日期');
       return;
     }
-    if (mode === 'admin' && !selectedEmployee) return;
+    if (mode !== 'self' && !selectedEmployee) return;
 
     const params: AIUsageQueryParams = {
       startDate,
       endDate,
-      employeeId: mode === 'admin' ? selectedEmployee : undefined,
+      employeeId: mode !== 'self' ? selectedEmployee : undefined,
       source: source || undefined,
       includeMessages: true,
       limit: 100,
@@ -185,15 +194,15 @@ export default function WorkdayPage() {
   return (
     <PageShell>
       <PageHeader
-        eyebrow={adminMode ? 'TEAM AI ACTIVITY' : 'PERSONAL AI ACTIVITY'}
+        eyebrow={adminMode ? 'TEAM AI ACTIVITY' : statisticsMode ? 'AI TOKEN STATISTICS' : 'PERSONAL AI ACTIVITY'}
         icon={CalendarDays}
-        title={adminMode ? '团队 AI 工作记录' : '我的 AI 工作记录'}
-        description={`${options?.current_employee.name ?? '正在确认账号权限'} · Asia/Shanghai · 按员工账号统计`}
+        title={adminMode ? '团队 AI 工作记录' : statisticsMode ? 'AI Token 使用统计' : '我的 AI 工作记录'}
+        description={`${selectedEmployeeName ?? '正在确认账号权限'} · Asia/Shanghai · 按员工账号统计`}
         actions={
           <>
             {!loadingOptions && options && (
               <span className="inline-flex h-8 items-center rounded-md border border-[#cbd8e8] bg-[#f5f8fc] px-3 text-xs font-medium text-[#53647d]">
-                {adminMode ? '管理员视图' : '仅本人可见'}
+                {adminMode ? '管理员视图' : statisticsMode ? '全员 Token 统计' : '仅本人可见'}
               </span>
             )}
             {result && (
@@ -209,7 +218,7 @@ export default function WorkdayPage() {
       <main className="flex-1 overflow-y-auto">
         <form onSubmit={submitQuery} className="border-b border-[#d7e0ec] bg-white px-4 py-4 md:px-6">
           <div className="mx-auto max-w-[1320px]">
-          {adminMode && (
+          {selectableEmployeeMode && (
             <div className="mb-3 grid gap-3 sm:grid-cols-[minmax(260px,420px)]">
               <Field label="员工" htmlFor="usage-employee">
                 <select id="usage-employee" className={selectClass} value={employeeId} onChange={(event) => { setEmployeeId(event.target.value); setResult(null); }}>
@@ -233,7 +242,7 @@ export default function WorkdayPage() {
                 {Object.entries(SOURCE_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
               </select>
             </Field>
-            <Button type="submit" className="w-full lg:w-auto" disabled={loadingOptions || loadingRecords || (adminMode && !employeeId)}>
+            <Button type="submit" className="w-full lg:w-auto" disabled={loadingOptions || loadingRecords || (selectableEmployeeMode && !employeeId)}>
               {loadingRecords ? <><LoadingDots /> 查询中</> : <><Search size={16} aria-hidden="true" /> 查询记录</>}
             </Button>
           </div>
@@ -252,7 +261,7 @@ export default function WorkdayPage() {
           <div className="flex items-center justify-center gap-3 py-24 text-sm text-[#6c7b91]"><LoadingDots />正在汇总 AI 使用记录</div>
         )}
         {!loadingOptions && !loadingRecords && !result && !error && (
-          <EmptyState icon="" title={adminMode ? '选择员工后查询 AI 使用记录' : '选择日期区间后查询自己的 AI 使用记录'} />
+          <EmptyState icon="" title={selectableEmployeeMode ? '选择员工后查询 AI 使用统计' : '选择日期区间后查询自己的 AI 使用记录'} />
         )}
 
         {result && (
@@ -285,12 +294,20 @@ export default function WorkdayPage() {
                     <h2 className="text-base font-semibold text-[#0b1930]">AI 使用记录</h2>
                     <p className="mt-1 text-xs text-[#6c7b91]">{result.employee.name} · 按员工账号汇总，不按项目切分</p>
                   </div>
-                  <div className="mt-3 divide-y divide-[#e4eaf2] border-y border-[#dde4ee] bg-white">
-                    {result.records.map((record) => (
-                      <UsageRecordRow key={record.id} record={record} expanded={expanded.has(record.id)} onToggle={() => toggleRecord(record.id)} />
-                    ))}
-                  </div>
-                  {result.has_more && <p className="mt-3 text-center text-xs text-[#6c7b91]">记录较多，当前显示最近 100 条</p>}
+                  {result.detail_visible === false ? (
+                    <div className="mt-3 rounded-lg border border-[#d7e0ec] bg-[#f7f9fc] px-4 py-6 text-center text-sm text-[#6c7b91]">
+                      当前仅显示 Token 统计。具体对话和 AI 工作日志仅该成员本人及管理员可见；管理员查看对话还需成员主动公开。
+                    </div>
+                  ) : (
+                    <>
+                      <div className="mt-3 divide-y divide-[#e4eaf2] border-y border-[#dde4ee] bg-white">
+                        {result.records.map((record) => (
+                          <UsageRecordRow key={record.id} record={record} expanded={expanded.has(record.id)} onToggle={() => toggleRecord(record.id)} />
+                        ))}
+                      </div>
+                      {result.has_more && <p className="mt-3 text-center text-xs text-[#6c7b91]">记录较多，当前显示最近 100 条</p>}
+                    </>
+                  )}
                 </section>
               </>
             )}

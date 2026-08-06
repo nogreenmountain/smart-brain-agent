@@ -9,7 +9,7 @@ const mocks = vi.hoisted(() => ({
   getMe: vi.fn(),
   listProjectMemoryDepartments: vi.fn(),
   listProjectMembers: vi.fn(),
-  listProjects: vi.fn(),
+  listProjectCatalog: vi.fn(),
   removeProjectMember: vi.fn(),
   replace: vi.fn(),
   resetProjectMemberPassword: vi.fn(),
@@ -29,21 +29,27 @@ vi.mock('@/lib/api', async (importOriginal) => {
     getMe: mocks.getMe,
     listProjectMemoryDepartments: mocks.listProjectMemoryDepartments,
     listProjectMembers: mocks.listProjectMembers,
-    listProjects: mocks.listProjects,
+    listProjectCatalog: mocks.listProjectCatalog,
     removeProjectMember: mocks.removeProjectMember,
     resetProjectMemberPassword: mocks.resetProjectMemberPassword,
   };
 });
 
 describe('MembersPage', () => {
-  let currentMembers: { user_id: string; email: string; role: 'owner' | 'admin' | 'developer' | 'business_user' }[];
+  let currentMembers: {
+    user_id: string;
+    email: string;
+    nickname?: string | null;
+    display_name?: string;
+    role: 'owner' | 'admin' | 'developer' | 'business_user';
+  }[];
 
   beforeEach(() => {
     mocks.addProjectMember.mockReset();
     mocks.getMe.mockReset();
     mocks.listProjectMemoryDepartments.mockReset();
     mocks.listProjectMembers.mockReset();
-    mocks.listProjects.mockReset();
+    mocks.listProjectCatalog.mockReset();
     mocks.removeProjectMember.mockReset();
     mocks.replace.mockReset();
     mocks.resetProjectMemberPassword.mockReset();
@@ -51,6 +57,8 @@ describe('MembersPage', () => {
       {
         user_id: 'admin-1',
         email: 'hanshangbo@local.dev',
+        nickname: '研发负责人',
+        display_name: '研发负责人',
         role: 'owner',
       },
     ];
@@ -65,7 +73,7 @@ describe('MembersPage', () => {
       { id: 'marketing', name: '市场', sort_order: 2 },
       { id: 'business', name: '业务', sort_order: 3 },
     ]);
-    mocks.listProjects.mockResolvedValue([
+    mocks.listProjectCatalog.mockResolvedValue([
       {
         id: 'project-1',
         org_id: 'org-1',
@@ -118,6 +126,7 @@ describe('MembersPage', () => {
     expect(screen.getByRole('option', { name: '智慧大脑 (development)' })).toBeInTheDocument();
     expect(screen.queryByRole('option', { name: '市场素材库 (development)' })).not.toBeInTheDocument();
     expect((await screen.findAllByText('hanshangbo@local.dev')).length).toBeGreaterThan(0);
+    expect(screen.getByText('研发负责人')).toBeInTheDocument();
     expect(screen.getByText('账号不存在时会自动创建，初始密码 123456。')).toBeInTheDocument();
     const roleSelect = screen.getByLabelText('成员角色');
     expect(within(roleSelect).getByRole('option', { name: '项目成员' })).toBeInTheDocument();
@@ -144,7 +153,6 @@ describe('MembersPage', () => {
     render(<MembersPage />);
 
     expect(await screen.findByRole('heading', { name: '成员管理' })).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByLabelText('选择部门')).not.toBeDisabled());
     await user.selectOptions(screen.getByLabelText('选择部门'), 'marketing');
 
     await waitFor(() => {
@@ -204,7 +212,7 @@ describe('MembersPage', () => {
       full_name: 'Test 2',
       memberships: [{ org_id: 'org-1', org_name: '研发部', role: 'business_user' }],
     });
-    mocks.listProjects.mockResolvedValue([
+    mocks.listProjectCatalog.mockResolvedValue([
       {
         id: 'project-1',
         org_id: 'org-1',

@@ -51,25 +51,25 @@ class ProjectMaterialIntakeTests(unittest.TestCase):
             requested_ids={"keep", "review", "secret", "duplicate", "log"},
         )
 
-        self.assertEqual([row.id for row in selected], ["keep", "review"])
+        self.assertEqual([row.id for row in selected], ["keep"])
 
-    def test_review_markdown_contains_curated_source_and_every_skill(self) -> None:
+    def test_review_markdown_lists_original_files_without_ai_summary(self) -> None:
         intake = _load_module()
-        skills = [
-            SimpleNamespace(title="Deploy locally", markdown_content="# Deploy locally\n\n1. Start services"),
-            SimpleNamespace(title="Verify API", markdown_content="# Verify API\n\n1. Call health"),
+        files = [
+            SimpleNamespace(filename="README.md", format="md", size_bytes=120, reason="未检测到敏感信息"),
+            SimpleNamespace(filename="architecture.pdf", format="pdf", size_bytes=2048, reason="未检测到敏感信息"),
         ]
 
-        markdown = intake.build_review_markdown(
+        markdown = intake.build_original_material_review_markdown(
             project_name="Smart Brain",
-            curated_markdown="# Source\n\nUse Docker.",
-            skills=skills,
+            files=files,
         )
 
-        self.assertIn("## 整理后的项目资料", markdown)
-        self.assertIn("## 可复用 Skill", markdown)
-        self.assertIn("Deploy locally", markdown)
-        self.assertIn("Verify API", markdown)
+        self.assertIn("原始项目资料审批", markdown)
+        self.assertIn("README.md", markdown)
+        self.assertIn("architecture.pdf", markdown)
+        self.assertNotIn("整理后的项目资料", markdown)
+        self.assertNotIn("Skill", markdown)
 
 
 if __name__ == "__main__":

@@ -34,8 +34,9 @@ class _Result:
 
 
 class _Orm:
-    def __init__(self, projects=None):
+    def __init__(self, projects=None, user=None):
         self.projects = projects or []
+        self.user = user
         self.calls = []
 
     def execute(self, statement, params=None):
@@ -43,6 +44,8 @@ class _Orm:
         self.calls.append((sql, params or {}))
         if "FROM public.project_members" in sql and "JOIN public.projects" in sql:
             return _Result(rows=self.projects)
+        if "FROM auth.users" in sql:
+            return _Result(row=self.user)
         return _Result()
 
 
@@ -113,7 +116,11 @@ class WikiMcpOperationsTests(unittest.TestCase):
         project_id = uuid.UUID("00000000-0000-0000-0000-000000000010")
         user_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
         change_id = uuid.UUID("00000000-0000-0000-0000-000000000040")
-        orm = _Orm()
+        orm = _Orm(user=SimpleNamespace(
+            user_id=str(user_id),
+            email="uploader@local.dev",
+            name="上传人昵称",
+        ))
 
         @contextmanager
         def session_factory():
@@ -146,6 +153,9 @@ class WikiMcpOperationsTests(unittest.TestCase):
         create.assert_called_once()
         self.assertEqual(result["status"], "pending_review")
         self.assertEqual(result["change_id"], str(change_id))
+        self.assertEqual(result["uploaded_by"]["user_id"], str(user_id))
+        self.assertEqual(result["uploaded_by"]["name"], "上传人昵称")
+        self.assertEqual(result["uploaded_by"]["email"], "uploader@local.dev")
 
 
 if __name__ == "__main__":

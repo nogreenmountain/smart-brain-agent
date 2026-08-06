@@ -13,7 +13,7 @@ import {
   deleteKnowledgeDocument,
   listKnowledgeLedger,
   listProjectMemoryDepartments,
-  listProjects,
+  listProjectCatalog,
   originalMaterialDownloadUrl,
   Project,
 } from '@/lib/api';
@@ -105,7 +105,7 @@ export default function KnowledgePage() {
       try {
         const [departmentRows, projectRows] = await Promise.all([
           listProjectMemoryDepartments(),
-          listProjects(),
+          listProjectCatalog(),
         ]);
         setDepartments(departmentRows);
         setProjects(projectRows);

@@ -71,10 +71,14 @@ export default function WorklogsPage() {
       .then(async (loaded) => {
         if (!active) return;
         setOptions(loaded);
-        const initialEmployee = loaded.mode === 'admin' ? loaded.employees[0]?.id ?? '' : '';
+        const initialEmployee = loaded.mode === 'admin'
+          ? loaded.employees.find((item) => item.id === loaded.current_employee.id)?.id
+            ?? loaded.employees[0]?.id
+            ?? ''
+          : '';
         if (initialEmployee) setEmployeeId(initialEmployee);
-        if (loaded.mode === 'self' || initialEmployee) {
-          await loadLogs(loaded.mode, initialEmployee, today);
+        if (loaded.mode !== 'admin' || initialEmployee) {
+          await loadLogs(loaded.mode === 'admin' ? 'admin' : 'self', initialEmployee, today);
         }
       })
       .catch((requestError: unknown) => {
@@ -91,7 +95,7 @@ export default function WorklogsPage() {
   }, []);
 
   async function loadLogs(
-    modeOverride?: 'self' | 'admin',
+    modeOverride?: AIUsageOptions['mode'],
     employeeOverride?: string,
     dateOverride?: string,
   ) {

@@ -4,7 +4,9 @@ import * as React from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import {
   BrainCircuit,
+  BookOpen,
   CalendarClock,
+  ClipboardList,
   FileText,
   Activity,
   LibraryBig,
@@ -12,6 +14,7 @@ import {
   MessageCircle,
   Network,
   Settings,
+  UserRound,
   Users,
   type LucideIcon,
 } from 'lucide-react';
@@ -21,6 +24,8 @@ interface Me {
   user_id: string;
   email: string;
   full_name: string | null;
+  nickname?: string | null;
+  display_name?: string;
   memberships: { org_id: string; org_name: string; role: string }[];
 }
 
@@ -33,9 +38,12 @@ const NAV: {
   { href: '/chat', label: '问答', icon: MessageCircle },
   { href: '/knowledge', label: '知识库', icon: LibraryBig },
   { href: '/wiki', label: '项目 Wiki', icon: Network },
+  { href: '/member-wiki', label: '成员 Wiki', icon: BookOpen },
+  { href: '/meeting-notes', label: '会议记录', icon: ClipboardList },
   { href: '/workday', label: 'AI 工作记录', icon: CalendarClock },
   { href: '/worklogs', label: 'AI 工作日志', icon: FileText },
   { href: '/monitor/setup', label: 'AI Monitor', icon: Activity },
+  { href: '/profile', label: '个人中心', icon: UserRound },
   { href: '/members', label: '成员管理', icon: Users },
   { href: '/admin', label: '项目管理', icon: Settings },
 ];
@@ -91,7 +99,8 @@ export function Shell({ me, children }: { me: Me; children: React.ReactNode }) {
 
         <div className="px-3 py-3 border-t border-[#d7e0ec]">
           <div className="hidden md:block px-2 py-1.5 text-xs text-[#6e7d97] truncate">
-            {me.email}
+            <div className="truncate font-medium text-[#253655]">{me.display_name || me.nickname || me.email}</div>
+            {(me.display_name || me.nickname) && <div className="mt-0.5 truncate text-[11px]">{me.email}</div>}
           </div>
           <button
             type="button"

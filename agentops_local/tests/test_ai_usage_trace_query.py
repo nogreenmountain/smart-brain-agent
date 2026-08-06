@@ -123,6 +123,65 @@ class AIUsageTraceQueryTests(unittest.TestCase):
         self.assertEqual(chats[0].trace_id, "trace-id-1")
         self.assertEqual(chats[0].total_tokens, 138)
 
+    def test_recent_conversation_sync_suppresses_residual_trace_warning(self) -> None:
+        started_at = datetime(2026, 8, 5, 8, 0, tzinfo=timezone.utc)
+        common = {
+            "project_id": "00000000-0000-0000-0000-000000000001",
+            "project_name": "Project",
+            "employee_id": "employee-001",
+            "employee_name": "Employee",
+            "source": "cc_switch",
+            "task_id": "unassigned",
+            "status": "ok",
+            "title": "Codex conversation",
+        }
+        chat = route.UsageRecord(
+            id="chat-1",
+            record_type="chat",
+            started_at=started_at,
+            ended_at=started_at + timedelta(minutes=1),
+            **common,
+        )
+        residual_trace = route.UsageRecord(
+            id="trace-1",
+            record_type="trace",
+            started_at=started_at + timedelta(minutes=10),
+            ended_at=started_at + timedelta(minutes=11),
+            **common,
+        )
+
+        self.assertFalse(route._has_stale_unsynced_trace([chat], [residual_trace]))
+
+    def test_stale_or_missing_conversation_sync_keeps_warning(self) -> None:
+        started_at = datetime(2026, 8, 5, 8, 0, tzinfo=timezone.utc)
+        common = {
+            "project_id": "00000000-0000-0000-0000-000000000001",
+            "project_name": "Project",
+            "employee_id": "employee-001",
+            "employee_name": "Employee",
+            "source": "cc_switch",
+            "task_id": "unassigned",
+            "status": "ok",
+            "title": "Codex conversation",
+        }
+        chat = route.UsageRecord(
+            id="chat-1",
+            record_type="chat",
+            started_at=started_at,
+            ended_at=started_at + timedelta(minutes=1),
+            **common,
+        )
+        stale_trace = route.UsageRecord(
+            id="trace-1",
+            record_type="trace",
+            started_at=started_at + timedelta(minutes=16),
+            ended_at=started_at + timedelta(minutes=17),
+            **common,
+        )
+
+        self.assertTrue(route._has_stale_unsynced_trace([chat], [stale_trace]))
+        self.assertTrue(route._has_stale_unsynced_trace([], [stale_trace]))
+
 
 if __name__ == "__main__":
     unittest.main()

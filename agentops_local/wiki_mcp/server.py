@@ -43,12 +43,14 @@ verifier = WikiTokenVerifier(secret=_token_secret(), session_factory=session_sco
 mcp = MCPServer(
     "smartbrain-company-memory",
     title="SmartBrain Company Memory",
-    description="Search reviewed project memory and submit new memory proposals for approval.",
+    description="Search reviewed project memory, privacy-scoped member experience, and project meeting summaries.",
     instructions=(
         "Search before answering questions about company history, decisions, failures, workflows, or strategy. "
-        "Prefer verified and recently updated pages, cite page IDs, and surface conflicts or stale guidance."
+        "Prefer verified and recently updated pages, cite page IDs, and surface conflicts or stale guidance. "
+        "Member Wiki tools inherit the token owner's same access: members see only themselves; organization owners/admins see members they administer. "
+        "Meeting summary tools inherit project membership and never expose projects the token owner cannot read."
     ),
-    version="1.0.0",
+    version="1.2.0",
     token_verifier=verifier,
     auth=AuthSettings(
         issuer_url=public_url,
@@ -68,6 +70,94 @@ async def health(_: Request) -> JSONResponse:
 def list_wiki_projects() -> dict[str, Any]:
     user_id, _ = _identity()
     return operations.list_projects(user_id=user_id)
+
+
+@mcp.tool(description="List member Wikis visible to the current token owner. The token owner gets the same access as in SmartBrain: self only for regular members, administered organization members for owners/admins.")
+def list_member_wikis() -> dict[str, Any]:
+    user_id, _ = _identity()
+    return operations.list_member_wikis(user_id=user_id)
+
+
+@mcp.tool(description="Search reusable member experience for a task using hybrid semantic and keyword retrieval. Pass member as an employee ID, name, or email; regular members remain restricted to themselves.")
+def search_member_experience(
+    query: str,
+    member: str | None = None,
+    tags: list[str] | None = None,
+    outcome: str | None = None,
+    task_type: str | None = None,
+    updated_after: str | None = None,
+    limit: int = 8,
+) -> dict[str, Any]:
+    user_id, _ = _identity()
+    return operations.search_member(
+        user_id=user_id,
+        query=query,
+        member=member,
+        tags=tags,
+        outcome=outcome,
+        task_type=task_type,
+        updated_after=updated_after,
+        limit=limit,
+    )
+
+
+@mcp.tool(description="Read one complete reusable member experience in the standardized Markdown format. Access is inherited from the current token owner.")
+def get_member_experience(experience_id: str) -> dict[str, Any]:
+    user_id, _ = _identity()
+    return operations.get_member_experience(
+        user_id=user_id,
+        experience_id=experience_id,
+    )
+
+
+@mcp.tool(description="Return recently updated member experiences, optionally for one accessible member and after an ISO-8601 time.")
+def get_member_recent_experience(
+    member: str | None = None,
+    since: str | None = None,
+    limit: int = 20,
+) -> dict[str, Any]:
+    user_id, _ = _identity()
+    return operations.recent_member_experience(
+        user_id=user_id,
+        member=member,
+        since=since,
+        limit=limit,
+    )
+
+
+@mcp.tool(description="List recent meeting summaries in a project. Access always inherits the token owner's project membership.")
+def list_meeting_summaries(
+    project_id: str | None = None,
+    since: str | None = None,
+    limit: int = 20,
+) -> dict[str, Any]:
+    user_id, _ = _identity()
+    return operations.list_meeting_summaries(
+        user_id=user_id, project_id=project_id, since=since, limit=limit,
+    )
+
+
+@mcp.tool(description="Search meeting summaries, decisions, action items, participants, and tags using hybrid semantic and keyword retrieval. Access inherits project membership.")
+def search_meeting_summaries(
+    query: str,
+    project_id: str | None = None,
+    tags: list[str] | None = None,
+    since: str | None = None,
+    limit: int = 8,
+) -> dict[str, Any]:
+    user_id, _ = _identity()
+    return operations.search_meeting_summaries(
+        user_id=user_id, query=query, project_id=project_id,
+        tags=tags, since=since, limit=limit,
+    )
+
+
+@mcp.tool(description="Read one complete standardized Markdown meeting summary. Access inherits project membership.")
+def get_meeting_summary(meeting_summary_id: str) -> dict[str, Any]:
+    user_id, _ = _identity()
+    return operations.get_meeting_summary(
+        user_id=user_id, meeting_summary_id=meeting_summary_id,
+    )
 
 
 @mcp.tool(description="Search project Wiki memory using keyword and semantic retrieval with optional kind, tag, date, and verification filters.")

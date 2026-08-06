@@ -1,15 +1,15 @@
 {
   "name": "company-memory",
-  "version": "0.1.0+codex.20260803050954",
-  "description": "Search reviewed SmartBrain project memory and submit reusable knowledge for administrator review.",
+  "version": "0.1.0+codex.20260806055248",
+  "description": "Search SmartBrain project memory, privacy-scoped member experience, and project meeting summaries; submit identity-attributed project knowledge for administrator review.",
   "author": {
     "name": "SmartBrain"
   },
   "skills": "./skills/",
   "interface": {
     "displayName": "Company Memory",
-    "shortDescription": "Search reviewed company knowledge on demand.",
-    "longDescription": "Retrieves project decisions, workflows, strategies, examples, and retrospectives from SmartBrain Wiki without loading the whole knowledge base into context.",
+    "shortDescription": "Search project, member, and meeting knowledge on demand.",
+    "longDescription": "Retrieves reviewed project knowledge, privacy-scoped member experience, and project meeting summaries from SmartBrain; proposals are automatically attributed to the authenticated MCP Token owner.",
     "developerName": "SmartBrain",
     "category": "Productivity",
     "capabilities": [
@@ -19,8 +19,8 @@
     ],
     "defaultPrompt": [
       "Find the most relevant company decisions and proven workflows for this task.",
-      "Search prior failure cases before changing this system.",
-      "Summarize recent Wiki updates for this project."
+      "See how a named member completed a similar task and adapt the method.",
+      "Find meeting decisions and action items related to this work."
     ]
   },
   "mcpServers": "./.mcp.json"

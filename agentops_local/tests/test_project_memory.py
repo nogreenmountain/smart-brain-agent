@@ -201,12 +201,12 @@ class ProjectMemoryRouteTests(unittest.TestCase):
         self.assertTrue(any("status = 'approved'" in sql for sql in orm.executed))
         self.assertGreaterEqual(orm.commits, 1)
 
-    def test_approve_v2_draft_publishes_skills_without_reingesting_review_document(self) -> None:
+    def test_approve_material_intake_ingests_original_files_only_after_review(self) -> None:
         route = _load_module("project_memory_route_v2", "api/routes/v4/project_memory.py")
         orm = _Orm()
         user_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
         draft_id = uuid.UUID("00000000-0000-0000-0000-000000000020")
-        curated_document_id = uuid.UUID("00000000-0000-0000-0000-000000000030")
+        raw_document_id = uuid.UUID("00000000-0000-0000-0000-000000000030")
 
         def execute(statement, params=None):
             sql = str(statement)
@@ -219,37 +219,47 @@ class ProjectMemoryRouteTests(unittest.TestCase):
                         project_id="00000000-0000-0000-0000-000000000010",
                         department_id="research",
                         status="pending_review",
-                        markdown_content="# Review",
-                        title="资料整理与 Skill",
+                        markdown_content="# 原始资料审批",
+                        title="原始项目资料审批",
+                        template_version="project-material-original-v1",
                         intake_id="00000000-0000-0000-0000-000000000040",
-                        skill_candidates=[
-                            {
-                                "title": "Deploy locally",
-                                "summary": "Start services",
-                                "markdown_content": "# Deploy locally\n\n1. Start services",
-                            }
-                        ],
+                        skill_candidates=[],
+                        created_by_user_id=str(user_id),
                     )
                 )
-            if "FROM public.documents" in sql and "memory_draft_id" in sql:
+            if "FROM public.project_material_intake_files" in sql:
                 return _Result(
                     rows=[
                         SimpleNamespace(
-                            id=str(curated_document_id),
-                            memory_type="curated_project_source",
+                            id="00000000-0000-0000-0000-000000000041",
+                            filename="README.md",
+                            format="md",
+                            size_bytes=32,
+                            content_hash="hash-1",
+                            raw_content=b"# Project\n\nRun Docker",
+                            recommendation="keep",
+                            included=True,
                         )
                     ]
                 )
             return _Result()
 
         orm.execute = execute
-        candidates = [SimpleNamespace(title="Deploy locally")]
         with (
             patch.object(route, "current_user_id", return_value=user_id),
             patch.object(route, "require_admin", return_value=None),
             patch.object(route, "ingest_markdown_memory") as ingest,
-            patch.object(route, "build_skill_candidates", return_value=candidates) as build_candidates,
-            patch.object(route, "publish_approved_candidates", return_value=[uuid.uuid4()]) as publish,
+            patch.object(
+                route,
+                "ingest_file",
+                return_value=SimpleNamespace(
+                    document_id=raw_document_id,
+                    chunk_count=2,
+                    status="ready",
+                    error=None,
+                ),
+            ) as ingest_original,
+            patch.object(route, "publish_approved_candidates") as publish,
             patch.object(route, "record_audit", return_value=None),
         ):
             response = route.approve_project_memory_draft(
@@ -260,11 +270,13 @@ class ProjectMemoryRouteTests(unittest.TestCase):
             )
 
         ingest.assert_not_called()
-        build_candidates.assert_called_once()
-        publish.assert_called_once()
-        self.assertEqual(response.document_id, curated_document_id)
-        self.assertEqual(response.wiki_page_count, 1)
+        ingest_original.assert_called_once()
+        publish.assert_not_called()
+        self.assertEqual(response.document_id, raw_document_id)
+        self.assertEqual(response.chunk_count, 2)
+        self.assertEqual(response.wiki_page_count, 0)
         self.assertTrue(any("project_material_intakes" in sql for sql in orm.executed))
+        self.assertTrue(any("project_material_documents" in sql for sql in orm.executed))
 
 
 class KnowledgeMaterialBatchRouteTests(unittest.TestCase):
@@ -429,7 +441,7 @@ class KnowledgeMaterialBatchRouteTests(unittest.TestCase):
 
         with (
             patch.object(route, "current_user_id", return_value=user_id),
-            patch.object(route, "require_member", return_value=None) as require_member,
+            patch.object(route, "require_member", side_effect=AssertionError("membership should not be required")),
         ):
             ledger = route.get_knowledge_ledger(
                 request=object(),
@@ -443,7 +455,6 @@ class KnowledgeMaterialBatchRouteTests(unittest.TestCase):
                 orm=orm,
             )
 
-        require_member.assert_called_once_with(orm, user_id=user_id, project_id=project_id)
         self.assertFalse(ledger.permissions.can_review)
         self.assertEqual(ledger.project.name, "智慧大脑")
         self.assertEqual(ledger.leaders[0].email, "leader@local.dev")

@@ -14,21 +14,18 @@ from sqlalchemy.orm import Session
 
 from agentops.auth.middleware import AuthenticatedRoute
 from agentops.common.orm import get_orm_session
-from agentops.project_memory.ingest import ingest_markdown_memory
 from agentops.project_memory.intake import (
-    build_review_markdown,
+    build_original_material_review_markdown,
     select_confirmed_files,
     validate_batch_limits,
 )
 from agentops.project_memory.intelligence import (
     MaterialSource,
-    generate_knowledge_package,
     preview_materials,
 )
 from agentops.project_memory.parsers import SUPPORTED_FORMATS, extract_text
 from agentops.rag.audit import record_audit
 from agentops.rag.authz import AuthzError, current_user_id, require_admin, require_member
-from agentops.rag.ingest import ingest_file
 
 
 router = APIRouter(route_class=AuthenticatedRoute)
@@ -64,11 +61,7 @@ class ConfirmMaterialIntakeResponse(BaseModel):
     intake_id: uuid.UUID
     status: str
     raw_document_count: int
-    curated_document_id: uuid.UUID
     draft_id: uuid.UUID
-    skill_count: int
-    generation_model: str | None = None
-    generation_used_fallback: bool
 
 
 def _safe_upload_name(upload: UploadFile) -> tuple[str, str]:
@@ -104,13 +97,6 @@ def _extract_source(filename: str, fmt: str, raw: bytes) -> MaterialSource:
         size_bytes=len(raw),
         content_hash=hashlib.sha256(raw).hexdigest(),
     )
-
-
-def _write_temp_file(filename: str, fmt: str, raw: bytes) -> Path:
-    suffix = Path(filename).suffix or f".{fmt}"
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as handle:
-        handle.write(raw)
-        return Path(handle.name)
 
 
 def _json(value: object) -> str:
@@ -190,7 +176,7 @@ def preview_project_materials(
 
     response_items: list[MaterialPreviewFileSchema] = []
     for (source, raw), item in zip(uploads, preview.items):
-        retain_payload = item.recommendation not in {"duplicate", "sensitive", "low_value"}
+        retain_payload = item.recommendation == "keep" and item.included
         row = orm.execute(
             text("""
                 INSERT INTO public.project_material_intake_files (
@@ -263,7 +249,7 @@ def confirm_project_materials(
     intake = orm.execute(
         text("""
             SELECT id::text, project_id::text, department_id, status,
-                   created_by_user_id::text
+                   created_by_user_id::text, preview_model, preview_used_fallback
             FROM public.project_material_intakes
             WHERE id = :intake_id
             FOR UPDATE
@@ -285,7 +271,7 @@ def confirm_project_materials(
     file_rows = orm.execute(
         text("""
             SELECT id::text, filename, format, size_bytes, content_hash,
-                   raw_content, extracted_text, recommendation, included
+                   raw_content, extracted_text, recommendation, included, reason
             FROM public.project_material_intake_files
             WHERE intake_id = :intake_id
             ORDER BY created_at, filename
@@ -299,200 +285,59 @@ def confirm_project_materials(
     if not selected:
         raise HTTPException(status_code=400, detail="no useful material selected")
 
+    project_name = _project_name(orm, project_id)
+    review_markdown = build_original_material_review_markdown(
+        project_name=project_name,
+        files=selected,
+    )
+    draft_row = orm.execute(
+        text("""
+            INSERT INTO public.project_memory_drafts (
+                project_id, department_id, title, status, template_version,
+                markdown_content, source_count, created_by_user_id,
+                intake_id, curated_markdown_content, skill_candidates,
+                generation_model, generation_used_fallback
+            )
+            VALUES (
+                :project_id, :department_id, :title, 'pending_review',
+                'project-material-original-v1', :markdown_content, :source_count,
+                :user_id, :intake_id, NULL, '[]'::jsonb, :model, :used_fallback
+            )
+            RETURNING id::text
+        """),
+        {
+            "project_id": str(project_id),
+            "department_id": str(intake.department_id),
+            "title": f"{project_name} 原始项目资料审批",
+            "markdown_content": review_markdown,
+            "source_count": len(selected),
+            "user_id": str(user_id),
+            "intake_id": str(intake_id),
+            "model": getattr(intake, "preview_model", None),
+            "used_fallback": bool(getattr(intake, "preview_used_fallback", False)),
+        },
+    ).first()
+    if draft_row is None:
+        raise HTTPException(status_code=503, detail="failed to create original material review batch")
+    draft_id = uuid.UUID(str(draft_row.id))
+    selected_ids = [str(row.id) for row in selected]
+    orm.execute(
+        text("""
+            UPDATE public.project_material_intake_files
+            SET included = (id::text = ANY(CAST(:selected_ids AS text[])))
+            WHERE intake_id = :intake_id
+        """),
+        {"intake_id": str(intake_id), "selected_ids": selected_ids},
+    )
     orm.execute(
         text("""
             UPDATE public.project_material_intakes
-            SET status = 'processing', updated_at = now()
+            SET status = 'pending_review', confirmed_at = now(), updated_at = now()
             WHERE id = :intake_id
         """),
         {"intake_id": str(intake_id)},
     )
     orm.commit()
-
-    project_name = _project_name(orm, project_id)
-    sources = [
-        MaterialSource(
-            filename=str(row.filename),
-            format=str(row.format),
-            text=str(row.extracted_text),
-            size_bytes=int(row.size_bytes),
-            content_hash=str(row.content_hash),
-        )
-        for row in selected
-    ]
-    try:
-        package = generate_knowledge_package(project_name=project_name, sources=sources)
-        raw_documents: list[tuple[object, uuid.UUID]] = []
-        for row in selected:
-            temp_path = _write_temp_file(str(row.filename), str(row.format), bytes(row.raw_content))
-            try:
-                result = ingest_file(
-                    temp_path,
-                    project_id=project_id,
-                    display_name=str(row.filename),
-                    created_by_user_id=user_id,
-                )
-            finally:
-                temp_path.unlink(missing_ok=True)
-            if result.error:
-                raise RuntimeError(f"raw material ingest failed: {result.error}")
-            raw_documents.append((row, result.document_id))
-
-        curated_result = ingest_markdown_memory(
-            markdown=package.curated_markdown,
-            project_id=project_id,
-            display_name=f"{project_name} - 项目资料整理版.md",
-            created_by_user_id=user_id,
-        )
-        if curated_result.error:
-            raise RuntimeError(f"curated source ingest failed: {curated_result.error}")
-
-        skill_payload = [
-            {
-                "title": skill.title,
-                "summary": skill.summary,
-                "markdown_content": skill.markdown_content,
-                "source_filenames": list(skill.source_filenames),
-            }
-            for skill in package.skills
-        ]
-        review_markdown = build_review_markdown(
-            project_name=project_name,
-            curated_markdown=package.curated_markdown,
-            skills=package.skills,
-        )
-        draft_row = orm.execute(
-            text("""
-                INSERT INTO public.project_memory_drafts (
-                    project_id, department_id, title, status, template_version,
-                    markdown_content, source_count, created_by_user_id,
-                    intake_id, curated_markdown_content, skill_candidates,
-                    generation_model, generation_used_fallback
-                )
-                VALUES (
-                    :project_id, :department_id, :title, 'pending_review',
-                    'project-memory-v2', :markdown_content, :source_count, :user_id,
-                    :intake_id, :curated_markdown, CAST(:skills AS jsonb),
-                    :model, :used_fallback
-                )
-                RETURNING id::text
-            """),
-            {
-                "project_id": str(project_id),
-                "department_id": str(intake.department_id),
-                "title": f"{project_name} 资料整理与 Skill",
-                "markdown_content": review_markdown,
-                "source_count": len(sources),
-                "user_id": str(user_id),
-                "intake_id": str(intake_id),
-                "curated_markdown": package.curated_markdown,
-                "skills": _json(skill_payload),
-                "model": package.model,
-                "used_fallback": package.used_fallback,
-            },
-        ).first()
-        if draft_row is None:
-            raise RuntimeError("failed to create memory review batch")
-        draft_id = uuid.UUID(str(draft_row.id))
-
-        orm.execute(
-            text("""
-                UPDATE public.documents
-                SET memory_type = 'curated_project_source',
-                    memory_draft_id = :draft_id,
-                    template_version = 'project-memory-v2'
-                WHERE id = :document_id
-            """),
-            {
-                "draft_id": str(draft_id),
-                "document_id": str(curated_result.document_id),
-            },
-        )
-        for source in sources:
-            orm.execute(
-                text("""
-                    INSERT INTO public.project_memory_draft_sources (
-                        draft_id, filename, format, extracted_text,
-                        size_bytes, content_hash
-                    )
-                    VALUES (
-                        :draft_id, :filename, :format, :text,
-                        :size_bytes, :content_hash
-                    )
-                """),
-                {
-                    "draft_id": str(draft_id),
-                    "filename": source.filename,
-                    "format": source.format,
-                    "text": source.text,
-                    "size_bytes": source.size_bytes,
-                    "content_hash": source.content_hash,
-                },
-            )
-        for row, document_id in raw_documents:
-            orm.execute(
-                text("""
-                    UPDATE public.documents
-                    SET memory_type = 'raw_project_material',
-                        memory_draft_id = :draft_id,
-                        template_version = 'project-memory-v2'
-                    WHERE id = :document_id
-                """),
-                {"draft_id": str(draft_id), "document_id": str(document_id)},
-            )
-            orm.execute(
-                text("""
-                    UPDATE public.project_material_intake_files
-                    SET document_id = :document_id,
-                        included = true
-                    WHERE id = :file_id
-                """),
-                {"document_id": str(document_id), "file_id": str(row.id)},
-            )
-            orm.execute(
-                text("""
-                    INSERT INTO public.project_material_documents (
-                        project_id, document_id, draft_id, uploaded_by_user_id,
-                        content_hash, original_file_id
-                    )
-                    VALUES (
-                        :project_id, :document_id, :draft_id, :user_id,
-                        :content_hash, :file_id
-                    )
-                    ON CONFLICT (document_id) DO UPDATE SET
-                        draft_id = excluded.draft_id,
-                        content_hash = excluded.content_hash,
-                        original_file_id = excluded.original_file_id
-                """),
-                {
-                    "project_id": str(project_id),
-                    "document_id": str(document_id),
-                    "draft_id": str(draft_id),
-                    "user_id": str(user_id),
-                    "content_hash": str(row.content_hash),
-                    "file_id": str(row.id),
-                },
-            )
-        orm.execute(
-            text("""
-                UPDATE public.project_material_intakes
-                SET status = 'pending_review', confirmed_at = now(), updated_at = now()
-                WHERE id = :intake_id
-            """),
-            {"intake_id": str(intake_id)},
-        )
-        orm.commit()
-    except Exception as error:
-        orm.execute(
-            text("""
-                UPDATE public.project_material_intakes
-                SET status = 'failed', updated_at = now()
-                WHERE id = :intake_id
-            """),
-            {"intake_id": str(intake_id)},
-        )
-        orm.commit()
-        raise HTTPException(status_code=503, detail=f"material processing failed: {error}") from error
 
     record_audit(
         orm,
@@ -502,22 +347,65 @@ def confirm_project_materials(
         resource_id=str(intake_id),
         metadata={
             "project_id": str(project_id),
-            "raw_document_count": len(raw_documents),
+            "raw_document_count": len(selected),
             "draft_id": str(draft_id),
-            "skill_count": len(package.skills),
+            "ai_summary_generated": False,
         },
         request=request,
     )
     return ConfirmMaterialIntakeResponse(
         intake_id=intake_id,
         status="pending_review",
-        raw_document_count=len(raw_documents),
-        curated_document_id=curated_result.document_id,
+        raw_document_count=len(selected),
         draft_id=draft_id,
-        skill_count=len(package.skills),
-        generation_model=package.model,
-        generation_used_fallback=package.used_fallback,
     )
+
+
+@router.delete("/knowledge/material-intakes/{intake_id}", status_code=204)
+def cancel_project_materials(
+    request: Request,
+    intake_id: uuid.UUID,
+    orm: Session = Depends(get_orm_session),
+) -> Response:
+    try:
+        user_id = current_user_id(request)
+    except AuthzError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    intake = orm.execute(
+        text("""
+            SELECT id::text, project_id::text, status, created_by_user_id::text
+            FROM public.project_material_intakes
+            WHERE id = :intake_id
+            FOR UPDATE
+        """),
+        {"intake_id": str(intake_id)},
+    ).first()
+    if intake is None:
+        raise HTTPException(status_code=404, detail="material preview not found")
+    project_id = uuid.UUID(str(intake.project_id))
+    try:
+        require_member(orm, user_id=user_id, project_id=project_id)
+        if str(intake.created_by_user_id or "") != str(user_id):
+            require_admin(orm, user_id=user_id, project_id=project_id)
+    except AuthzError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    if intake.status != "preview_ready":
+        raise HTTPException(status_code=409, detail=f"material preview already {intake.status}")
+    orm.execute(
+        text("DELETE FROM public.project_material_intakes WHERE id = :intake_id"),
+        {"intake_id": str(intake_id)},
+    )
+    orm.commit()
+    record_audit(
+        orm,
+        user_id=user_id,
+        action="upload",
+        resource_type="project_material_intake",
+        resource_id=str(intake_id),
+        metadata={"project_id": str(project_id), "result": "cancelled"},
+        request=request,
+    )
+    return Response(status_code=204)
 
 
 @router.get("/knowledge/material-intakes/{intake_id}/files/{file_id}/download")

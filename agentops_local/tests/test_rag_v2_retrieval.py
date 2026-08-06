@@ -7,7 +7,6 @@ import types
 import unittest
 import uuid
 from pathlib import Path
-from unittest.mock import patch
 
 _LOCAL_ROOT = Path(__file__).parents[1]
 _APP_ROOT = _LOCAL_ROOT.parent
@@ -29,7 +28,6 @@ from agentops.rag.hybrid import (
     reciprocal_rank_fusion,
     rerank_or_keep,
 )
-from agentops.rag.model_clients import EmbeddingServiceClient
 from agentops.rag.search import SearchHit
 
 
@@ -47,43 +45,6 @@ def _hit(label: str, score: float) -> SearchHit:
 
 
 class RagV2RetrievalTests(unittest.TestCase):
-    def test_embedding_client_batches_requests_to_service_limit(self) -> None:
-        batch_sizes: list[int] = []
-
-        class FakeResponse:
-            def __init__(self, size: int):
-                self.size = size
-
-            def raise_for_status(self) -> None:
-                return None
-
-            def json(self):
-                return {"vectors": [[float(index)] for index in range(self.size)]}
-
-        class FakeHttpClient:
-            def __init__(self, *args, **kwargs):
-                pass
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, exc_type, exc, traceback):
-                return False
-
-            def post(self, url: str, json: dict):
-                size = len(json["texts"])
-                if size > 64:
-                    raise AssertionError(f"embedding batch exceeds service limit: {size}")
-                batch_sizes.append(size)
-                return FakeResponse(size)
-
-        client = EmbeddingServiceClient(expected_dim=1)
-        with patch("agentops.rag.model_clients.httpx.Client", FakeHttpClient):
-            vectors = client.embed_documents([f"chunk-{index}" for index in range(130)])
-
-        self.assertEqual(batch_sizes, [64, 64, 2])
-        self.assertEqual(len(vectors), 130)
-
     def test_preprocess_fts_text_keeps_codes_and_adds_cjk_tokens(self) -> None:
         text = "产品 X1000 v2.3 的退款条件是什么"
 

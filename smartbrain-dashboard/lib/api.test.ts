@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  changeMyPassword,
   compileProjectWiki,
   createProjectWikiMcpToken,
   getProjectWikiOverview,
@@ -9,6 +10,7 @@ import {
   login,
   revokeProjectWikiMcpToken,
   reviewProjectWikiChange,
+  updateMyProfile,
 } from './api';
 
 describe('login', () => {
@@ -170,5 +172,53 @@ describe('project Wiki API', () => {
       'http://localhost:8000/v4/project-wiki/mcp-tokens/token%2Fone',
     );
     expect(fetchMock.mock.calls[2][1]).toMatchObject({ method: 'DELETE' });
+  });
+});
+
+describe('personal profile API', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('updates the nickname and changes the password through current-user endpoints', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            user_id: 'user-1',
+            email: 'test1@local.dev',
+            full_name: 'test1',
+            nickname: '研发小王',
+            display_name: '研发小王',
+            ai_detail_visible_to_admin: true,
+            memberships: [],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ status: 'updated' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await updateMyProfile('研发小王', true);
+    await changeMyPassword('old-password', 'new-password');
+
+    expect(fetchMock.mock.calls[0][0]).toBe('http://localhost:8000/v4/auth/me/profile');
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: 'PATCH' });
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body as string)).toEqual({
+      nickname: '研发小王',
+      ai_detail_visible_to_admin: true,
+    });
+    expect(fetchMock.mock.calls[1][0]).toBe('http://localhost:8000/v4/auth/me/password');
+    expect(fetchMock.mock.calls[1][1]).toMatchObject({ method: 'POST' });
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body as string)).toEqual({
+      current_password: 'old-password',
+      new_password: 'new-password',
+    });
   });
 });

@@ -46,6 +46,8 @@ describe('Shell AI record navigation', () => {
     expect(link).toHaveClass('bg-brand-500/10');
     expect(link.querySelector('svg')).not.toBeNull();
     const worklogLink = screen.getByRole('button', { name: 'AI 工作日志' });
+    const memberWikiLink = screen.getByRole('button', { name: '成员 Wiki' });
+    const meetingNotesLink = screen.getByRole('button', { name: '会议记录' });
     expect(screen.getByRole('button', { name: '成员管理' })).toBeInTheDocument();
 
     await user.click(link);
@@ -53,6 +55,12 @@ describe('Shell AI record navigation', () => {
 
     await user.click(worklogLink);
     expect(mocks.push).toHaveBeenCalledWith('/worklogs');
+
+    await user.click(memberWikiLink);
+    expect(mocks.push).toHaveBeenCalledWith('/member-wiki');
+
+    await user.click(meetingNotesLink);
+    expect(mocks.push).toHaveBeenCalledWith('/meeting-notes');
   });
 
   it('opens the member-management navigation for project members', async () => {
@@ -74,5 +82,28 @@ describe('Shell AI record navigation', () => {
     const link = screen.getByRole('button', { name: '成员管理' });
     await user.click(link);
     expect(mocks.push).toHaveBeenCalledWith('/members');
+  });
+
+  it('opens the personal center and shows the configured nickname', async () => {
+    const user = userEvent.setup();
+    render(
+      <Shell
+        me={{
+          user_id: 'user-1',
+          email: 'test1@local.dev',
+          full_name: 'test1',
+          nickname: '研发小王',
+          display_name: '研发小王',
+          memberships: [],
+        }}
+      >
+        <div>content</div>
+      </Shell>,
+    );
+
+    expect(screen.getByText('研发小王')).toBeInTheDocument();
+    const profileLink = screen.getByRole('button', { name: '个人中心' });
+    await user.click(profileLink);
+    expect(mocks.push).toHaveBeenCalledWith('/profile');
   });
 });

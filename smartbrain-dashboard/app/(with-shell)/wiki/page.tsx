@@ -6,19 +6,19 @@ import {
   Check,
   Clock3,
   Copy,
+  Download,
+  ExternalLink,
   GitBranch,
   KeyRound,
-  MessageCircleQuestion,
   Network,
   PlugZap,
   RefreshCw,
-  Send,
   ShieldCheck,
   Trash2,
   X,
 } from 'lucide-react';
+import { CODEX_PLUGIN_BUNDLE_PATH, downloadCodexInstaller } from '@/utils/codex-plugin-installer';
 import {
-  AnswerResult,
   ApiError,
   Project,
   ProjectWikiChange,
@@ -26,11 +26,10 @@ import {
   ProjectWikiMcpTokenCreated,
   ProjectWikiOverview,
   ProjectWikiPage as WikiPageRecord,
-  answerQuestion,
   createProjectWikiMcpToken,
   getProjectWikiOverview,
   listProjectWikiMcpTokens,
-  listProjects,
+  listProjectCatalog,
   revokeProjectWikiMcpToken,
   reviewProjectWikiChange,
 } from '@/lib/api';
@@ -39,6 +38,7 @@ import { LoadingDots, Toast } from '@/components/Feedback';
 import { Input } from '@/components/Input';
 import { PageBody, PageHeader, PageShell } from '@/components/PageLayout';
 import { Select } from '@/components/Select';
+import { WikiMcpGuideDialog } from './WikiMcpGuideDialog';
 
 const TYPE_LABELS: Record<string, string> = {
   fact: '事实',
@@ -65,9 +65,6 @@ export default function ProjectWikiPage() {
   const [selectedPageId, setSelectedPageId] = useState('');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [question, setQuestion] = useState('');
-  const [answer, setAnswer] = useState<AnswerResult | null>(null);
-  const [asking, setAsking] = useState(false);
   const [reviewingId, setReviewingId] = useState<string | null>(null);
   const [mcpTokens, setMcpTokens] = useState<ProjectWikiMcpToken[]>([]);
   const [createdMcpToken, setCreatedMcpToken] = useState<ProjectWikiMcpTokenCreated | null>(null);
@@ -96,7 +93,7 @@ export default function ProjectWikiPage() {
     if (typeof window !== 'undefined') {
       setMcpEndpoint(`${window.location.protocol}//${window.location.hostname}:8010/mcp`);
     }
-    listProjects()
+    listProjectCatalog()
       .then((rows) => {
         setProjects(rows);
         const queryProjectId =
@@ -136,24 +133,8 @@ export default function ProjectWikiPage() {
       setOverview(null);
       return;
     }
-    setQuestion('');
-    setAnswer(null);
     void loadOverview(projectId);
   }, [loadOverview, projectId]);
-
-  async function handleAsk(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const query = question.trim();
-    if (!projectId || !query) return;
-    setAsking(true);
-    try {
-      setAnswer(await answerQuestion(projectId, query, 6));
-    } catch (error: any) {
-      setToast({ msg: error?.message || '暂时无法回答这个问题', kind: 'error' });
-    } finally {
-      setAsking(false);
-    }
-  }
 
   async function handleReview(change: ProjectWikiChange, decision: 'approve' | 'reject') {
     setReviewingId(change.id);
@@ -216,8 +197,30 @@ export default function ProjectWikiPage() {
     }
   }
 
+  function handleDownloadCodexInstaller() {
+    if (!createdMcpToken) {
+      setToast({ msg: '请先创建一个 MCP Token', kind: 'error' });
+      return;
+    }
+    try {
+      downloadCodexInstaller({
+        endpoint: mcpEndpoint,
+        token: createdMcpToken.token,
+        bundleUrl: new URL(CODEX_PLUGIN_BUNDLE_PATH, window.location.origin).toString(),
+      });
+      setToast({ msg: 'Codex 安装器已下载，请运行下载的 CMD 文件', kind: 'info' });
+    } catch (error: any) {
+      setToast({ msg: error?.message || '生成 Codex 安装器失败', kind: 'error' });
+    }
+  }
+
+  function handleOpenChatGptSetup() {
+    window.open('https://chatgpt.com/#settings/Connectors', '_blank', 'noopener,noreferrer');
+  }
+
   return (
     <PageShell>
+      <WikiMcpGuideDialog />
       <PageHeader
         eyebrow="LIVING KNOWLEDGE"
         icon={BookOpenText}
@@ -265,41 +268,6 @@ export default function ProjectWikiPage() {
                 <Metric icon={GitBranch} label="知识链接" value={overview.summary.link_count} />
               </section>
 
-              <section className="rounded-lg border border-[#d7e0ec] bg-white px-4 py-4 shadow-[0_10px_24px_rgba(15,35,66,0.04)] md:px-5">
-                <div className="flex items-center gap-2 text-sm font-semibold text-[#253655]">
-                  <MessageCircleQuestion size={18} className="text-brand-600" aria-hidden="true" />
-                  询问这个项目
-                </div>
-                <form className="mt-3 flex flex-col gap-2 sm:flex-row" onSubmit={handleAsk}>
-                  <label className="sr-only" htmlFor="project-wiki-question">询问这个项目</label>
-                  <Input
-                    id="project-wiki-question"
-                    value={question}
-                    onChange={(event) => setQuestion(event.target.value)}
-                    placeholder="例如：这个项目的部署流程是什么？"
-                    disabled={asking}
-                  />
-                  <Button type="submit" className="w-full shrink-0 sm:w-auto" disabled={asking || !question.trim()}>
-                    <Send size={16} aria-hidden="true" />
-                    {asking ? '回答中' : '提问'}
-                  </Button>
-                </form>
-                {answer && (
-                  <div className="mt-4 border-t border-[#e5ebf3] pt-4">
-                    <div className="whitespace-pre-wrap text-sm leading-7 text-[#253655]">{answer.synthesis}</div>
-                    {answer.hits.length > 0 && (
-                      <div className="mt-3 flex flex-wrap gap-2" aria-label="回答来源">
-                        {answer.hits.slice(0, 6).map((hit) => (
-                          <span key={hit.chunk_id} className="max-w-full truncate rounded-md bg-[#f1f4f8] px-2 py-1 text-xs text-[#5e6b80]">
-                            {hit.document_name}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </section>
-
               <McpAccessPanel
                 endpoint={mcpEndpoint}
                 tokens={mcpTokens}
@@ -315,6 +283,8 @@ export default function ProjectWikiPage() {
                 onCreate={handleCreateMcpToken}
                 onRevoke={handleRevokeMcpToken}
                 onCopy={copyMcpValue}
+                onInstallCodex={handleDownloadCodexInstaller}
+                onOpenChatGpt={handleOpenChatGptSetup}
               />
 
               <section className="grid min-h-[620px] gap-4 xl:grid-cols-[280px_minmax(0,1fr)_360px]">
@@ -360,6 +330,7 @@ export default function ProjectWikiPage() {
                           </span>
                           <span>版本 {selectedPage.current_version}</span>
                           <span>置信度 {(selectedPage.confidence * 100).toFixed(0)}%</span>
+                          {selectedPage.uploaded_by && <span>上传人：{selectedPage.uploaded_by.name}</span>}
                           <span>更新于 {fmtTime(selectedPage.updated_at)}</span>
                         </div>
                         <h2 className="mt-3 break-words text-2xl font-semibold">{selectedPage.title}</h2>
@@ -448,6 +419,8 @@ function McpAccessPanel({
   onCreate,
   onRevoke,
   onCopy,
+  onInstallCodex,
+  onOpenChatGpt,
 }: {
   endpoint: string;
   tokens: ProjectWikiMcpToken[];
@@ -463,6 +436,8 @@ function McpAccessPanel({
   onCreate: () => void;
   onRevoke: (tokenId: string) => void;
   onCopy: (value: string) => void;
+  onInstallCodex: () => void;
+  onOpenChatGpt: () => void;
 }) {
   return (
     <section className="overflow-hidden rounded-lg border border-[#d7e0ec] bg-white shadow-[0_10px_24px_rgba(15,35,66,0.04)]">
@@ -561,6 +536,49 @@ function McpAccessPanel({
         </div>
       </div>
 
+      <div className="grid gap-3 border-t border-[#d7e0ec] bg-[#fbfcfe] px-4 py-4 md:grid-cols-2 md:px-5">
+        <div className="rounded-lg border border-[#d7e0ec] bg-white p-4">
+          <div className="flex items-center gap-2 text-sm font-semibold text-[#253655]">
+            <Download size={17} className="text-brand-600" aria-hidden="true" />
+            Codex CLI
+          </div>
+          <p className="mt-2 text-xs leading-5 text-[#6e7d97]">
+            自动保存当前 Token、安装完整 Company Memory 插件，并配置智慧大脑 MCP。
+          </p>
+          <Button
+            type="button"
+            className="mt-3 w-full"
+            aria-label="安装到 Codex CLI"
+            disabled={!createdToken}
+            onClick={onInstallCodex}
+          >
+            <Download size={16} aria-hidden="true" />
+            安装到 Codex CLI
+          </Button>
+          {!createdToken && <div className="mt-2 text-xs text-[#9a5a0d]">先创建 Token 后即可下载安装器。</div>}
+        </div>
+
+        <div className="rounded-lg border border-[#d7e0ec] bg-white p-4">
+          <div className="flex items-center gap-2 text-sm font-semibold text-[#253655]">
+            <ExternalLink size={17} className="text-brand-600" aria-hidden="true" />
+            ChatGPT
+          </div>
+          <p className="mt-2 text-xs leading-5 text-[#6e7d97]">
+            当前局域网 HTTP 地址不能被 ChatGPT 云端访问；正式连接需要公网 HTTPS 和 OAuth。
+          </p>
+          <Button
+            type="button"
+            variant="secondary"
+            className="mt-3 w-full"
+            aria-label="打开 ChatGPT 接入设置"
+            onClick={onOpenChatGpt}
+          >
+            <ExternalLink size={16} aria-hidden="true" />
+            打开 ChatGPT 接入设置
+          </Button>
+        </div>
+      </div>
+
       {tokens.length > 0 && (
         <div className="border-t border-[#d7e0ec]">
           {tokens.map((token) => (
@@ -627,6 +645,9 @@ function PendingChange({
             <span className="rounded border border-[#df5a67]/25 bg-[#df5a67]/10 px-2 py-1 text-xs font-medium text-[#b83d49]">存在冲突</span>
           )}
           <span className="text-xs text-[#8b99ae]">置信度 {(change.confidence * 100).toFixed(0)}%</span>
+          {change.uploaded_by && (
+            <span className="text-xs text-[#6e7d97]">上传人：{change.uploaded_by.name}</span>
+          )}
         </div>
         <h3 className="mt-3 break-words text-base font-semibold">{change.title}</h3>
         <p className="mt-2 text-sm leading-6 text-[#6e7d97]">{change.summary}</p>

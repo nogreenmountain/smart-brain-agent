@@ -27,7 +27,7 @@ def _load_module():
 
 
 class ProjectMemoryIntelligenceTests(unittest.TestCase):
-    def test_hard_rules_exclude_duplicates_secrets_and_low_value_files(self) -> None:
+    def test_security_rules_exclude_duplicates_and_sensitive_files_but_not_logs(self) -> None:
         intelligence = _load_module()
         sources = [
             intelligence.MaterialSource(
@@ -68,8 +68,35 @@ class ProjectMemoryIntelligenceTests(unittest.TestCase):
         self.assertEqual(by_name["README-copy.md"].recommendation, "duplicate")
         self.assertFalse(by_name[".env.txt"].included)
         self.assertIn("sensitive", by_name[".env.txt"].issues)
-        self.assertFalse(by_name["debug.log"].included)
-        self.assertEqual(by_name["debug.log"].recommendation, "low_value")
+        self.assertTrue(by_name["debug.log"].included)
+        self.assertEqual(by_name["debug.log"].recommendation, "keep")
+
+    def test_sensitive_signed_link_and_personal_email_are_blocked(self) -> None:
+        intelligence = _load_module()
+        sources = [
+            intelligence.MaterialSource(
+                filename="download.txt",
+                format="txt",
+                text="https://files.example.com/report?access_token=secret-value-123",
+                size_bytes=72,
+                content_hash="url-hash",
+            ),
+            intelligence.MaterialSource(
+                filename="contacts.md",
+                format="md",
+                text="项目联系人：person@example.com",
+                size_bytes=36,
+                content_hash="email-hash",
+            ),
+        ]
+
+        preview = intelligence.apply_material_rules(sources, existing_hashes=set())
+
+        by_name = {item.filename: item for item in preview.items}
+        self.assertEqual(by_name["download.txt"].recommendation, "sensitive")
+        self.assertIn("sensitive_link", by_name["download.txt"].issues)
+        self.assertEqual(by_name["contacts.md"].recommendation, "sensitive")
+        self.assertIn("personal_information", by_name["contacts.md"].issues)
 
     def test_existing_project_hash_is_treated_as_duplicate(self) -> None:
         intelligence = _load_module()

@@ -88,11 +88,15 @@ class _MembersListOrm:
                 SimpleNamespace(
                     user_id="00000000-0000-0000-0000-000000000011",
                     email="leader@local.dev",
+                    nickname="研发负责人",
+                    display_name="研发负责人",
                     role="owner",
                 ),
                 SimpleNamespace(
                     user_id="00000000-0000-0000-0000-000000000012",
                     email="member@local.dev",
+                    nickname=None,
+                    display_name="member@local.dev",
                     role="developer",
                 ),
             ]
@@ -182,6 +186,20 @@ class _MembersAdminOrm:
 
 
 class ProjectsRouteTests(unittest.TestCase):
+    def test_project_catalog_lists_all_projects_without_changing_membership_list(self) -> None:
+        user_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        orm = _Orm()
+
+        with patch.object(route, "current_user_id", return_value=user_id):
+            projects = route.list_project_catalog(request=object(), orm=orm)
+
+        self.assertEqual([project.name for project in projects], ["Member Project"])
+        self.assertIn("FROM public.projects p", orm.sql)
+        self.assertIn("LEFT JOIN public.project_members pm", orm.sql)
+        self.assertIn("pm.user_id = :u", orm.sql)
+        self.assertNotIn("WHERE pm.user_id = :u", orm.sql)
+        self.assertEqual(orm.params, {"u": str(user_id)})
+
     def test_list_projects_uses_direct_project_membership(self) -> None:
         user_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
         orm = _Orm()
@@ -303,14 +321,14 @@ class ProjectsRouteTests(unittest.TestCase):
         audit.assert_called_once()
         self.assertEqual(audit.call_args.kwargs["action"], "add_member")
 
-    def test_list_members_allows_regular_project_member(self) -> None:
+    def test_list_members_allows_any_authenticated_user(self) -> None:
         caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
         project_id = uuid.UUID("00000000-0000-0000-0000-000000000010")
         orm = _MembersListOrm()
 
         with (
             patch.object(route, "current_user_id", return_value=caller_id),
-            patch.object(route, "require_member", return_value=None) as require_member,
+            patch.object(route, "require_member", side_effect=AssertionError("membership should not be required")),
             patch.object(route, "require_admin", side_effect=AssertionError("admin should not be required")),
         ):
             members = route.list_members(
@@ -319,10 +337,11 @@ class ProjectsRouteTests(unittest.TestCase):
                 orm=orm,
             )
 
-        require_member.assert_called_once_with(orm, user_id=caller_id, project_id=project_id)
         self.assertEqual([member.email for member in members], ["leader@local.dev", "member@local.dev"])
+        self.assertEqual([member.display_name for member in members], ["研发负责人", "member@local.dev"])
         self.assertEqual([member.role for member in members], ["owner", "developer"])
         self.assertIn("FROM public.project_members pm", orm.sql[0])
+        self.assertIn("LEFT JOIN public.users", orm.sql[0])
 
     def test_remove_member_deletes_member_and_records_audit(self) -> None:
         caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")

@@ -1,10 +1,12 @@
-FROM agentops-api-local:patched-2026-08-03-wiki-mcp
+FROM agentops-api-local:patched-2026-08-06-global-read
 
 RUN pip install --no-cache-dir \
     --target=/app/.venv/lib/python3.12/site-packages \
     mcp==2.0.0
 
 COPY agentops_local/wiki_mcp/ /app/agentops/wiki_mcp/
+COPY agentops_local/member_wiki/ /app/agentops/member_wiki/
+COPY agentops_local/meeting_summaries/ /app/agentops/meeting_summaries/
 
 EXPOSE 8010
 
