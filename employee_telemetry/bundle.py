@@ -59,6 +59,7 @@ class UniversalBundleRequest:
     api_endpoint: str
     collector_endpoint: str
     default_email_domain: str = "local.dev"
+    trusted_root_ca_file: Path | None = None
 
     def __post_init__(self) -> None:
         try:
@@ -75,6 +76,10 @@ class UniversalBundleRequest:
             or any(character.isspace() for character in domain)
         ):
             raise ValueError("default_email_domain is invalid")
+        if self.trusted_root_ca_file is not None:
+            ca_path = Path(self.trusted_root_ca_file)
+            if not ca_path.is_file():
+                raise ValueError("trusted_root_ca_file must be an existing file")
 
 
 def _base64url(data: bytes) -> str:
@@ -318,6 +323,25 @@ if (Get-Process -Name "cc-switch" -ErrorAction SilentlyContinue) {
 
 $manifest = Get-Content -LiteralPath (Join-Path $PSScriptRoot "manifest.json") -Raw |
     ConvertFrom-Json
+if ($manifest.trusted_root_ca_file) {
+    $caPath = Join-Path $PSScriptRoot ([string]$manifest.trusted_root_ca_file)
+    if (-not (Test-Path -LiteralPath $caPath -PathType Leaf)) {
+        throw "Trusted SmartBrain root certificate was not found in the installer."
+    }
+    $certificate = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($caPath)
+    $store = New-Object System.Security.Cryptography.X509Certificates.X509Store("Root", "CurrentUser")
+    try {
+        $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+        $alreadyTrusted = $store.Certificates | Where-Object {
+            $_.Thumbprint -eq $certificate.Thumbprint
+        }
+        if (-not $alreadyTrusted) {
+            $store.Add($certificate)
+        }
+    } finally {
+        $store.Close()
+    }
+}
 $uri = [Uri]$manifest.collector_endpoint
 $port = if ($uri.Port -gt 0) { $uri.Port } elseif ($uri.Scheme -eq "https") { 443 } else { 80 }
 $probe = Test-NetConnection -ComputerName $uri.Host -Port $port -WarningAction SilentlyContinue
@@ -418,6 +442,25 @@ if (Get-Process -Name "cc-switch" -ErrorAction SilentlyContinue) {
 
 $manifest = Get-Content -LiteralPath (Join-Path $PSScriptRoot "manifest.json") -Raw |
     ConvertFrom-Json
+if ($manifest.trusted_root_ca_file) {
+    $caPath = Join-Path $PSScriptRoot ([string]$manifest.trusted_root_ca_file)
+    if (-not (Test-Path -LiteralPath $caPath -PathType Leaf)) {
+        throw "Trusted SmartBrain root certificate was not found in the installer."
+    }
+    $certificate = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($caPath)
+    $store = New-Object System.Security.Cryptography.X509Certificates.X509Store("Root", "CurrentUser")
+    try {
+        $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+        $alreadyTrusted = $store.Certificates | Where-Object {
+            $_.Thumbprint -eq $certificate.Thumbprint
+        }
+        if (-not $alreadyTrusted) {
+            $store.Add($certificate)
+        }
+    } finally {
+        $store.Close()
+    }
+}
 $uri = [Uri]$manifest.collector_endpoint
 $port = if ($uri.Port -gt 0) { $uri.Port } elseif ($uri.Scheme -eq "https") { 443 } else { 80 }
 $probe = Test-NetConnection -ComputerName $uri.Host -Port $port -WarningAction SilentlyContinue
@@ -539,6 +582,13 @@ if (Get-Process -Name "cc-switch" -ErrorAction SilentlyContinue) {
 
 $py = Get-Command py -ErrorAction SilentlyContinue
 $python = Get-Command python -ErrorAction SilentlyContinue
+$bundledPython = $null
+if ($PythonPath) {
+    if (-not (Test-Path -LiteralPath $PythonPath -PathType Leaf)) {
+        throw "Bundled Python runtime was not found."
+    }
+    $bundledPython = [System.IO.Path]::GetFullPath($PythonPath)
+}
 $runtimeRoot = Join-Path $env:LOCALAPPDATA "AIWorkdayTelemetry"
 $runtimeDir = Join-Path $runtimeRoot "current"
 $backupRoot = Join-Path $runtimeRoot "backups"
@@ -647,26 +697,24 @@ def create_universal_bundle(
         _universal_readme(request),
         encoding="utf-8-sig",
     )
+    manifest = {
+        "project_id": request.project_id,
+        "api_endpoint": normalize_service_endpoint(
+            request.api_endpoint,
+            "api_endpoint",
+        ),
+        "collector_endpoint": normalize_collector_endpoint(
+            request.collector_endpoint
+        ),
+        "default_email_domain": request.default_email_domain.strip().lower(),
+        "minimum_cc_switch_version": "3.12.2",
+    }
+    if request.trusted_root_ca_file is not None:
+        ca_filename = "smartbrain-root-ca.crt"
+        shutil.copyfile(Path(request.trusted_root_ca_file), output / ca_filename)
+        manifest["trusted_root_ca_file"] = ca_filename
     (output / "manifest.json").write_text(
-        json.dumps(
-            {
-                "project_id": request.project_id,
-                "api_endpoint": normalize_service_endpoint(
-                    request.api_endpoint,
-                    "api_endpoint",
-                ),
-                "collector_endpoint": normalize_collector_endpoint(
-                    request.collector_endpoint
-                ),
-                "default_email_domain": (
-                    request.default_email_domain.strip().lower()
-                ),
-                "minimum_cc_switch_version": "3.12.2",
-            },
-            ensure_ascii=False,
-            indent=2,
-        )
-        + "\n",
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
 

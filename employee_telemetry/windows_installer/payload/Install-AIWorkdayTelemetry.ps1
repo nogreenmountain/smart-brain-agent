@@ -31,6 +31,25 @@ if (Get-Process -Name "cc-switch" -ErrorAction SilentlyContinue) {
 
 $manifest = Get-Content -LiteralPath (Join-Path $PSScriptRoot "manifest.json") -Raw |
     ConvertFrom-Json
+if ($manifest.trusted_root_ca_file) {
+    $caPath = Join-Path $PSScriptRoot ([string]$manifest.trusted_root_ca_file)
+    if (-not (Test-Path -LiteralPath $caPath -PathType Leaf)) {
+        throw "Trusted SmartBrain root certificate was not found in the installer."
+    }
+    $certificate = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($caPath)
+    $store = New-Object System.Security.Cryptography.X509Certificates.X509Store("Root", "CurrentUser")
+    try {
+        $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+        $alreadyTrusted = $store.Certificates | Where-Object {
+            $_.Thumbprint -eq $certificate.Thumbprint
+        }
+        if (-not $alreadyTrusted) {
+            $store.Add($certificate)
+        }
+    } finally {
+        $store.Close()
+    }
+}
 $uri = [Uri]$manifest.collector_endpoint
 $port = if ($uri.Port -gt 0) { $uri.Port } elseif ($uri.Scheme -eq "https") { 443 } else { 80 }
 $probe = Test-NetConnection -ComputerName $uri.Host -Port $port -WarningAction SilentlyContinue

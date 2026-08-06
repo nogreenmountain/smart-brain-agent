@@ -23,6 +23,7 @@ def main() -> int:
     parser.add_argument("--api-endpoint")
     parser.add_argument("--collector-endpoint", required=True)
     parser.add_argument("--default-email-domain", default="local.dev")
+    parser.add_argument("--trusted-root-ca-file", type=Path)
     parser.add_argument("--expires-in-days", type=int, default=30)
     parser.add_argument("--output-root", type=Path, required=True)
     args = parser.parse_args()
@@ -34,6 +35,7 @@ def main() -> int:
             api_endpoint=args.api_endpoint,
             collector_endpoint=args.collector_endpoint,
             default_email_domain=args.default_email_domain,
+            trusted_root_ca_file=args.trusted_root_ca_file,
         )
         output = create_universal_bundle(
             request=request,

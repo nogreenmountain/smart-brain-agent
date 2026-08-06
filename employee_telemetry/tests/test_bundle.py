@@ -308,6 +308,33 @@ class ConfigTests(unittest.TestCase):
 
 
 class BundleTests(unittest.TestCase):
+    def test_https_bundle_embeds_and_installs_trusted_root_ca(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source_ca = root / "source-root-ca.crt"
+            source_ca.write_text("test public root certificate", encoding="ascii")
+            request = UniversalBundleRequest(
+                project_id="f9505558-d67d-462f-b77e-6b9550458a2b",
+                api_endpoint="https://39.105.79.0",
+                collector_endpoint="https://39.105.79.0",
+                default_email_domain="local.dev",
+                trusted_root_ca_file=source_ca,
+            )
+
+            output = create_universal_bundle(request=request, output_root=root / "out")
+            manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+            install_text = (output / "Install-AIWorkdayTelemetry.ps1").read_text(
+                encoding="utf-8-sig"
+            )
+
+            self.assertEqual(manifest["trusted_root_ca_file"], "smartbrain-root-ca.crt")
+            self.assertEqual(
+                (output / "smartbrain-root-ca.crt").read_bytes(),
+                source_ca.read_bytes(),
+            )
+            self.assertIn('X509Store("Root", "CurrentUser")', install_text)
+            self.assertIn("certificate.Thumbprint", install_text)
+
     def test_universal_bundle_contains_no_employee_token_or_identity(self) -> None:
         request = UniversalBundleRequest(
             project_id="f9505558-d67d-462f-b77e-6b9550458a2b",
@@ -395,6 +422,9 @@ class BundleTests(unittest.TestCase):
             install_text = (
                 output / "Install-AIWorkdayTelemetry.ps1"
             ).read_text(encoding="utf-8-sig")
+            uninstall_text = (
+                output / "Uninstall-AIWorkdayTelemetry.ps1"
+            ).read_text(encoding="utf-8-sig")
 
             self.assertIn("[string]$Username", install_text)
             self.assertIn("[switch]$PasswordFromStdin", install_text)
@@ -402,6 +432,8 @@ class BundleTests(unittest.TestCase):
             self.assertIn('"--username", $Username', install_text)
             self.assertIn('"--password-stdin"', install_text)
             self.assertNotIn('"--password",', install_text)
+            self.assertIn("if ($PythonPath)", uninstall_text)
+            self.assertIn("$bundledPython = [System.IO.Path]::GetFullPath($PythonPath)", uninstall_text)
 
     def test_windows_gui_installer_source_has_secure_self_service_contract(
         self,
@@ -423,10 +455,26 @@ class BundleTests(unittest.TestCase):
         self.assertNotIn('"-Password"', source)
         self.assertIn("python-3.12.10-embed-amd64.zip", build_script)
         self.assertIn("Get-FileHash", build_script)
+        self.assertIn("trusted_root_ca_file", build_script)
 
         payload_root = installer_root / "payload"
         self.assertTrue((payload_root / "Install-AIMonitor.ps1").is_file())
         self.assertTrue((payload_root / "chatgpt-web-extension").is_dir())
+        payload_manifest = json.loads(
+            (payload_root / "manifest.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            payload_manifest["trusted_root_ca_file"],
+            "smartbrain-root-ca.crt",
+        )
+        self.assertTrue((payload_root / "smartbrain-root-ca.crt").is_file())
+        monitor_install = (payload_root / "Install-AIMonitor.ps1").read_text(
+            encoding="utf-8-sig"
+        )
+        self.assertIn(
+            'return ([string]$Manifest.api_endpoint).TrimEnd("/")',
+            monitor_install,
+        )
         payload_text = "\n".join(
             path.read_text(encoding="utf-8-sig", errors="ignore")
             for path in payload_root.rglob("*")

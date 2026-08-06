@@ -1,0 +1,52 @@
+name: smartbrain-public-relay
+
+services:
+  smartbrain-reverse-tunnel:
+    build:
+      context: ./tunnel-client
+    image: smartbrain-reverse-tunnel-local:latest
+    container_name: smartbrain-reverse-tunnel
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    volumes:
+      - C:/Users/test/.ssh/smartbrain_reverse_tunnel_ed25519:/run/relay-src/id_ed25519:ro
+      - C:/Users/test/.ssh/known_hosts:/run/relay-src/known_hosts:ro
+    tmpfs:
+      - /run/relay:rw,noexec,nosuid,nodev,size=1m
+    command:
+      - -N
+      - -T
+      - -i
+      - /run/relay/id_ed25519
+      - -o
+      - BatchMode=yes
+      - -o
+      - ExitOnForwardFailure=yes
+      - -o
+      - ServerAliveInterval=30
+      - -o
+      - ServerAliveCountMax=3
+      - -o
+      - StrictHostKeyChecking=yes
+      - -o
+      - UserKnownHostsFile=/run/relay/known_hosts
+      - -o
+      - LogLevel=ERROR
+      - -R
+      - 127.0.0.1:13002:host.docker.internal:3002
+      - -R
+      - 127.0.0.1:18000:host.docker.internal:8000
+      - -R
+      - 127.0.0.1:18010:host.docker.internal:8010
+      - -R
+      - 127.0.0.1:13001:host.docker.internal:3001
+      - -R
+      - 127.0.0.1:14318:host.docker.internal:4318
+      - smartbrain-tunnel@39.105.79.0
+    stop_grace_period: 10s

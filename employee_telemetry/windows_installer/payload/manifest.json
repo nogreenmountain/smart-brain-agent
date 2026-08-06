@@ -1,9 +1,10 @@
 {
   "package_name": "ai-monitor-universal",
-  "package_version": "2026-07-29-r13-exe",
+  "package_version": "2026-08-06-r14-public-ip-https",
   "project_id": "dfaefd9a-8e5e-4775-bc18-e3d551c651e4",
-  "api_endpoint": "http://192.168.1.40:8000",
-  "collector_endpoint": "http://192.168.1.40:4318",
+  "api_endpoint": "https://39.105.79.0",
+  "collector_endpoint": "https://39.105.79.0",
+  "trusted_root_ca_file": "smartbrain-root-ca.crt",
   "default_email_domain": "local.dev",
   "minimum_cc_switch_version": "3.12.2",
   "chatgpt_web_extension_dir": "chatgpt-web-extension",

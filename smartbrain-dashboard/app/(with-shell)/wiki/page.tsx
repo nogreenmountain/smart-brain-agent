@@ -18,6 +18,7 @@ import {
   X,
 } from 'lucide-react';
 import { CODEX_PLUGIN_BUNDLE_PATH, downloadCodexInstaller } from '@/utils/codex-plugin-installer';
+import { mcpEndpointForLocation } from '@/utils/service-endpoints';
 import {
   ApiError,
   Project,
@@ -91,7 +92,7 @@ export default function ProjectWikiPage() {
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      setMcpEndpoint(`${window.location.protocol}//${window.location.hostname}:8010/mcp`);
+      setMcpEndpoint(mcpEndpointForLocation(window.location));
     }
     listProjectCatalog()
       .then((rows) => {

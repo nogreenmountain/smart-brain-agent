@@ -5,6 +5,7 @@ param(
     [string]$ApiEndpoint = "http://192.168.1.40:8000",
     [string]$CollectorEndpoint = "http://192.168.1.40:4318",
     [string]$DefaultEmailDomain = "local.dev",
+    [string]$TrustedRootCaFile,
     [string]$OutputRoot = "D:\AgentOpsServer\AgentOps\employee-deploy\universal"
 )
 
@@ -27,15 +28,33 @@ if ($LASTEXITCODE -ne 0) {
 
 $runId = Get-Date -Format "yyyyMMdd-HHmmss"
 $containerRoot = "/tmp/ai-workday-universal-$runId"
+$containerCaPath = $null
 New-Item -ItemType Directory -Force -Path $OutputRoot | Out-Null
 
-docker exec $containerId python -m employee_telemetry.cli `
-    --universal `
-    --project-id $ProjectId `
-    --api-endpoint $ApiEndpoint `
-    --collector-endpoint $CollectorEndpoint `
-    --default-email-domain $DefaultEmailDomain `
-    --output-root $containerRoot
+if ($TrustedRootCaFile) {
+    if (-not (Test-Path -LiteralPath $TrustedRootCaFile -PathType Leaf)) {
+        throw "Trusted root CA file was not found: $TrustedRootCaFile"
+    }
+    $containerCaPath = "/tmp/smartbrain-root-ca-$runId.crt"
+    docker cp $TrustedRootCaFile "${containerId}:${containerCaPath}"
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to copy the trusted root CA into the API container."
+    }
+}
+
+$generatorArguments = @(
+    "exec", $containerId, "python", "-m", "employee_telemetry.cli",
+    "--universal",
+    "--project-id", $ProjectId,
+    "--api-endpoint", $ApiEndpoint,
+    "--collector-endpoint", $CollectorEndpoint,
+    "--default-email-domain", $DefaultEmailDomain,
+    "--output-root", $containerRoot
+)
+if ($containerCaPath) {
+    $generatorArguments += @("--trusted-root-ca-file", $containerCaPath)
+}
+docker @generatorArguments
 if ($LASTEXITCODE -ne 0) {
     throw "Failed to generate the universal bundle."
 }

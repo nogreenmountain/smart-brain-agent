@@ -32,6 +32,18 @@ foreach ($name in $required) {
     }
 }
 
+$bundleManifest = Get-Content -LiteralPath (Join-Path $BundleDir "manifest.json") -Raw -Encoding UTF8 |
+    ConvertFrom-Json
+if ($bundleManifest.trusted_root_ca_file) {
+    $trustedRootCaFile = [string]$bundleManifest.trusted_root_ca_file
+    if ([System.IO.Path]::GetFileName($trustedRootCaFile) -ne $trustedRootCaFile) {
+        throw "trusted_root_ca_file must be a filename inside the bundle."
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $BundleDir $trustedRootCaFile) -PathType Leaf)) {
+        throw "Bundle is missing trusted root CA: $trustedRootCaFile"
+    }
+}
+
 $csc = @(
     "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe",
     "C:\Windows\Microsoft.NET\Framework\v4.0.30319\csc.exe"
@@ -84,7 +96,11 @@ try {
         -PassThru `
         -WindowStyle Hidden
     if ($selfTest.ExitCode -ne 0) { throw "Installer self-test failed." }
-    foreach ($name in @("Install-AIMonitor.ps1", "manifest.json", "python-runtime\python.exe")) {
+    $selfTestRequired = @("Install-AIMonitor.ps1", "manifest.json", "python-runtime\python.exe")
+    if ($bundleManifest.trusted_root_ca_file) {
+        $selfTestRequired += [string]$bundleManifest.trusted_root_ca_file
+    }
+    foreach ($name in $selfTestRequired) {
         if (-not (Test-Path -LiteralPath (Join-Path $verifyDir $name))) {
             throw "Installer self-test did not extract: $name"
         }

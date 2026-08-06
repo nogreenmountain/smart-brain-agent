@@ -31,6 +31,9 @@ function Get-ApiHostPattern {
 function Get-SmartBrainBase {
     param([object]$Manifest)
     $apiUri = [Uri]$Manifest.api_endpoint
+    if ($apiUri.Scheme -eq "https" -and $apiUri.Port -eq 443) {
+        return ([string]$Manifest.api_endpoint).TrimEnd("/")
+    }
     return "$($apiUri.Scheme)://$($apiUri.Host):3002"
 }
 

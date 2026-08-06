@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 
 import { Button } from '@/components/Button';
+import { traceReplayForLocation } from '@/utils/service-endpoints';
 import { EmptyState, LoadingDots } from '@/components/Feedback';
 import { Input } from '@/components/Input';
 import { PageHeader, PageShell } from '@/components/PageLayout';
@@ -82,9 +83,10 @@ function formatDuration(value: number | null): string | null {
 }
 
 function replayHref(traceId: string): string {
-  const path = `/traces?trace_id=${encodeURIComponent(traceId)}`;
-  if (typeof window === 'undefined') return `http://localhost:3001${path}`;
-  return `${window.location.protocol}//${window.location.hostname}:3001${path}`;
+  if (typeof window === 'undefined') {
+    return `http://localhost:3001/traces?trace_id=${encodeURIComponent(traceId)}`;
+  }
+  return traceReplayForLocation(window.location, traceId);
 }
 
 function sourceLabel(source: string): string {

@@ -3,6 +3,9 @@
 param([string]$PythonPath)
 
 $ErrorActionPreference = "Stop"
+$OutputEncoding = New-Object System.Text.UTF8Encoding $false
+[Console]::OutputEncoding = $OutputEncoding
+[Console]::InputEncoding = $OutputEncoding
 
 if (Get-Process -Name "cc-switch" -ErrorAction SilentlyContinue) {
     throw "请先从系统托盘彻底退出 CC Switch，再重新运行卸载器。"

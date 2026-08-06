@@ -126,6 +126,7 @@ celerybeat.pid
 .env*
 !.env.example
 !.env.lan.example
+!.env.public-relay.example
 .venv*
 env/
 venv/

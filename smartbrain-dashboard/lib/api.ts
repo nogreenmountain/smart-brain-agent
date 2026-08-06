@@ -2,10 +2,12 @@
 // 全部用 cookie 鉴权（后端发 session_id httpOnly cookie）
 // 这个文件只能在 client component 里用,server component 直接 fetch 会失败
 
+import { apiBaseForLocation } from '@/utils/service-endpoints';
+
 function getApiBase(): string {
   if (process.env.NEXT_PUBLIC_API_URL) return process.env.NEXT_PUBLIC_API_URL;
   if (typeof window !== 'undefined') {
-    return `${window.location.protocol}//${window.location.hostname}:8000`;
+    return apiBaseForLocation(window.location);
   }
   return 'http://localhost:8000';
 }
