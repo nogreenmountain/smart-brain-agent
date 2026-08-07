@@ -2,7 +2,7 @@
 [CmdletBinding()]
 param(
     [string]$PublicBaseUrl = "https://39.105.79.0",
-    [string]$TemporaryEmail = "test1@local.dev"
+    [string]$TemporaryEmail = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -12,6 +12,9 @@ $serviceRole = ((
         Select-Object -First 1
 ) -split "=", 2)[1]
 if (-not $serviceRole) { throw "Missing local Supabase service role key." }
+if (-not $TemporaryEmail) {
+    $TemporaryEmail = "public-relay-login-$([guid]::NewGuid().ToString('N'))@local.dev"
+}
 
 $password = "Relay!$([guid]::NewGuid().ToString('N'))9a"
 $adminHeaders = @{
@@ -50,7 +53,7 @@ try {
         $loginBody,
         (New-Object Text.UTF8Encoding $false)
     )
-    $loginStatus = & curl.exe --ssl-no-revoke -sS `
+    $loginStatus = & curl.exe -sS `
         -o $loginResponse `
         -D $loginHeaders `
         -c $cookieJar `
@@ -83,7 +86,7 @@ try {
     $results = [ordered]@{}
     foreach ($entry in $checks.GetEnumerator()) {
         $bodyPath = Join-Path $tempRoot "$($entry.Key).json"
-        $status = & curl.exe --ssl-no-revoke -sS `
+        $status = & curl.exe -sS `
             -o $bodyPath `
             -b $cookieJar `
             -w "%{http_code}" `
@@ -94,7 +97,7 @@ try {
             body = Get-Content -Raw -Encoding UTF8 $bodyPath | ConvertFrom-Json
         }
     }
-    $traceStatus = & curl.exe --ssl-no-revoke -sS `
+    $traceStatus = & curl.exe -sS `
         -o NUL `
         -b $cookieJar `
         -w "%{http_code}" `

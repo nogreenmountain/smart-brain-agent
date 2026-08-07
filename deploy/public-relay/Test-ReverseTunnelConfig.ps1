@@ -17,6 +17,10 @@ foreach ($path in @($composePath, $dockerfilePath, $entrypointPath, $nginxPath))
 
 $nginxConfig = Get-Content -Raw -LiteralPath $nginxPath
 foreach ($requiredSnippet in @(
+    "location ^~ /.well-known/acme-challenge/",
+    "root /var/www/letsencrypt",
+    "ssl_certificate /etc/letsencrypt/live/39.105.79.0/fullchain.pem",
+    "ssl_certificate_key /etc/letsencrypt/live/39.105.79.0/privkey.pem",
     "location ^~ /auth/",
     "location ^~ /v4/",
     "location = /mcp",

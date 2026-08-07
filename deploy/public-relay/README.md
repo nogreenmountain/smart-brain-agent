@@ -1,6 +1,6 @@
 # SmartBrain 公网 IP 中转部署
 
-当前部署使用固定公网 IP `39.105.79.0`、私有根 CA、Nginx 和受限反向 SSH 隧道。业务与 GPU 服务继续运行在本地服务器，云服务器只负责 TLS 终止和流量中转。
+当前部署使用固定公网 IP `39.105.79.0`、Let’s Encrypt 公开可信 IP 证书、Nginx 和受限反向 SSH 隧道。业务与 GPU 服务继续运行在本地服务器，云服务器只负责 TLS 终止和流量中转。
 
 ## 公网入口
 
@@ -9,24 +9,14 @@
 - Project Wiki MCP：`https://39.105.79.0/mcp`
 - OTLP HTTP：`https://39.105.79.0/v1/traces`
 - AgentOps Trace：`https://39.105.79.0/traces`
-- 根证书下载：`http://39.105.79.0/smartbrain-root-ca.crt`
 
-日常使用只依赖公网 TCP `443`。TCP `80` 仅用于 HTTPS 跳转和首次下载公开的根证书；SSH 管理使用 TCP `22`。云平台无需额外放开 3001、3002、4318、8000、8010。
+日常使用只依赖公网 TCP `443`。TCP `80` 用于 HTTPS 跳转和 Let’s Encrypt HTTP-01 自动续期；SSH 管理使用 TCP `22`。云平台无需额外放开 3001、3002、4318、8000、8010。
 
 ## 首次在新 Windows 电脑使用
 
-1. 下载 `http://39.105.79.0/smartbrain-root-ca.crt`。
-2. 核对根证书 SHA-256 指纹：
-   `2F:BF:D7:AB:D1:29:B3:06:56:7D:9B:74:E8:32:8D:89:F1:DD:8D:40:B7:D1:09:9F:23:C8:90:B0:B9:9C:B2:56`。
-3. 将证书安装到“当前用户”的“受信任的根证书颁发机构”。也可以执行：
+无需下载或安装私有根证书，直接打开 `https://39.105.79.0/` 并登录。浏览器、Codex MCP、CC Switch 和标准 OTLP 客户端都应直接信任当前证书。
 
-   ```powershell
-   certutil -user -addstore Root .\smartbrain-root-ca.crt
-   ```
-
-4. 打开 `https://39.105.79.0/` 并重新登录。
-
-AI Monitor `2026-08-06-r14-public-ip-https` 及以后版本已内嵌同一根证书，会在当前用户证书库中幂等安装，无需管理员权限。
+AI Monitor `2026-08-06-r14-public-ip-https` 仍内嵌旧私有根证书以兼容已经发放的安装包；该证书不再是连接公网服务的必要条件。
 
 ## 本地反向隧道
 
@@ -51,11 +41,12 @@ powershell -ExecutionPolicy Bypass -File deploy/public-relay/Test-ReverseTunnelC
 
 ## 云端 Nginx
 
-证书与私钥安装在云服务器：
+公开 IP 证书与私钥由 Certbot 管理：
 
-- `/etc/nginx/smartbrain-pki/server.crt`
-- `/etc/nginx/smartbrain-pki/server.key`
-- `/etc/nginx/smartbrain-pki/root-ca.crt`
+- `/etc/letsencrypt/live/39.105.79.0/fullchain.pem`
+- `/etc/letsencrypt/live/39.105.79.0/privkey.pem`
+- Webroot：`/var/www/letsencrypt`
+- 续期 reload hook：`/etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh`
 
 启用配置：
 
@@ -65,7 +56,13 @@ sudo nginx -t
 sudo systemctl reload nginx
 ```
 
-`server.key` 必须保持 `root:root 600`，不得放入仓库。根证书和服务端证书是公开材料，可设为 `644`。
+Let’s Encrypt IP 证书有效期为 160 小时。云服务器使用 Certbot 5.7 和 `snap.certbot.renew.timer` 自动续期，续期配置必须保留 `preferred_profile = shortlived`、`authenticator = webroot`，成功续期后自动检查并 reload Nginx。任何私钥都不得复制到仓库。
+
+续期验证：
+
+```bash
+sudo certbot renew --cert-name 39.105.79.0 --dry-run --run-deploy-hooks --no-random-sleep-on-renew
+```
 
 ## 应用环境
 

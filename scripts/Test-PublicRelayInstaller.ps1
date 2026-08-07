@@ -12,7 +12,7 @@ $tempRoot = Join-Path ([IO.Path]::GetTempPath()) (
 New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
 try {
     $download = Join-Path $tempRoot "latest.exe"
-    & curl.exe --ssl-no-revoke -sS --max-time 60 -o $download $DownloadUrl
+    & curl.exe -sS --max-time 60 -o $download $DownloadUrl
     if ($LASTEXITCODE -ne 0) { throw "Installer download failed." }
     $extract = Join-Path $tempRoot "extract"
     $process = Start-Process -FilePath $download `

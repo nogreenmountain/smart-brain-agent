@@ -23,7 +23,7 @@ function Invoke-McpRequest {
     $json = $Payload | ConvertTo-Json -Depth 10 -Compress
     [IO.File]::WriteAllText($requestPath, $json, (New-Object Text.UTF8Encoding $false))
     $arguments = @(
-        "--ssl-no-revoke", "-sS",
+        "-sS",
         "-o", $responsePath,
         "-D", $headersPath,
         "-w", "%{http_code}",

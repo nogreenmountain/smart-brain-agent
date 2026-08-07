@@ -14,7 +14,7 @@ $serviceRole = ((
 ) -split "=", 2)[1]
 if (-not $serviceRole) { throw "Missing local Supabase service role key." }
 
-$email = "test1@local.dev"
+$email = "public-relay-upload-$([guid]::NewGuid().ToString('N'))@local.dev"
 $password = "Relay!$([guid]::NewGuid().ToString('N'))9a"
 $adminHeaders = @{
     apikey = $serviceRole
@@ -49,7 +49,7 @@ try {
     $cookieJar = Join-Path $tempRoot "cookies.txt"
     $loginJson = @{ email = $email; password = $password } | ConvertTo-Json -Compress
     [IO.File]::WriteAllText($loginRequest, $loginJson, (New-Object Text.UTF8Encoding $false))
-    $loginStatus = & curl.exe --ssl-no-revoke -sS `
+    $loginStatus = & curl.exe -sS `
         -o $loginResponse `
         -c $cookieJar `
         -w "%{http_code}" `
@@ -66,7 +66,7 @@ try {
         (New-Object Text.UTF8Encoding $false)
     )
     $previewPath = Join-Path $tempRoot "preview.json"
-    $previewStatus = & curl.exe --ssl-no-revoke -sS `
+    $previewStatus = & curl.exe -sS `
         --max-time 120 `
         -o $previewPath `
         -b $cookieJar `
@@ -79,7 +79,7 @@ try {
     $preview = Get-Content -Raw -Encoding UTF8 $previewPath | ConvertFrom-Json
     $intakeId = [string]$preview.id
 
-    $deleteStatus = & curl.exe --ssl-no-revoke -sS `
+    $deleteStatus = & curl.exe -sS `
         -o NUL `
         -b $cookieJar `
         -w "%{http_code}" `

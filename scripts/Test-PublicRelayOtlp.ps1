@@ -2,20 +2,15 @@
 [CmdletBinding()]
 param(
     [string]$PublicOtlpUrl = "https://39.105.79.0/v1/traces",
-    [string]$ProjectId = "dfaefd9a-8e5e-4775-bc18-e3d551c651e4",
-    [string]$RootCaPath = "C:\Users\test\.smartbrain\pki\smartbrain-root-ca.crt"
+    [string]$ProjectId = "dfaefd9a-8e5e-4775-bc18-e3d551c651e4"
 )
 
 $ErrorActionPreference = "Stop"
-if (-not (Test-Path -LiteralPath $RootCaPath -PathType Leaf)) {
-    throw "SmartBrain root CA was not found."
-}
 
 $runId = [guid]::NewGuid().ToString("N")
 $employeeId = "public-relay-smoke-$($runId.Substring(0, 12))"
 $remoteRoot = "/tmp/smartbrain-public-otlp-$runId"
 $remoteScript = "$remoteRoot/emit_workday_sample.py"
-$remoteCa = "$remoteRoot/smartbrain-root-ca.crt"
 $clickhousePassword = ((
     Get-Content -LiteralPath (Join-Path $PSScriptRoot "..\.env") |
         Where-Object { $_ -like "CLICKHOUSE_PASSWORD=*" } |
@@ -36,12 +31,9 @@ try {
     docker exec agentops-api-1 mkdir -p $remoteRoot
     if ($LASTEXITCODE -ne 0) { throw "Could not prepare the API smoke-test directory." }
     docker cp (Join-Path $PSScriptRoot "emit_workday_sample.py") "agentops-api-1:$remoteScript" | Out-Null
-    docker cp $RootCaPath "agentops-api-1:$remoteCa" | Out-Null
-
     $workDate = Get-Date -Format "yyyy-MM-dd"
     $sampleOutput = docker exec `
         -e "AGENTOPS_OTLP_TOKEN=$token" `
-        -e "SSL_CERT_FILE=$remoteCa" `
         agentops-api-1 `
         /app/.venv/bin/python $remoteScript `
         --project-id $ProjectId `
