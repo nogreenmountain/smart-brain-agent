@@ -72,6 +72,7 @@ services:
       API_DOMAIN: ${API_DOMAIN:-192.168.1.40:8000}
       APP_DOMAIN: ${APP_DOMAIN:-192.168.1.40:3002}
       WORKDAY_COLLECTOR_ENDPOINT: ${WORKDAY_COLLECTOR_ENDPOINT:-http://192.168.1.40:4318}
+      WIKI_MCP_TOKEN_SECRET: ${WIKI_MCP_TOKEN_SECRET:-}
       # Read token from host shell env. NEVER hardcode secrets in this file.
       # The local gateway performs upstream authentication.
       ANTHROPIC_AUTH_TOKEN: ${ANTHROPIC_AUTH_TOKEN:-local-proxy}

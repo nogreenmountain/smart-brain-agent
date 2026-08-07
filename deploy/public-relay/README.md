@@ -93,6 +93,7 @@ sudo certbot renew --cert-name 39.105.79.0 --dry-run --run-deploy-hooks --no-ran
 - `scripts/Test-PublicRelayLogin.ps1`：临时创建高强度密码测试用户，验证登录/CORS/全局读取后自动删除。
 - `scripts/Test-PublicRelayUpload.ps1`：验证资料敏感信息预检上传并清理所有测试数据。
 - `scripts/Test-PublicRelayMcp.ps1`：使用当前用户环境变量中的 MCP Token 验证初始化和工具列表。
+- `deploy/public-relay/Test-McpTokenSecretConfig.ps1`：确认 API 签发端与 Wiki MCP 校验端使用同一个非空 `WIKI_MCP_TOKEN_SECRET`。
 - `scripts/Test-PublicRelayOtlp.ps1`：通过公网 HTTPS 写入测试 Span，验证 ClickHouse 后同步删除。
 - `scripts/Test-PublicRelayInstaller.ps1`：下载最新版 EXE，核对哈希、端点和内嵌根证书。
 
