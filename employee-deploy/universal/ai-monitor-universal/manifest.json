@@ -1,6 +1,6 @@
 {
   "package_name": "ai-monitor-universal",
-  "package_version": "2026-08-07-r15-ccswitch-usage-sync",
+  "package_version": "2026-08-07-r16-ccswitch-timestamp-fix",
   "project_id": "dfaefd9a-8e5e-4775-bc18-e3d551c651e4",
   "api_endpoint": "https://39.105.79.0",
   "collector_endpoint": "https://39.105.79.0",

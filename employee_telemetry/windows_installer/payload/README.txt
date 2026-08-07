@@ -1,5 +1,5 @@
 智慧大脑 AI Monitor 一键安装器
-版本：2026-08-07-r15-ccswitch-usage-sync
+版本：2026-08-07-r16-ccswitch-timestamp-fix
 
 适用范围
 

@@ -190,6 +190,7 @@ class CCSwitchUsageRowInput(BaseModel):
 class CCSwitchUsageSyncRequest(BaseModel):
     project_id: uuid.UUID
     device_id: str = Field(..., min_length=1, max_length=200)
+    sync_protocol_version: int = Field(1, ge=1)
     trigger: Literal["automatic", "manual"] = "automatic"
     request_id: uuid.UUID | None = None
     range_start: date
@@ -849,6 +850,33 @@ def _cc_switch_authoritative_daily(
     ]
 
 
+def _cc_switch_has_authoritative_coverage(
+    orm: Session,
+    *,
+    employee_id: str,
+    start_date: date,
+    end_date: date,
+) -> bool:
+    row = orm.execute(
+        text("""
+            SELECT EXISTS (
+                SELECT 1
+                FROM public.cc_switch_usage_sync_status
+                WHERE employee_id = :employee_id
+                  AND status = 'ok'
+                  AND range_start <= :start_date
+                  AND range_end >= :end_date
+            ) AS covered
+        """),
+        {
+            "employee_id": employee_id,
+            "start_date": start_date,
+            "end_date": end_date,
+        },
+    ).first()
+    return bool(getattr(row, "covered", False))
+
+
 def _collect_usage(
     orm: Session,
     clickhouse: Any,
@@ -896,8 +924,15 @@ def _collect_usage(
         reverse=True,
     )
     authoritative_daily = []
+    authoritative_available = False
     if source in {None, "cc_switch"}:
         authoritative_daily = _cc_switch_authoritative_daily(
+            orm,
+            employee_id=employee.id,
+            start_date=start_date,
+            end_date=end_date,
+        )
+        authoritative_available = _cc_switch_has_authoritative_coverage(
             orm,
             employee_id=employee.id,
             start_date=start_date,
@@ -907,6 +942,7 @@ def _collect_usage(
         all_records,
         authoritative_source="cc_switch",
         authoritative_daily=authoritative_daily,
+        authoritative_available=authoritative_available,
         start_date=start_date,
         end_date=end_date,
     )
@@ -918,7 +954,7 @@ def _collect_usage(
         warnings.append(
             "检测到尚未完成正文同步的 CC Switch 记录，请确认员工端对话同步组件在线。"
         )
-    if authoritative_daily:
+    if authoritative_available:
         warnings.append(
             "CC Switch Token 总量来自 AI Monitor 同步的本机官方统计；Trace 和对话仅用于展示工作明细。"
         )
@@ -983,6 +1019,11 @@ def device_ingest_cc_switch_usage(
         raise HTTPException(status_code=422, detail="range_end must not precede range_start")
     if (body.range_end - body.range_start).days > 3650:
         raise HTTPException(status_code=422, detail="sync range is too large")
+    if body.status == "ok" and body.sync_protocol_version < 2:
+        raise HTTPException(
+            status_code=409,
+            detail="AI Monitor r16 or newer is required for CC Switch usage sync",
+        )
     if body.status == "ok" and not body.cc_switch_running:
         raise HTTPException(status_code=422, detail="CC Switch must be running for a successful sync")
     if any(
@@ -1166,6 +1207,7 @@ def device_ingest_cc_switch_usage(
         metadata={
             "result_status": body.status,
             "trigger": body.trigger,
+            "sync_protocol_version": body.sync_protocol_version,
             "device_id": body.device_id,
             "range_start": body.range_start.isoformat(),
             "range_end": body.range_end.isoformat(),

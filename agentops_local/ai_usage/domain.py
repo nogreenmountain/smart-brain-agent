@@ -207,10 +207,11 @@ def build_usage_summary_with_authoritative_source(
     *,
     authoritative_source: str,
     authoritative_daily: list[AuthoritativeUsageDaily],
+    authoritative_available: bool = False,
     start_date: date,
     end_date: date,
 ) -> UsageSummary:
-    if not authoritative_daily:
+    if not authoritative_daily and not authoritative_available:
         return build_usage_summary(
             records,
             start_date=start_date,

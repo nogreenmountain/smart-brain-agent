@@ -75,6 +75,32 @@ class _Orm:
 
 
 class CCSwitchUsageRouteTests(unittest.TestCase):
+    def test_successful_sync_covering_query_marks_snapshot_authoritative(self) -> None:
+        class CoverageOrm:
+            def __init__(self) -> None:
+                self.calls: list[tuple[str, dict]] = []
+
+            def execute(self, statement, params=None):
+                self.calls.append((str(statement), dict(params or {})))
+                return _Result(row=SimpleNamespace(covered=True))
+
+        orm = CoverageOrm()
+
+        covered = route._cc_switch_has_authoritative_coverage(
+            orm,
+            employee_id="tangweixiang",
+            start_date=date(2026, 8, 1),
+            end_date=date(2026, 8, 7),
+        )
+
+        self.assertTrue(covered)
+        sql, params = orm.calls[0]
+        self.assertIn("public.cc_switch_usage_sync_status", sql)
+        self.assertIn("status = 'ok'", sql)
+        self.assertEqual(params["employee_id"], "tangweixiang")
+        self.assertEqual(params["start_date"], date(2026, 8, 1))
+        self.assertEqual(params["end_date"], date(2026, 8, 7))
+
     def test_not_running_updates_status_without_deleting_last_good_usage(self) -> None:
         user_id = uuid.UUID("00000000-0000-0000-0000-000000000002")
         project_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -139,6 +165,7 @@ class CCSwitchUsageRouteTests(unittest.TestCase):
             attempted_at=datetime(2026, 8, 7, 8, tzinfo=timezone.utc),
             cc_switch_running=True,
             status="ok",
+            sync_protocol_version=2,
             source_table="usage_daily_rollups",
             request_count=2,
             success_count=2,
@@ -202,6 +229,54 @@ class CCSwitchUsageRouteTests(unittest.TestCase):
         self.assertEqual(row_insert["total_tokens"], 430)
         audit.assert_called_once()
         self.assertEqual(audit.call_args.kwargs["action"], "ai_usage_sync")
+
+    def test_old_sync_protocol_cannot_replace_authoritative_usage(self) -> None:
+        user_id = uuid.UUID("00000000-0000-0000-0000-000000000002")
+        project_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        body = route.CCSwitchUsageSyncRequest(
+            project_id=project_id,
+            device_id="device-123",
+            trigger="automatic",
+            range_start=date(2026, 5, 10),
+            range_end=date(2026, 8, 7),
+            attempted_at=datetime(2026, 8, 7, 9, tzinfo=timezone.utc),
+            cc_switch_running=True,
+            status="ok",
+            source_table="usage_daily_rollups",
+            request_count=1,
+            success_count=1,
+            total_tokens=100,
+            rows=[
+                route.CCSwitchUsageRowInput(
+                    usage_date=date(2026, 8, 7),
+                    app_type="codex",
+                    provider_id="provider-a",
+                    model="gpt-5",
+                    request_count=1,
+                    success_count=1,
+                    input_tokens=100,
+                    total_tokens=100,
+                )
+            ],
+        )
+        orm = _Orm()
+        claims = {
+            "sub": str(user_id),
+            "project_id": str(project_id),
+            "employee_id": "test1",
+            "employee_name": "Test 1",
+        }
+
+        with patch.object(route, "_device_claims", return_value=claims):
+            with self.assertRaises(route.HTTPException) as raised:
+                route.device_ingest_cc_switch_usage(
+                    request=SimpleNamespace(headers={}),
+                    body=body,
+                    orm=orm,
+                )
+
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertEqual(orm.calls, [])
 
 
 if __name__ == "__main__":

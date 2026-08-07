@@ -159,6 +159,106 @@ class CCSwitchUsageCollectionTests(unittest.TestCase):
         self.assertEqual(result.request_count, 2)
         self.assertEqual(result.success_count, 1)
 
+    def test_merges_new_second_timestamp_logs_after_stale_rollups(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "cc-switch.db"
+            connection = sqlite3.connect(database)
+            try:
+                connection.execute(
+                    """
+                    CREATE TABLE usage_daily_rollups (
+                        date TEXT NOT NULL,
+                        app_type TEXT NOT NULL,
+                        provider_id TEXT NOT NULL,
+                        model TEXT NOT NULL,
+                        request_model TEXT NOT NULL DEFAULT '',
+                        pricing_model TEXT NOT NULL DEFAULT '',
+                        request_count INTEGER NOT NULL DEFAULT 0,
+                        success_count INTEGER NOT NULL DEFAULT 0,
+                        input_tokens INTEGER NOT NULL DEFAULT 0,
+                        output_tokens INTEGER NOT NULL DEFAULT 0,
+                        cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+                        cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+                        total_cost_usd TEXT NOT NULL DEFAULT '0',
+                        avg_latency_ms INTEGER NOT NULL DEFAULT 0,
+                        input_token_semantics INTEGER NOT NULL DEFAULT 0,
+                        PRIMARY KEY (
+                            date, app_type, provider_id, model,
+                            request_model, pricing_model
+                        )
+                    )
+                    """
+                )
+                connection.execute(
+                    """
+                    CREATE TABLE proxy_request_logs (
+                        request_id TEXT PRIMARY KEY,
+                        provider_id TEXT NOT NULL,
+                        app_type TEXT NOT NULL,
+                        model TEXT NOT NULL,
+                        request_model TEXT,
+                        input_tokens INTEGER NOT NULL DEFAULT 0,
+                        output_tokens INTEGER NOT NULL DEFAULT 0,
+                        cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+                        cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+                        total_cost_usd TEXT NOT NULL DEFAULT '0',
+                        status_code INTEGER NOT NULL,
+                        created_at INTEGER NOT NULL,
+                        pricing_model TEXT,
+                        input_token_semantics INTEGER NOT NULL DEFAULT 0
+                    )
+                    """
+                )
+                connection.execute(
+                    """
+                    INSERT INTO usage_daily_rollups (
+                        date, app_type, provider_id, model,
+                        request_count, success_count, input_tokens
+                    ) VALUES ('2026-08-01', 'codex', 'provider-a', 'gpt-5',
+                              1, 1, 100)
+                    """
+                )
+                august_first = int(
+                    datetime(2026, 8, 1, 2, 0, tzinfo=timezone.utc).timestamp()
+                )
+                august_seventh = int(
+                    datetime(2026, 8, 7, 2, 0, tzinfo=timezone.utc).timestamp()
+                )
+                connection.executemany(
+                    """
+                    INSERT INTO proxy_request_logs (
+                        request_id, provider_id, app_type, model,
+                        request_model, input_tokens, output_tokens,
+                        cache_read_tokens, cache_creation_tokens,
+                        total_cost_usd, status_code, created_at,
+                        pricing_model, input_token_semantics
+                    ) VALUES (?, 'provider-a', 'codex', 'gpt-5',
+                              'gpt-5', ?, 0, 0, 0,
+                              '0', 200, ?, 'gpt-5', 1)
+                    """,
+                    [
+                        ("overlap-rollup-day", 999, august_first),
+                        ("new-log-day", 200, august_seventh),
+                    ],
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            result = collect_cc_switch_usage(
+                database,
+                start_date=date(2026, 8, 1),
+                end_date=date(2026, 8, 7),
+            )
+
+        self.assertEqual(result.source_table, "proxy_request_logs")
+        self.assertEqual(
+            [row.usage_date for row in result.rows],
+            [date(2026, 8, 1), date(2026, 8, 7)],
+        )
+        self.assertEqual(result.total_tokens, 300)
+        self.assertEqual(result.request_count, 2)
+
 
 class CCSwitchUsageSyncTests(unittest.TestCase):
     def test_collection_error_is_reported_to_server_for_manual_polling(self) -> None:
@@ -319,6 +419,7 @@ class CCSwitchUsageSyncTests(unittest.TestCase):
         self.assertEqual(token, "device-token")
         self.assertEqual(payload["device_id"], "device-123")
         self.assertEqual(payload["trigger"], "manual")
+        self.assertEqual(payload["sync_protocol_version"], 2)
         self.assertEqual(payload["source_table"], "usage_daily_rollups")
         self.assertEqual(payload["total_tokens"], 430)
         self.assertEqual(len(payload["rows"]), 1)

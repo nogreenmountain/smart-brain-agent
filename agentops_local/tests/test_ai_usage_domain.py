@@ -148,6 +148,38 @@ class AIUsageDomainTests(unittest.TestCase):
             [("cc_switch", 1000), ("chatgpt_web", 50)],
         )
 
+    def test_empty_authoritative_cc_switch_snapshot_does_not_fall_back_to_traces(self) -> None:
+        records = [
+            UsageRecord(
+                id="trace-1",
+                record_type="trace",
+                project_id="project-1",
+                project_name="Project One",
+                employee_id="test1",
+                employee_name="Test 1",
+                source="cc_switch",
+                title="Old trace total",
+                started_at=datetime(2026, 8, 7, 1, 0, tzinfo=timezone.utc),
+                total_tokens=6_780_000,
+            )
+        ]
+
+        summary = build_usage_summary_with_authoritative_source(
+            records,
+            authoritative_source="cc_switch",
+            authoritative_daily=[],
+            authoritative_available=True,
+            start_date=date(2026, 8, 7),
+            end_date=date(2026, 8, 7),
+        )
+
+        self.assertEqual(summary.total_tokens, 0)
+        self.assertEqual(summary.record_count, 0)
+        self.assertEqual(
+            [(item.source, item.total_tokens) for item in summary.source_usage],
+            [("cc_switch", 0)],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

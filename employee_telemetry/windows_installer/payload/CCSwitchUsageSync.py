@@ -88,12 +88,12 @@ def collect_cc_switch_usage(
     )
     connection.row_factory = sqlite3.Row
     try:
-        table = connection.execute(
+        rollup_table = connection.execute(
             "SELECT 1 FROM sqlite_master "
             "WHERE type = 'table' AND name = 'usage_daily_rollups'"
         ).fetchone()
-        if table is not None:
-            records = connection.execute(
+        if rollup_table is not None:
+            rollup_records = connection.execute(
                 """
                 SELECT
                     date, app_type, provider_id, model,
@@ -110,21 +110,27 @@ def collect_cc_switch_usage(
                 (start_date.isoformat(), end_date.isoformat()),
             ).fetchall()
         else:
-            records = []
-        source_table = "usage_daily_rollups"
-        if not records:
-            log_table = connection.execute(
-                "SELECT 1 FROM sqlite_master "
-                "WHERE type = 'table' AND name = 'proxy_request_logs'"
-            ).fetchone()
-            if log_table is None:
-                raise RuntimeError(
-                    "CC Switch usage tables are unavailable"
-                )
-            records = connection.execute(
+            rollup_records = []
+
+        log_table = connection.execute(
+            "SELECT 1 FROM sqlite_master "
+            "WHERE type = 'table' AND name = 'proxy_request_logs'"
+        ).fetchone()
+        if log_table is not None:
+            proxy_records = connection.execute(
                 """
+                WITH normalized_logs AS (
+                    SELECT
+                        *,
+                        CASE
+                            WHEN created_at >= 100000000000
+                            THEN created_at / 1000
+                            ELSE created_at
+                        END AS created_at_seconds
+                    FROM proxy_request_logs
+                )
                 SELECT
-                    date(created_at / 1000, 'unixepoch', '+8 hours') AS date,
+                    date(created_at_seconds, 'unixepoch', '+8 hours') AS date,
                     app_type,
                     provider_id,
                     model,
@@ -139,9 +145,9 @@ def collect_cc_switch_usage(
                     sum(cache_creation_tokens) AS cache_creation_tokens,
                     sum(CAST(total_cost_usd AS REAL)) AS total_cost_usd,
                     max(input_token_semantics) AS input_token_semantics
-                FROM proxy_request_logs
-                WHERE date(created_at / 1000, 'unixepoch', '+8 hours') >= ?
-                  AND date(created_at / 1000, 'unixepoch', '+8 hours') <= ?
+                FROM normalized_logs
+                WHERE date(created_at_seconds, 'unixepoch', '+8 hours') >= ?
+                  AND date(created_at_seconds, 'unixepoch', '+8 hours') <= ?
                 GROUP BY
                     date, app_type, provider_id, model,
                     request_model, pricing_model
@@ -151,6 +157,31 @@ def collect_cc_switch_usage(
                 """,
                 (start_date.isoformat(), end_date.isoformat()),
             ).fetchall()
+        else:
+            proxy_records = []
+
+        if rollup_table is None and log_table is None:
+            raise RuntimeError("CC Switch usage tables are unavailable")
+
+        rollup_dates = {str(record["date"]) for record in rollup_records}
+        fresh_proxy_records = [
+            record
+            for record in proxy_records
+            if str(record["date"]) not in rollup_dates
+        ]
+        records = sorted(
+            [*rollup_records, *fresh_proxy_records],
+            key=lambda record: (
+                str(record["date"]),
+                str(record["app_type"] or ""),
+                str(record["provider_id"] or ""),
+                str(record["model"] or ""),
+                str(record["request_model"] or ""),
+                str(record["pricing_model"] or ""),
+            ),
+        )
+        source_table = "usage_daily_rollups"
+        if fresh_proxy_records or rollup_table is None:
             source_table = "proxy_request_logs"
     finally:
         connection.close()
@@ -302,6 +333,7 @@ def sync_once(
     base_payload: dict[str, Any] = {
         "project_id": project_id,
         "device_id": device_id,
+        "sync_protocol_version": 2,
         "trigger": trigger,
         "request_id": request_id,
         "range_start": start_date.isoformat(),
