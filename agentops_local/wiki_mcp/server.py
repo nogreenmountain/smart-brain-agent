@@ -14,6 +14,7 @@ from starlette.responses import JSONResponse
 from agentops.common.orm import session_scope
 from agentops.wiki_mcp.auth import WikiTokenVerifier
 from agentops.wiki_mcp.operations import WikiOperations
+from agentops.wiki_mcp.urls import build_auth_urls
 
 
 def _env(name: str, default: str = "") -> str:
@@ -39,6 +40,7 @@ def _identity() -> tuple[uuid.UUID, list[str]]:
 
 
 public_url = _env("WIKI_MCP_PUBLIC_URL", "http://127.0.0.1:8010").rstrip("/")
+issuer_url, resource_server_url = build_auth_urls(public_url)
 verifier = WikiTokenVerifier(secret=_token_secret(), session_factory=session_scope)
 mcp = MCPServer(
     "smartbrain-company-memory",
@@ -53,8 +55,8 @@ mcp = MCPServer(
     version="1.2.0",
     token_verifier=verifier,
     auth=AuthSettings(
-        issuer_url=public_url,
-        resource_server_url=f"{public_url}/mcp",
+        issuer_url=issuer_url,
+        resource_server_url=resource_server_url,
         required_scopes=["wiki:read"],
     ),
 )

@@ -25,10 +25,8 @@ try {
     $installed = codex.cmd plugin list --json | ConvertFrom-Json
 
     $manifestPath = Join-Path $marketplaceRoot "plugins\company-memory\.codex-plugin\plugin.json"
-    $mcpPath = Join-Path $marketplaceRoot "plugins\company-memory\.mcp.json"
     $skillPath = Join-Path $marketplaceRoot "plugins\company-memory\skills\company-memory\SKILL.md"
     $manifest = Get-Content -LiteralPath $manifestPath -Encoding utf8 -Raw | ConvertFrom-Json
-    $mcp = Get-Content -LiteralPath $mcpPath -Encoding utf8 -Raw | ConvertFrom-Json
     $skill = Get-Content -LiteralPath $skillPath -Encoding utf8 -Raw
     foreach ($toolName in @(
         "list_member_wikis",
@@ -58,7 +56,8 @@ try {
         marketplace = $marketplace.marketplaceName
         plugin = $plugin.pluginId
         version = $manifest.version
-        mcp_url = $mcp.mcpServers."smartbrain-company-memory".url
+        mcp_url = $manifest.mcpServers."smartbrain-company-memory".url
+        bearer_token_env_var = $manifest.mcpServers."smartbrain-company-memory".bearer_token_env_var
         installed_count = $installed.installed.Count
         zip_bytes = (Get-Item -LiteralPath $BundlePath).Length
         sha256 = $hash.Hash

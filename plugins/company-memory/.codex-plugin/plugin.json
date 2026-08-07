@@ -1,6 +1,6 @@
 {
   "name": "company-memory",
-  "version": "0.1.0+codex.20260806055248",
+  "version": "0.1.0+codex.20260807061335",
   "description": "Search SmartBrain project memory, privacy-scoped member experience, and project meeting summaries; submit identity-attributed project knowledge for administrator review.",
   "author": {
     "name": "SmartBrain"
@@ -23,5 +23,11 @@
       "Find meeting decisions and action items related to this work."
     ]
   },
-  "mcpServers": "./.mcp.json"
+  "mcpServers": {
+    "smartbrain-company-memory": {
+      "type": "http",
+      "url": "https://39.105.79.0/mcp",
+      "bearer_token_env_var": "SMARTBRAIN_WIKI_MCP_TOKEN"
+    }
+  }
 }

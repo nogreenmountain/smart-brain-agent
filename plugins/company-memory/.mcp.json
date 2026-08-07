@@ -1,9 +1,0 @@
-{
-  "mcpServers": {
-    "smartbrain-company-memory": {
-      "type": "http",
-      "url": "http://192.168.1.40:8010/mcp",
-      "bearer_token_env_var": "SMARTBRAIN_WIKI_MCP_TOKEN"
-    }
-  }
-}

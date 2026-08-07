@@ -24,6 +24,11 @@ describe('buildCodexInstaller', () => {
     expect(script).toContain('SMARTBRAIN_WIKI_MCP_TOKEN');
     expect(script).toContain('sbmcp_visible_once');
     expect(script).toContain('http://192.168.1.40:8010/mcp');
+    expect(script).toContain("$manifest=Join-Path $root 'plugins\\company-memory\\.codex-plugin\\plugin.json'");
+    expect(script).toContain("$plugin.mcpServers.'smartbrain-company-memory'.url=$endpoint");
+    expect(script).not.toContain("plugins\\company-memory\\.mcp.json");
+    expect(script).toContain("GetEnvironmentVariable('SMARTBRAIN_WIKI_MCP_TOKEN','User')");
+    expect(script).toContain('Completely exit Codex and ChatGPT');
     expect(script).toContain('smartbrain-company-memory-codex.zip');
     expect(script).toContain('plugin marketplace list --json');
     expect(script).toContain("$marketplaces.name -contains 'smartbrain'");

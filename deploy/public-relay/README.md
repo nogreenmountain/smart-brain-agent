@@ -7,6 +7,7 @@
 - 智慧大脑：`https://39.105.79.0/`
 - API：与网页同源，通过 `/auth/*`、`/v4/*` 和 `/health` 转发
 - Project Wiki MCP：`https://39.105.79.0/mcp`
+- MCP OAuth protected-resource metadata：`https://39.105.79.0/.well-known/oauth-protected-resource/mcp`
 - OTLP HTTP：`https://39.105.79.0/v1/traces`
 - AgentOps Trace：`https://39.105.79.0/traces`
 
@@ -17,6 +18,19 @@
 无需下载或安装私有根证书，直接打开 `https://39.105.79.0/` 并登录。浏览器、Codex MCP、CC Switch 和标准 OTLP 客户端都应直接信任当前证书。
 
 AI Monitor `2026-08-06-r14-public-ip-https` 仍内嵌旧私有根证书以兼容已经发放的安装包；该证书不再是连接公网服务的必要条件。
+
+## Company Memory 插件升级
+
+`0.1.0+codex.20260807061335` 起，MCP 配置直接内联在插件的 `.codex-plugin/plugin.json` 中，不再使用 companion `.mcp.json`。这解决了部分 Codex/ChatGPT Desktop 环境中“插件已加载、环境变量存在，但 MCP 初始化未携带 Bearer Token，工具无法注册”的问题。
+
+已经安装旧版插件的电脑必须完整升级，不能只重启：
+
+1. 在智慧大脑 Wiki 页面撤销旧 Codex Token；
+2. 创建新 Token，并重新下载、运行最新版安装器；
+3. 彻底退出 Codex 和 ChatGPT，包括仍在后台运行的进程；
+4. 重新打开 Codex/ChatGPT，新建任务后调用 `list_wiki_projects` 验证。
+
+安装器只把 Token 保存到当前 Windows 用户的 `SMARTBRAIN_WIKI_MCP_TOKEN` 环境变量，不得把明文 Token 写进 `.mcp.json`、`config.toml`、仓库或部署文档。
 
 ## 本地反向隧道
 

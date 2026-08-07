@@ -23,6 +23,7 @@ foreach ($requiredSnippet in @(
     "ssl_certificate_key /etc/letsencrypt/live/39.105.79.0/privkey.pem",
     "location ^~ /auth/",
     "location ^~ /v4/",
+    "location = /.well-known/oauth-protected-resource/mcp",
     "location = /mcp",
     "location = /v1/traces",
     "location ^~ /traces",
