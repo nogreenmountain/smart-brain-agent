@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { getWorkdaySummary, WorkdaySummary } from './api';
+import { getCCSwitchUsageSyncStatus, getWorkdaySummary, WorkdaySummary } from './api';
 
 const response: WorkdaySummary = {
   status: 'no_data',
@@ -68,5 +68,34 @@ describe('getWorkdaySummary', () => {
       include_raw_metrics: 'false',
     });
     expect(init.credentials).toBe('include');
+  });
+});
+
+describe('getCCSwitchUsageSyncStatus', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('queries the current user sync result by manual request id', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({
+        status: 'ok',
+        employee_id: 'test1',
+        employee_name: 'Test 1',
+        request_id: '11111111-1111-1111-1111-111111111111',
+        total_tokens: 40000000,
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await getCCSwitchUsageSyncStatus('11111111-1111-1111-1111-111111111111');
+
+    const [requestUrl] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const url = new URL(requestUrl);
+    expect(url.pathname).toBe('/v4/ai-usage/cc-switch-sync/status');
+    expect(url.searchParams.get('request_id')).toBe('11111111-1111-1111-1111-111111111111');
   });
 });

@@ -111,13 +111,17 @@ try {
 
 $syncSource = Join-Path $PSScriptRoot "ConversationSync.py"
 $syncScript = Join-Path $runtimeDir "ConversationSync.py"
+$usageSyncSource = Join-Path $PSScriptRoot "CCSwitchUsageSync.py"
+$usageSyncScript = Join-Path $runtimeDir "CCSwitchUsageSync.py"
 $syncRunner = Join-Path $runtimeDir "Run-ConversationSync.ps1"
 $syncRunnerVbs = Join-Path $runtimeDir "Run-ConversationSync.vbs"
 Copy-Item -LiteralPath $syncSource -Destination $syncScript -Force
+Copy-Item -LiteralPath $usageSyncSource -Destination $usageSyncScript -Force
 $pythonPrefix = if ($pythonCommand.Count -gt 1) { "$($pythonCommand[1]) " } else { "" }
 $runnerContent = @"
 `$ErrorActionPreference = "SilentlyContinue"
 & "$($pythonCommand[0])" $pythonPrefix`"$syncScript`" --runtime-dir `"$runtimeDir`" | Out-Null
+& "$($pythonCommand[0])" $pythonPrefix`"$usageSyncScript`" --runtime-dir `"$runtimeDir`" --trigger automatic | Out-Null
 "@
 Set-Content -LiteralPath $syncRunner -Encoding UTF8 -Value $runnerContent
 $vbsRunnerContent = @(
@@ -146,6 +150,14 @@ try {
     }
 } catch {
     Write-Host "Initial AI conversation sync will retry in the background." -ForegroundColor Yellow
+}
+try {
+    $usageSyncArguments = @()
+    if ($pythonCommand.Count -gt 1) { $usageSyncArguments += $pythonCommand[1] }
+    $usageSyncArguments += @($usageSyncScript, "--runtime-dir", $runtimeDir, "--trigger", "automatic")
+    & $pythonCommand[0] @usageSyncArguments | Out-Null
+} catch {
+    Write-Host "Initial CC Switch usage sync will retry in the background." -ForegroundColor Yellow
 }
 
 Write-Host ""

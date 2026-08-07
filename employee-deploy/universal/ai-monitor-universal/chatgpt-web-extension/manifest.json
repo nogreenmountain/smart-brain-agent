@@ -7,8 +7,7 @@
   "host_permissions": [
     "https://chatgpt.com/*",
     "https://chat.openai.com/*",
-    "http://192.168.1.40:8000/*",
-    "http://192.168.1.40:3002/*"
+    "https://39.105.79.0/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -21,7 +20,7 @@
       "run_at": "document_idle"
     },
     {
-      "matches": ["http://192.168.1.40:3002/*"],
+      "matches": ["https://39.105.79.0/*"],
       "js": ["config.js", "smartbrain-bridge.js"],
       "run_at": "document_idle"
     }

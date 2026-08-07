@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
-from zoneinfo import ZoneInfo
+from datetime import date, datetime, timedelta, timezone
 
 
-SHANGHAI_TIMEZONE = ZoneInfo("Asia/Shanghai")
+SHANGHAI_TIMEZONE = timezone(timedelta(hours=8))
 
 
 @dataclass(frozen=True)
@@ -87,6 +86,27 @@ class UsageSummary:
     daily_usage: tuple[DailyUsage, ...] = field(default_factory=tuple)
     hourly_usage: tuple[HourlyUsage, ...] = field(default_factory=tuple)
     source_usage: tuple[SourceUsage, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
+class AuthoritativeUsageDaily:
+    usage_date: date
+    request_count: int
+    input_tokens: int
+    output_tokens: int
+    cache_read_tokens: int
+    cache_creation_tokens: int
+    total_tokens: int
+    error_count: int = 0
+    total_cost: float = 0.0
+
+    @property
+    def prompt_tokens(self) -> int:
+        return (
+            self.input_tokens
+            + self.cache_read_tokens
+            + self.cache_creation_tokens
+        )
 
 
 def _local_day(value: datetime) -> date:
@@ -179,4 +199,86 @@ def build_usage_summary(
                 key=lambda item: (-item[1]["total_tokens"], item[0]),
             )
         ),
+    )
+
+
+def build_usage_summary_with_authoritative_source(
+    records: list[UsageRecord],
+    *,
+    authoritative_source: str,
+    authoritative_daily: list[AuthoritativeUsageDaily],
+    start_date: date,
+    end_date: date,
+) -> UsageSummary:
+    if not authoritative_daily:
+        return build_usage_summary(
+            records,
+            start_date=start_date,
+            end_date=end_date,
+        )
+
+    detail_summary = build_usage_summary(
+        records,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    non_authoritative_summary = build_usage_summary(
+        [record for record in records if record.source != authoritative_source],
+        start_date=start_date,
+        end_date=end_date,
+    )
+    snapshots = {
+        item.usage_date: item
+        for item in authoritative_daily
+        if start_date <= item.usage_date <= end_date
+    }
+    daily_usage = []
+    for point in non_authoritative_summary.daily_usage:
+        snapshot = snapshots.get(point.date)
+        if snapshot is None:
+            daily_usage.append(point)
+            continue
+        daily_usage.append(
+            DailyUsage(
+                date=point.date,
+                record_count=point.record_count + snapshot.request_count,
+                total_tokens=point.total_tokens + snapshot.total_tokens,
+                prompt_tokens=point.prompt_tokens + snapshot.prompt_tokens,
+                completion_tokens=point.completion_tokens + snapshot.output_tokens,
+                error_count=point.error_count + snapshot.error_count,
+            )
+        )
+
+    source_usage = list(non_authoritative_summary.source_usage)
+    source_usage.append(
+        SourceUsage(
+            source=authoritative_source,
+            record_count=sum(item.request_count for item in snapshots.values()),
+            total_tokens=sum(item.total_tokens for item in snapshots.values()),
+        )
+    )
+    source_usage.sort(key=lambda item: (-item.total_tokens, item.source))
+    total_tokens = sum(item.total_tokens for item in daily_usage)
+    return UsageSummary(
+        start_date=start_date,
+        end_date=end_date,
+        period_days=(end_date - start_date).days + 1,
+        active_days=sum(item.record_count > 0 for item in daily_usage),
+        record_count=sum(item.record_count for item in daily_usage),
+        total_tokens=total_tokens,
+        prompt_tokens=sum(item.prompt_tokens for item in daily_usage),
+        completion_tokens=sum(item.completion_tokens for item in daily_usage),
+        average_tokens_per_day=round(
+            total_tokens / ((end_date - start_date).days + 1),
+            2,
+        ),
+        error_count=sum(item.error_count for item in daily_usage),
+        total_cost=round(
+            non_authoritative_summary.total_cost
+            + sum(item.total_cost for item in snapshots.values()),
+            9,
+        ),
+        daily_usage=tuple(daily_usage),
+        hourly_usage=detail_summary.hourly_usage,
+        source_usage=tuple(source_usage),
     )

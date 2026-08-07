@@ -1,6 +1,6 @@
 'use client';
 
-import { FormEvent, ReactNode, useEffect, useMemo, useState } from 'react';
+import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   BarChart3,
@@ -11,6 +11,7 @@ import {
   ExternalLink,
   Hash,
   MessageSquareText,
+  RefreshCw,
   Search,
   TriangleAlert,
   Zap,
@@ -27,6 +28,8 @@ import {
   AIUsageQueryResult,
   AIUsageRecord,
   AIUsageSource,
+  CCSwitchUsageSyncStatus,
+  getCCSwitchUsageSyncStatus,
   getAIUsageOptions,
   getAIUsageRecords,
 } from '@/lib/api';
@@ -93,6 +96,38 @@ function sourceLabel(source: string): string {
   return SOURCE_LABELS[source] ?? source;
 }
 
+function newRequestId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (value) => value.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+function wait(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+}
+
+function syncStatusText(
+  status: CCSwitchUsageSyncStatus | null,
+  phase: 'idle' | 'launching' | 'timeout',
+): string {
+  if (phase === 'launching') return '正在检测本机 AI Monitor、CC Switch 和本地统计数据库，请稍候。';
+  if (phase === 'timeout') return '未收到本机 AI Monitor 响应。请安装或覆盖安装最新版 AI Monitor 后重试。';
+  if (!status || status.status === 'never') return '尚未同步。AI Monitor 安装后会每 2 分钟自动同步，也可以立即手动同步。';
+  if (status.status === 'not_running') return '未检测到 CC Switch 运行，请先启动 CC Switch，再重新同步。';
+  if (status.status === 'error') return `同步失败：${status.error_message || '本地统计读取或上传失败'}`;
+  const range = status.range_start && status.range_end
+    ? `${status.range_start} 至 ${status.range_end}`
+    : '最近 90 天';
+  const syncedAt = status.synced_at ? `；同步时间 ${formatDateTime(status.synced_at)}` : '';
+  return `已同步 ${range}，${formatCount(status.total_tokens ?? 0)} Tokens，${formatCount(status.request_count ?? 0)} 次请求${syncedAt}`;
+}
+
 export default function WorkdayPage() {
   const today = useMemo(shanghaiToday, []);
   const [options, setOptions] = useState<AIUsageOptions | null>(null);
@@ -105,6 +140,9 @@ export default function WorkdayPage() {
   const [loadingOptions, setLoadingOptions] = useState(true);
   const [loadingRecords, setLoadingRecords] = useState(false);
   const [error, setError] = useState('');
+  const [syncStatus, setSyncStatus] = useState<CCSwitchUsageSyncStatus | null>(null);
+  const [syncPhase, setSyncPhase] = useState<'idle' | 'launching' | 'timeout'>('idle');
+  const activeSyncRequest = useRef<string | null>(null);
 
   const adminMode = options?.mode === 'admin';
   const statisticsMode = options?.mode === 'statistics';
@@ -113,6 +151,12 @@ export default function WorkdayPage() {
   const selectedEmployeeName = selectableEmployeeMode
     ? employeeOptions.find((item) => item.id === employeeId)?.name ?? options?.current_employee.name
     : options?.current_employee.name;
+  const selectedEmployeeId = selectableEmployeeMode
+    ? employeeId
+    : options?.current_employee.id ?? '';
+  const canSyncLocalCCSwitch = Boolean(
+    options && selectedEmployeeId === options.current_employee.id,
+  );
 
   useEffect(() => {
     let active = true;
@@ -128,6 +172,12 @@ export default function WorkdayPage() {
         if (initialEmployee) setEmployeeId(initialEmployee);
         if (loaded.mode === 'self' || initialEmployee) {
           await loadRecords(loaded.mode, initialEmployee);
+        }
+        try {
+          const latestSync = await getCCSwitchUsageSyncStatus();
+          if (active) setSyncStatus(latestSync);
+        } catch {
+          // Token statistics remain available even if sync status is temporarily unavailable.
         }
       })
       .catch((requestError: unknown) => {
@@ -193,6 +243,42 @@ export default function WorkdayPage() {
     });
   }
 
+  async function syncLocalCCSwitch() {
+    if (!canSyncLocalCCSwitch || syncPhase === 'launching') return;
+    const requestId = newRequestId();
+    activeSyncRequest.current = requestId;
+    setSyncPhase('launching');
+    setSyncStatus(null);
+
+    const launcher = document.createElement('iframe');
+    launcher.hidden = true;
+    launcher.setAttribute('aria-hidden', 'true');
+    launcher.src = `smartbrain-ai-monitor://sync-cc-switch?request_id=${encodeURIComponent(requestId)}`;
+    document.body.appendChild(launcher);
+    window.setTimeout(() => launcher.remove(), 5000);
+
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      await wait(attempt === 0 ? 800 : 1500);
+      if (activeSyncRequest.current !== requestId) return;
+      try {
+        const status = await getCCSwitchUsageSyncStatus(requestId);
+        if (status.status !== 'never' && status.request_id === requestId) {
+          setSyncStatus(status);
+          setSyncPhase('idle');
+          activeSyncRequest.current = null;
+          if (status.status === 'ok') await loadRecords();
+          return;
+        }
+      } catch {
+        // Keep polling: the local protocol may still be starting the monitor.
+      }
+    }
+    if (activeSyncRequest.current === requestId) {
+      activeSyncRequest.current = null;
+      setSyncPhase('timeout');
+    }
+  }
+
   return (
     <PageShell>
       <PageHeader
@@ -255,6 +341,20 @@ export default function WorkdayPage() {
               </button>
             ))}
           </div>
+          {canSyncLocalCCSwitch && (
+            <div className="mt-3 flex flex-col gap-3 rounded-lg border border-[#d7e0ec] bg-[#f7f9fc] p-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-[#253655]">CC Switch Token 官方统计</p>
+                <p className="mt-1 text-xs leading-5 text-[#6c7b91]">
+                  {syncStatusText(syncStatus, syncPhase)}
+                </p>
+              </div>
+              <Button type="button" variant="secondary" className="w-full shrink-0 sm:w-auto" disabled={syncPhase === 'launching'} onClick={() => void syncLocalCCSwitch()}>
+                <RefreshCw size={16} className={syncPhase === 'launching' ? 'animate-spin' : ''} aria-hidden="true" />
+                {syncPhase === 'launching' ? '正在唤起 AI Monitor' : '同步本机 CC Switch'}
+              </Button>
+            </div>
+          )}
           </div>
         </form>
 

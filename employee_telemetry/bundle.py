@@ -522,13 +522,17 @@ try {
 
 $syncSource = Join-Path $PSScriptRoot "ConversationSync.py"
 $syncScript = Join-Path $runtimeDir "ConversationSync.py"
+$usageSyncSource = Join-Path $PSScriptRoot "CCSwitchUsageSync.py"
+$usageSyncScript = Join-Path $runtimeDir "CCSwitchUsageSync.py"
 $syncRunner = Join-Path $runtimeDir "Run-ConversationSync.ps1"
 $syncRunnerVbs = Join-Path $runtimeDir "Run-ConversationSync.vbs"
 Copy-Item -LiteralPath $syncSource -Destination $syncScript -Force
+Copy-Item -LiteralPath $usageSyncSource -Destination $usageSyncScript -Force
 $pythonPrefix = if ($pythonCommand.Count -gt 1) { "$($pythonCommand[1]) " } else { "" }
 $runnerContent = @"
 `$ErrorActionPreference = "SilentlyContinue"
 & "$($pythonCommand[0])" $pythonPrefix`"$syncScript`" --runtime-dir `"$runtimeDir`" | Out-Null
+& "$($pythonCommand[0])" $pythonPrefix`"$usageSyncScript`" --runtime-dir `"$runtimeDir`" --trigger automatic | Out-Null
 "@
 Set-Content -LiteralPath $syncRunner -Encoding UTF8 -Value $runnerContent
 $vbsRunnerContent = @(
@@ -557,6 +561,14 @@ try {
     }
 } catch {
     Write-Host "Initial AI conversation sync will retry in the background." -ForegroundColor Yellow
+}
+try {
+    $usageSyncArguments = @()
+    if ($pythonCommand.Count -gt 1) { $usageSyncArguments += $pythonCommand[1] }
+    $usageSyncArguments += @($usageSyncScript, "--runtime-dir", $runtimeDir, "--trigger", "automatic")
+    & $pythonCommand[0] @usageSyncArguments | Out-Null
+} catch {
+    Write-Host "Initial CC Switch usage sync will retry in the background." -ForegroundColor Yellow
 }
 
 Write-Host ""
@@ -617,10 +629,13 @@ if ($LASTEXITCODE -ne 0) { throw "自动卸载失败。" }
 Unregister-ScheduledTask -TaskName "SmartBrain AI Conversation Sync" -Confirm:$false -ErrorAction SilentlyContinue
 foreach ($fileName in @(
     "ConversationSync.py",
+    "CCSwitchUsageSync.py",
     "Run-ConversationSync.ps1",
+    "Run-ConversationSync.vbs",
     "device-credentials.json",
     "conversation-sync-state.json",
-    "conversation-sync-status.json"
+    "conversation-sync-status.json",
+    "cc-switch-usage-sync-status.json"
 )) {
     $path = Join-Path $runtimeDir $fileName
     if (Test-Path -LiteralPath $path) {
@@ -734,6 +749,10 @@ def create_universal_bundle(
     shutil.copyfile(
         package_dir / "conversation_sync.py",
         output / "ConversationSync.py",
+    )
+    shutil.copyfile(
+        package_dir / "cc_switch_usage_sync.py",
+        output / "CCSwitchUsageSync.py",
     )
     return output
 

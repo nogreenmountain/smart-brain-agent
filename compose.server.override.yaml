@@ -9,7 +9,7 @@
 # After any backend code change, rebuild with:
 #   cd D:\AgentOpsServer\AgentOps\app
 #   docker build -f Dockerfile.api-workday \
-#     -t agentops-api-local:patched-2026-08-06-global-read .
+#     -t agentops-api-local:patched-2026-08-07-ccswitch-sync .
 #
 # Setup (PowerShell, in a fresh session):
 #   $env:ANTHROPIC_AUTH_TOKEN = "your-gateway-token"
@@ -64,7 +64,7 @@ services:
       - rag_model_cache:/models
 
   api:
-    image: agentops-api-local:patched-2026-08-06-global-read
+    image: agentops-api-local:patched-2026-08-07-ccswitch-sync
     depends_on:
       - clickhouse
     environment:
@@ -99,7 +99,7 @@ services:
       PROJECT_WIKI_INCLUDE_AI_CHAT_SOURCES: ${PROJECT_WIKI_INCLUDE_AI_CHAT_SOURCES:-false}
 
   project-wiki-worker:
-    image: agentops-api-local:patched-2026-08-06-global-read
+    image: agentops-api-local:patched-2026-08-07-ccswitch-sync
     restart: unless-stopped
     command: ["/app/.venv/bin/python", "-m", "agentops.project_wiki.worker"]
     networks:
@@ -138,7 +138,7 @@ services:
       PROJECT_WIKI_INTERVAL_SECONDS: ${PROJECT_WIKI_INTERVAL_SECONDS:-86400}
 
   ai-worklog-worker:
-    image: agentops-api-local:patched-2026-08-06-global-read
+    image: agentops-api-local:patched-2026-08-07-ccswitch-sync
     restart: unless-stopped
     command: ["/app/.venv/bin/python", "-m", "agentops.ai_usage.daily_log_worker"]
     networks:
@@ -167,7 +167,7 @@ services:
       AI_WORKLOG_RETRY_SECONDS: ${AI_WORKLOG_RETRY_SECONDS:-900}
 
   member-wiki-worker:
-    image: agentops-api-local:patched-2026-08-06-global-read
+    image: agentops-api-local:patched-2026-08-07-ccswitch-sync
     restart: unless-stopped
     command: ["/app/.venv/bin/python", "-m", "agentops.member_wiki.worker"]
     networks:

@@ -48,10 +48,13 @@ if ($LASTEXITCODE -ne 0) { throw "自动卸载失败。" }
 Unregister-ScheduledTask -TaskName "SmartBrain AI Conversation Sync" -Confirm:$false -ErrorAction SilentlyContinue
 foreach ($fileName in @(
     "ConversationSync.py",
+    "CCSwitchUsageSync.py",
     "Run-ConversationSync.ps1",
+    "Run-ConversationSync.vbs",
     "device-credentials.json",
     "conversation-sync-state.json",
-    "conversation-sync-status.json"
+    "conversation-sync-status.json",
+    "cc-switch-usage-sync-status.json"
 )) {
     $path = Join-Path $runtimeDir $fileName
     if (Test-Path -LiteralPath $path) {

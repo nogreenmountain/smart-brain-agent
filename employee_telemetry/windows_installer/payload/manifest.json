@@ -1,6 +1,6 @@
 {
   "package_name": "ai-monitor-universal",
-  "package_version": "2026-08-06-r14-public-ip-https",
+  "package_version": "2026-08-07-r15-ccswitch-usage-sync",
   "project_id": "dfaefd9a-8e5e-4775-bc18-e3d551c651e4",
   "api_endpoint": "https://39.105.79.0",
   "collector_endpoint": "https://39.105.79.0",

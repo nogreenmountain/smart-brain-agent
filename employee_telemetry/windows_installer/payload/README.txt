@@ -1,5 +1,5 @@
 智慧大脑 AI Monitor 一键安装器
-版本：2026-08-06-r14-public-ip-https
+版本：2026-08-07-r15-ccswitch-usage-sync
 
 适用范围
 

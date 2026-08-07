@@ -11,6 +11,14 @@ $ErrorActionPreference = "Stop"
 if (-not $BundleDir) {
     $BundleDir = Join-Path $PSScriptRoot "payload"
 }
+$ccSwitchUsageSource = Join-Path (Split-Path -Parent $PSScriptRoot) "cc_switch_usage_sync.py"
+$ccSwitchUsageTarget = Join-Path $BundleDir "CCSwitchUsageSync.py"
+if (-not (Test-Path -LiteralPath $ccSwitchUsageTarget)) {
+    if (-not (Test-Path -LiteralPath $ccSwitchUsageSource -PathType Leaf)) {
+        throw "CC Switch usage sync source was not found."
+    }
+    Copy-Item -LiteralPath $ccSwitchUsageSource -Destination $ccSwitchUsageTarget -Force
+}
 $pythonArchiveName = "python-3.12.10-embed-amd64.zip"
 $pythonUrl = "https://www.python.org/ftp/python/3.12.10/$pythonArchiveName"
 $pythonSha256 = "4ACBED6DD1C744B0376E3B1CF57CE906F9DC9E95E68824584C8099A63025A3C3"
@@ -22,6 +30,7 @@ $required = @(
     "Enroll-AIWorkday.py",
     "Update-CCSwitchCommonConfig.py",
     "ConversationSync.py",
+    "CCSwitchUsageSync.py",
     "manifest.json",
     "chatgpt-web-extension"
 )

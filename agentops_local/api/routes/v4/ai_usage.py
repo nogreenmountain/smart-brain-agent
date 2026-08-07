@@ -19,10 +19,12 @@ from agentops.ai_usage.access import (
     validate_date_range,
 )
 from agentops.ai_usage.domain import (
+    AuthoritativeUsageDaily,
     UsageMessage,
     UsageRecord,
     UsageSummary,
     build_usage_summary,
+    build_usage_summary_with_authoritative_source,
 )
 from agentops.ai_usage.reporting import build_report_prompt, generate_usage_report
 from agentops.api.db.clickhouse_client import get_clickhouse
@@ -32,9 +34,11 @@ from agentops.rag.audit import record_audit
 from agentops.rag.authz import AuthzError, current_user_id
 from agentops.workday.domain import business_day_utc_bounds
 from agentops.workday.identity import derive_employee_identity
+from agentops.api.routes.v4.ai_chat import _device_claims
 
 
 router = APIRouter(route_class=AuthenticatedRoute)
+device_router = APIRouter()
 logger = logging.getLogger(__name__)
 
 AIUsageSource = Literal[
@@ -163,6 +167,77 @@ class UsageQueryResponse(BaseModel):
     has_more: bool
     warnings: list[str]
     detail_visible: bool = True
+
+
+class CCSwitchUsageRowInput(BaseModel):
+    usage_date: date
+    app_type: str = Field(..., min_length=1, max_length=40)
+    provider_id: str = Field(..., min_length=1, max_length=200)
+    model: str = Field(..., min_length=1, max_length=200)
+    request_model: str = Field("", max_length=200)
+    pricing_model: str = Field("", max_length=200)
+    request_count: int = Field(0, ge=0)
+    success_count: int = Field(0, ge=0)
+    input_tokens: int = Field(0, ge=0)
+    output_tokens: int = Field(0, ge=0)
+    cache_read_tokens: int = Field(0, ge=0)
+    cache_creation_tokens: int = Field(0, ge=0)
+    total_tokens: int = Field(0, ge=0)
+    total_cost_usd: float = Field(0, ge=0)
+    input_token_semantics: int = Field(0, ge=0)
+
+
+class CCSwitchUsageSyncRequest(BaseModel):
+    project_id: uuid.UUID
+    device_id: str = Field(..., min_length=1, max_length=200)
+    trigger: Literal["automatic", "manual"] = "automatic"
+    request_id: uuid.UUID | None = None
+    range_start: date
+    range_end: date
+    attempted_at: datetime
+    cc_switch_running: bool
+    status: Literal["ok", "not_running", "error"]
+    source_table: Literal["usage_daily_rollups", "proxy_request_logs"] | None = None
+    rows: list[CCSwitchUsageRowInput] = Field(default_factory=list, max_length=5000)
+    request_count: int = Field(0, ge=0)
+    success_count: int = Field(0, ge=0)
+    total_tokens: int = Field(0, ge=0)
+    error_message: str | None = Field(None, max_length=1000)
+
+
+class CCSwitchUsageSyncResponse(BaseModel):
+    status: Literal["ok", "not_running", "error"]
+    employee_id: str
+    employee_name: str
+    device_id: str
+    trigger: Literal["automatic", "manual"]
+    request_id: uuid.UUID | None = None
+    range_start: date
+    range_end: date
+    row_count: int
+    request_count: int
+    total_tokens: int
+    attempted_at: datetime
+    synced_at: datetime | None = None
+    error_message: str | None = None
+
+
+class CCSwitchUsageSyncStatusResponse(BaseModel):
+    status: Literal["never", "ok", "not_running", "error"]
+    employee_id: str
+    employee_name: str
+    device_id: str | None = None
+    trigger: Literal["automatic", "manual"] | None = None
+    request_id: uuid.UUID | None = None
+    range_start: date | None = None
+    range_end: date | None = None
+    row_count: int = 0
+    request_count: int = 0
+    total_tokens: int = 0
+    attempted_at: datetime | None = None
+    synced_at: datetime | None = None
+    cc_switch_running: bool | None = None
+    error_message: str | None = None
 
 
 class UsageReportRequest(BaseModel):
@@ -725,6 +800,55 @@ def _has_stale_unsynced_trace(
     return latest_trace > latest_sync + CONVERSATION_SYNC_GRACE_PERIOD
 
 
+def _cc_switch_authoritative_daily(
+    orm: Session,
+    *,
+    employee_id: str,
+    start_date: date,
+    end_date: date,
+) -> list[AuthoritativeUsageDaily]:
+    rows = orm.execute(
+        text("""
+            SELECT
+                usage_date,
+                sum(request_count)::bigint AS request_count,
+                sum(input_tokens)::bigint AS input_tokens,
+                sum(output_tokens)::bigint AS output_tokens,
+                sum(cache_read_tokens)::bigint AS cache_read_tokens,
+                sum(cache_creation_tokens)::bigint AS cache_creation_tokens,
+                sum(total_tokens)::bigint AS total_tokens,
+                sum(GREATEST(request_count - success_count, 0))::bigint
+                    AS error_count,
+                sum(total_cost_usd)::double precision AS total_cost
+            FROM public.cc_switch_usage_daily
+            WHERE employee_id = :employee_id
+              AND usage_date >= :start_date
+              AND usage_date <= :end_date
+            GROUP BY usage_date
+            ORDER BY usage_date
+        """),
+        {
+            "employee_id": employee_id,
+            "start_date": start_date,
+            "end_date": end_date,
+        },
+    ).all()
+    return [
+        AuthoritativeUsageDaily(
+            usage_date=row.usage_date,
+            request_count=int(row.request_count or 0),
+            input_tokens=int(row.input_tokens or 0),
+            output_tokens=int(row.output_tokens or 0),
+            cache_read_tokens=int(row.cache_read_tokens or 0),
+            cache_creation_tokens=int(row.cache_creation_tokens or 0),
+            total_tokens=int(row.total_tokens or 0),
+            error_count=int(row.error_count or 0),
+            total_cost=float(row.total_cost or 0),
+        )
+        for row in rows
+    ]
+
+
 def _collect_usage(
     orm: Session,
     clickhouse: Any,
@@ -771,8 +895,18 @@ def _collect_usage(
         key=lambda item: item.started_at,
         reverse=True,
     )
-    summary = build_usage_summary(
+    authoritative_daily = []
+    if source in {None, "cc_switch"}:
+        authoritative_daily = _cc_switch_authoritative_daily(
+            orm,
+            employee_id=employee.id,
+            start_date=start_date,
+            end_date=end_date,
+        )
+    summary = build_usage_summary_with_authoritative_source(
         all_records,
+        authoritative_source="cc_switch",
+        authoritative_daily=authoritative_daily,
         start_date=start_date,
         end_date=end_date,
     )
@@ -783,6 +917,10 @@ def _collect_usage(
     if _has_stale_unsynced_trace(chat_records, trace_records):
         warnings.append(
             "检测到尚未完成正文同步的 CC Switch 记录，请确认员工端对话同步组件在线。"
+        )
+    if authoritative_daily:
+        warnings.append(
+            "CC Switch Token 总量来自 AI Monitor 同步的本机官方统计；Trace 和对话仅用于展示工作明细。"
         )
     return summary, visible_records, has_more, warnings
 
@@ -823,6 +961,293 @@ def _audit(
             "result_status": result_status,
         },
         request=request,
+    )
+
+
+@device_router.post(
+    "/ai-usage/cc-switch-sync/device-ingest",
+    response_model=CCSwitchUsageSyncResponse,
+)
+def device_ingest_cc_switch_usage(
+    request: Request,
+    body: CCSwitchUsageSyncRequest,
+    orm: Session = Depends(get_orm_session),
+) -> CCSwitchUsageSyncResponse:
+    claims = _device_claims(request)
+    if str(body.project_id) != str(claims["project_id"]):
+        raise HTTPException(
+            status_code=403,
+            detail="device credential does not belong to this project",
+        )
+    if body.range_end < body.range_start:
+        raise HTTPException(status_code=422, detail="range_end must not precede range_start")
+    if (body.range_end - body.range_start).days > 3650:
+        raise HTTPException(status_code=422, detail="sync range is too large")
+    if body.status == "ok" and not body.cc_switch_running:
+        raise HTTPException(status_code=422, detail="CC Switch must be running for a successful sync")
+    if any(
+        row.usage_date < body.range_start or row.usage_date > body.range_end
+        for row in body.rows
+    ):
+        raise HTTPException(status_code=422, detail="usage row falls outside the declared range")
+    row_total_tokens = sum(row.total_tokens for row in body.rows)
+    if body.status == "ok" and row_total_tokens != body.total_tokens:
+        raise HTTPException(status_code=422, detail="total_tokens does not match usage rows")
+
+    user_id = uuid.UUID(str(claims["sub"]))
+    employee_id = str(claims.get("employee_id") or "").strip()
+    employee_name = str(claims.get("employee_name") or employee_id).strip()
+    if not employee_id:
+        raise HTTPException(status_code=401, detail="device credential has no employee identity")
+    synced_at = datetime.now(timezone.utc)
+    try:
+        if body.status == "ok":
+            orm.execute(
+                text("""
+                    DELETE FROM public.cc_switch_usage_daily
+                    WHERE user_id = :user_id
+                      AND device_id = :device_id
+                      AND usage_date >= :range_start
+                      AND usage_date <= :range_end
+                """),
+                {
+                    "user_id": str(user_id),
+                    "device_id": body.device_id,
+                    "range_start": body.range_start,
+                    "range_end": body.range_end,
+                },
+            )
+            for row in body.rows:
+                orm.execute(
+                    text("""
+                        INSERT INTO public.cc_switch_usage_daily (
+                            project_id, user_id, employee_id, employee_name,
+                            device_id, usage_date, app_type, provider_id,
+                            model, request_model, pricing_model,
+                            request_count, success_count,
+                            input_tokens, output_tokens,
+                            cache_read_tokens, cache_creation_tokens,
+                            total_tokens, total_cost_usd,
+                            input_token_semantics, source_table, synced_at
+                        ) VALUES (
+                            :project_id, :user_id, :employee_id, :employee_name,
+                            :device_id, :usage_date, :app_type, :provider_id,
+                            :model, :request_model, :pricing_model,
+                            :request_count, :success_count,
+                            :input_tokens, :output_tokens,
+                            :cache_read_tokens, :cache_creation_tokens,
+                            :total_tokens, :total_cost_usd,
+                            :input_token_semantics, :source_table, :synced_at
+                        )
+                        ON CONFLICT (
+                            user_id, device_id, usage_date, app_type,
+                            provider_id, model, request_model, pricing_model
+                        ) DO UPDATE SET
+                            project_id = excluded.project_id,
+                            employee_id = excluded.employee_id,
+                            employee_name = excluded.employee_name,
+                            request_count = excluded.request_count,
+                            success_count = excluded.success_count,
+                            input_tokens = excluded.input_tokens,
+                            output_tokens = excluded.output_tokens,
+                            cache_read_tokens = excluded.cache_read_tokens,
+                            cache_creation_tokens = excluded.cache_creation_tokens,
+                            total_tokens = excluded.total_tokens,
+                            total_cost_usd = excluded.total_cost_usd,
+                            input_token_semantics = excluded.input_token_semantics,
+                            source_table = excluded.source_table,
+                            synced_at = excluded.synced_at,
+                            updated_at = now()
+                    """),
+                    {
+                        "project_id": str(body.project_id),
+                        "user_id": str(user_id),
+                        "employee_id": employee_id,
+                        "employee_name": employee_name,
+                        "device_id": body.device_id,
+                        "usage_date": row.usage_date,
+                        "app_type": row.app_type,
+                        "provider_id": row.provider_id,
+                        "model": row.model,
+                        "request_model": row.request_model,
+                        "pricing_model": row.pricing_model,
+                        "request_count": row.request_count,
+                        "success_count": row.success_count,
+                        "input_tokens": row.input_tokens,
+                        "output_tokens": row.output_tokens,
+                        "cache_read_tokens": row.cache_read_tokens,
+                        "cache_creation_tokens": row.cache_creation_tokens,
+                        "total_tokens": row.total_tokens,
+                        "total_cost_usd": row.total_cost_usd,
+                        "input_token_semantics": row.input_token_semantics,
+                        "source_table": body.source_table,
+                        "synced_at": synced_at,
+                    },
+                )
+        status_row = orm.execute(
+            text("""
+                INSERT INTO public.cc_switch_usage_sync_status (
+                    project_id, user_id, employee_id, employee_name,
+                    device_id, trigger, request_id,
+                    range_start, range_end, status,
+                    cc_switch_running, source_table,
+                    row_count, request_count, total_tokens,
+                    attempted_at, last_success_at, error_message
+                ) VALUES (
+                    :project_id, :user_id, :employee_id, :employee_name,
+                    :device_id, :trigger, :request_id,
+                    :range_start, :range_end, :status,
+                    :cc_switch_running, :source_table,
+                    :row_count, :request_count, :total_tokens,
+                    :attempted_at,
+                    CASE WHEN :status = 'ok' THEN :synced_at ELSE NULL END,
+                    :error_message
+                )
+                ON CONFLICT (user_id, device_id)
+                DO UPDATE SET
+                    project_id = excluded.project_id,
+                    employee_id = excluded.employee_id,
+                    employee_name = excluded.employee_name,
+                    trigger = excluded.trigger,
+                    request_id = excluded.request_id,
+                    range_start = excluded.range_start,
+                    range_end = excluded.range_end,
+                    status = excluded.status,
+                    cc_switch_running = excluded.cc_switch_running,
+                    source_table = excluded.source_table,
+                    row_count = excluded.row_count,
+                    request_count = excluded.request_count,
+                    total_tokens = excluded.total_tokens,
+                    attempted_at = excluded.attempted_at,
+                    last_success_at = CASE
+                        WHEN excluded.status = 'ok' THEN excluded.last_success_at
+                        ELSE public.cc_switch_usage_sync_status.last_success_at
+                    END,
+                    error_message = excluded.error_message,
+                    updated_at = now()
+                RETURNING last_success_at AS synced_at
+            """),
+            {
+                "project_id": str(body.project_id),
+                "user_id": str(user_id),
+                "employee_id": employee_id,
+                "employee_name": employee_name,
+                "device_id": body.device_id,
+                "trigger": body.trigger,
+                "request_id": str(body.request_id) if body.request_id else None,
+                "range_start": body.range_start,
+                "range_end": body.range_end,
+                "status": body.status,
+                "cc_switch_running": body.cc_switch_running,
+                "source_table": body.source_table,
+                "row_count": len(body.rows),
+                "request_count": body.request_count,
+                "total_tokens": body.total_tokens,
+                "attempted_at": body.attempted_at,
+                "synced_at": synced_at,
+                "error_message": body.error_message,
+            },
+        ).first()
+        orm.commit()
+    except Exception as error:
+        logger.exception("CC Switch usage device ingest failed")
+        try:
+            orm.rollback()
+        except Exception:
+            pass
+        raise HTTPException(status_code=503, detail="CC Switch usage sync unavailable") from error
+
+    record_audit(
+        orm,
+        user_id=user_id,
+        action="ai_usage_sync",
+        resource_type="ai_usage",
+        resource_id=employee_id,
+        metadata={
+            "result_status": body.status,
+            "trigger": body.trigger,
+            "device_id": body.device_id,
+            "range_start": body.range_start.isoformat(),
+            "range_end": body.range_end.isoformat(),
+            "row_count": len(body.rows),
+            "request_count": body.request_count,
+            "total_tokens": body.total_tokens,
+        },
+        request=request,
+    )
+    return CCSwitchUsageSyncResponse(
+        status=body.status,
+        employee_id=employee_id,
+        employee_name=employee_name,
+        device_id=body.device_id,
+        trigger=body.trigger,
+        request_id=body.request_id,
+        range_start=body.range_start,
+        range_end=body.range_end,
+        row_count=len(body.rows),
+        request_count=body.request_count,
+        total_tokens=body.total_tokens,
+        attempted_at=body.attempted_at,
+        synced_at=getattr(status_row, "synced_at", None),
+        error_message=body.error_message,
+    )
+
+
+@router.get(
+    "/ai-usage/cc-switch-sync/status",
+    response_model=CCSwitchUsageSyncStatusResponse,
+)
+def get_cc_switch_usage_sync_status(
+    request: Request,
+    request_id: uuid.UUID | None = Query(None),
+    orm: Session = Depends(get_orm_session),
+) -> CCSwitchUsageSyncStatusResponse:
+    try:
+        user_id = current_user_id(request)
+    except AuthzError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    employee = _current_employee(orm, user_id)
+    condition = "AND request_id = :request_id" if request_id else ""
+    params: dict[str, Any] = {"user_id": str(user_id)}
+    if request_id:
+        params["request_id"] = str(request_id)
+    row = orm.execute(
+        text(f"""
+            SELECT
+                device_id, trigger, request_id, range_start, range_end,
+                status, cc_switch_running, row_count, request_count,
+                total_tokens, attempted_at, last_success_at, error_message
+            FROM public.cc_switch_usage_sync_status
+            WHERE user_id = :user_id
+              {condition}
+            ORDER BY attempted_at DESC
+            LIMIT 1
+        """),
+        params,
+    ).first()
+    if row is None:
+        return CCSwitchUsageSyncStatusResponse(
+            status="never",
+            employee_id=employee.id,
+            employee_name=employee.name,
+            request_id=request_id,
+        )
+    return CCSwitchUsageSyncStatusResponse(
+        status=row.status,
+        employee_id=employee.id,
+        employee_name=employee.name,
+        device_id=row.device_id,
+        trigger=row.trigger,
+        request_id=row.request_id,
+        range_start=row.range_start,
+        range_end=row.range_end,
+        row_count=int(row.row_count or 0),
+        request_count=int(row.request_count or 0),
+        total_tokens=int(row.total_tokens or 0),
+        attempted_at=row.attempted_at,
+        synced_at=row.last_success_at,
+        cc_switch_running=row.cc_switch_running,
+        error_message=row.error_message,
     )
 
 

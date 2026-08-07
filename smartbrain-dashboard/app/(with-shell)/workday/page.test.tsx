@@ -1,4 +1,5 @@
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import WorkdayPage from './page';
@@ -6,6 +7,7 @@ import WorkdayPage from './page';
 const mocks = vi.hoisted(() => ({
   getAIUsageOptions: vi.fn(),
   getAIUsageRecords: vi.fn(),
+  getCCSwitchUsageSyncStatus: vi.fn(),
 }));
 
 vi.mock('@/lib/api', async (importOriginal) => {
@@ -14,6 +16,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     ...actual,
     getAIUsageOptions: mocks.getAIUsageOptions,
     getAIUsageRecords: mocks.getAIUsageRecords,
+    getCCSwitchUsageSyncStatus: mocks.getCCSwitchUsageSyncStatus,
   };
 });
 
@@ -101,6 +104,11 @@ describe('WorkdayPage', () => {
   beforeEach(() => {
     mocks.getAIUsageOptions.mockResolvedValue(selfOptions);
     mocks.getAIUsageRecords.mockResolvedValue(usageResult);
+    mocks.getCCSwitchUsageSyncStatus.mockResolvedValue({
+      status: 'never',
+      employee_id: employee.id,
+      employee_name: employee.name,
+    });
   });
 
   it('shows AI work records without embedding the daily work-log panel', async () => {
@@ -109,6 +117,7 @@ describe('WorkdayPage', () => {
     expect(await screen.findByText('我的 AI 工作记录')).toBeInTheDocument();
     expect(screen.queryByText('每日 AI 工作日志')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('日报日期')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '同步本机 CC Switch' })).toBeInTheDocument();
   });
 
   it('gives daily token columns a full-height plotting area', async () => {
@@ -139,6 +148,7 @@ describe('WorkdayPage', () => {
   });
 
   it('lets regular users select another employee but only shows token statistics', async () => {
+    const user = userEvent.setup();
     const otherEmployee = { id: 'test2', name: 'Test 2', email: 'test2@local.dev', project_ids: [] };
     mocks.getAIUsageOptions.mockResolvedValueOnce({
       ...selfOptions,
@@ -159,5 +169,10 @@ describe('WorkdayPage', () => {
     expect(await screen.findByText('AI Token 使用统计')).toBeInTheDocument();
     expect(screen.getByLabelText('员工')).toHaveValue('tangweixiang');
     expect(screen.getByText('12,600')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '同步本机 CC Switch' })).toBeInTheDocument();
+
+    await user.selectOptions(screen.getByLabelText('员工'), 'test2');
+
+    expect(screen.queryByRole('button', { name: '同步本机 CC Switch' })).not.toBeInTheDocument();
   });
 });

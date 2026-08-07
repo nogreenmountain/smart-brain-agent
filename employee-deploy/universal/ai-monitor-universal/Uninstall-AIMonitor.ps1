@@ -19,10 +19,13 @@ Unregister-ScheduledTask -TaskName "SmartBrain AI Conversation Sync" -Confirm:$f
 $conversationRuntime = Join-Path (Join-Path $env:LOCALAPPDATA "AIWorkdayTelemetry") "current"
 foreach ($fileName in @(
     "ConversationSync.py",
+    "CCSwitchUsageSync.py",
     "Run-ConversationSync.ps1",
+    "Run-ConversationSync.vbs",
     "device-credentials.json",
     "conversation-sync-state.json",
-    "conversation-sync-status.json"
+    "conversation-sync-status.json",
+    "cc-switch-usage-sync-status.json"
 )) {
     $path = Join-Path $conversationRuntime $fileName
     if (Test-Path -LiteralPath $path) {

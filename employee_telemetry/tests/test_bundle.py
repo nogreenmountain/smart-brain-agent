@@ -354,6 +354,7 @@ class BundleTests(unittest.TestCase):
                 "Uninstall-AIWorkdayTelemetry.ps1",
                 "Enroll-AIWorkday.py",
                 "ConversationSync.py",
+                "CCSwitchUsageSync.py",
                 "Update-CCSwitchCommonConfig.py",
                 "AIWorkdayConfig.py",
                 "README.txt",
@@ -398,6 +399,8 @@ class BundleTests(unittest.TestCase):
             self.assertIn("Enroll-AIWorkday.py", install_text)
             self.assertIn("SmartBrain AI Conversation Sync", install_text)
             self.assertIn("ConversationSync.py", install_text)
+            self.assertIn("CCSwitchUsageSync.py", install_text)
+            self.assertIn('"--trigger", "automatic"', install_text)
             self.assertIn("Initial AI conversation sync found old records", install_text)
             self.assertIn("$global:LASTEXITCODE = 0", install_text)
             self.assertIn("Run-ConversationSync.vbs", install_text)
@@ -449,6 +452,9 @@ class BundleTests(unittest.TestCase):
         self.assertIn("RedirectStandardInput = true", source)
         self.assertIn("PasswordChar", source)
         self.assertIn("--uninstall", source)
+        self.assertIn("--sync-cc-switch", source)
+        self.assertIn("smartbrain-ai-monitor", source)
+        self.assertIn("RegisterUrlProtocol", source)
         self.assertIn("UninstallString", source)
         self.assertIn("SmartBrainAIMonitorSetup.exe", source)
         self.assertIn("Regex.IsMatch(loginName", source)
@@ -456,6 +462,7 @@ class BundleTests(unittest.TestCase):
         self.assertIn("python-3.12.10-embed-amd64.zip", build_script)
         self.assertIn("Get-FileHash", build_script)
         self.assertIn("trusted_root_ca_file", build_script)
+        self.assertIn("CCSwitchUsageSync.py", build_script)
 
         payload_root = installer_root / "payload"
         self.assertTrue((payload_root / "Install-AIMonitor.ps1").is_file())

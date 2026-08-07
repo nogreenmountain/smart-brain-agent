@@ -492,6 +492,24 @@ export interface AIUsageReportParams {
   source?: AIUsageSource;
 }
 
+export interface CCSwitchUsageSyncStatus {
+  status: 'never' | 'ok' | 'not_running' | 'error';
+  employee_id: string;
+  employee_name: string;
+  device_id?: string | null;
+  trigger?: 'automatic' | 'manual' | null;
+  request_id?: string | null;
+  range_start?: string | null;
+  range_end?: string | null;
+  row_count?: number;
+  request_count?: number;
+  total_tokens?: number;
+  attempted_at?: string | null;
+  synced_at?: string | null;
+  cc_switch_running?: boolean | null;
+  error_message?: string | null;
+}
+
 export interface AIDailyWorkItem {
   title: string;
   problem: string;
@@ -1173,6 +1191,15 @@ export async function getAIUsageRecords(
   if (params.employeeId) qs.set('employee_id', params.employeeId);
   if (params.source) qs.set('source', params.source);
   return call<AIUsageQueryResult>(`/v4/ai-usage/records?${qs.toString()}`);
+}
+
+export async function getCCSwitchUsageSyncStatus(
+  requestId?: string,
+): Promise<CCSwitchUsageSyncStatus> {
+  const qs = new URLSearchParams();
+  if (requestId) qs.set('request_id', requestId);
+  const suffix = qs.size > 0 ? `?${qs.toString()}` : '';
+  return call<CCSwitchUsageSyncStatus>(`/v4/ai-usage/cc-switch-sync/status${suffix}`);
 }
 
 export async function getAIDailyWorkLogs(

@@ -15,17 +15,18 @@ using Microsoft.Win32;
 [assembly: AssemblyDescription("SmartBrain AI Monitor self-service installer")]
 [assembly: AssemblyCompany("SmartBrain")]
 [assembly: AssemblyProduct("SmartBrain AI Monitor")]
-[assembly: AssemblyVersion("2026.7.29.6")]
-[assembly: AssemblyFileVersion("2026.7.29.6")]
+[assembly: AssemblyVersion("2026.8.7.15")]
+[assembly: AssemblyFileVersion("2026.8.7.15")]
 
 namespace SmartBrain.AIMonitor.Setup
 {
     internal static class Program
     {
         internal const string ProductName = "SmartBrain AI Monitor";
-        internal const string ProductVersion = "2026.07.29.6";
+        internal const string ProductVersion = "2026.08.07.15";
         internal const string ResourceName = "SmartBrainPayload.zip";
         internal const string UninstallKey = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\SmartBrainAIMonitor";
+        internal const string UrlProtocolKey = @"Software\Classes\smartbrain-ai-monitor";
 
         internal static string InstallRoot
         {
@@ -60,6 +61,8 @@ namespace SmartBrain.AIMonitor.Setup
                     CleanupInstalledFiles(args[1], args[2]);
                     return 0;
                 }
+                if (args.Length >= 2 && args[0] == "--sync-cc-switch")
+                    return RunCcSwitchSync(args[1]);
                 Application.Run(new SetupForm(args.Length > 0 && args[0] == "--uninstall"));
                 return 0;
             }
@@ -111,6 +114,62 @@ namespace SmartBrain.AIMonitor.Setup
             }
             Thread.Sleep(500);
             if (Directory.Exists(requested)) Directory.Delete(requested, true);
+        }
+
+        private static int RunCcSwitchSync(string requestUri)
+        {
+            try
+            {
+                Uri uri = new Uri(requestUri);
+                if (!string.Equals(uri.Scheme, "smartbrain-ai-monitor", StringComparison.OrdinalIgnoreCase) ||
+                    !string.Equals(uri.Host, "sync-cc-switch", StringComparison.OrdinalIgnoreCase))
+                    return 2;
+                Match match = Regex.Match(uri.Query, @"(?:^|[?&])request_id=([^&]+)", RegexOptions.IgnoreCase);
+                Guid requestId;
+                if (!match.Success || !Guid.TryParse(Uri.UnescapeDataString(match.Groups[1].Value), out requestId))
+                    return 2;
+
+                string runtimeDir = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "AIWorkdayTelemetry",
+                    "current"
+                );
+                string script = Path.Combine(runtimeDir, "CCSwitchUsageSync.py");
+                string python = Path.Combine(PayloadRoot, "python-runtime", "python.exe");
+                if (!File.Exists(script) || !File.Exists(python)) return 3;
+
+                ProcessStartInfo start = new ProcessStartInfo
+                {
+                    FileName = python,
+                    Arguments = QuoteArgument(script) + " --runtime-dir " + QuoteArgument(runtimeDir)
+                        + " --trigger manual --request-id " + requestId.ToString("D"),
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true
+                };
+                start.EnvironmentVariables["PYTHONIOENCODING"] = "utf-8";
+                start.EnvironmentVariables["PYTHONUTF8"] = "1";
+                using (Process process = Process.Start(start))
+                {
+                    if (process == null) return 4;
+                    if (!process.WaitForExit(90000))
+                    {
+                        try { process.Kill(); } catch { }
+                        return 5;
+                    }
+                    return process.ExitCode;
+                }
+            }
+            catch
+            {
+                return 1;
+            }
+        }
+
+        private static string QuoteArgument(string value)
+        {
+            return "\"" + value.Replace("\"", "\\\"") + "\"";
         }
     }
 
@@ -327,6 +386,7 @@ namespace SmartBrain.AIMonitor.Setup
                     + " -NonInteractive";
                 RunPowerShell(arguments, loginPassword + Environment.NewLine);
                 RegisterUninstaller();
+                RegisterUrlProtocol();
             }
             finally
             {
@@ -347,6 +407,8 @@ namespace SmartBrain.AIMonitor.Setup
             }
             using (RegistryKey root = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Uninstall", true))
                 if (root != null) root.DeleteSubKeyTree("SmartBrainAIMonitor", false);
+            using (RegistryKey classes = Registry.CurrentUser.OpenSubKey(@"Software\Classes", true))
+                if (classes != null) classes.DeleteSubKeyTree("smartbrain-ai-monitor", false);
             string cleanupCopy = Path.Combine(Path.GetTempPath(), "SmartBrainAIMonitorCleanup-" + Guid.NewGuid().ToString("N") + ".exe");
             File.Copy(Application.ExecutablePath, cleanupCopy, true);
             Process.Start(new ProcessStartInfo
@@ -427,6 +489,17 @@ namespace SmartBrain.AIMonitor.Setup
                 key.SetValue("UninstallString", Quote(Program.InstalledExecutable) + " --uninstall");
                 key.SetValue("NoModify", 1, RegistryValueKind.DWord);
                 key.SetValue("NoRepair", 1, RegistryValueKind.DWord);
+            }
+        }
+
+        private static void RegisterUrlProtocol()
+        {
+            using (RegistryKey key = Registry.CurrentUser.CreateSubKey(Program.UrlProtocolKey))
+            {
+                key.SetValue(null, "URL:SmartBrain AI Monitor Protocol");
+                key.SetValue("URL Protocol", "");
+                using (RegistryKey command = key.CreateSubKey(@"shell\open\command"))
+                    command.SetValue(null, Quote(Program.InstalledExecutable) + " --sync-cc-switch \"%1\"");
             }
         }
     }

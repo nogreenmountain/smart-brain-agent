@@ -1,5 +1,5 @@
 智慧大脑 AI Monitor 一键安装器
-版本：2026-07-29-r6-exe
+版本：2026-08-07-r15-ccswitch-usage-sync
 
 适用范围
 
@@ -14,10 +14,10 @@
 网页入口
 
 智慧大脑：
-http://192.168.1.40:3002
+https://39.105.79.0
 
 安装检测页：
-http://192.168.1.40:3002/monitor/setup
+https://39.105.79.0/monitor/setup
 
 员工安装步骤
 
@@ -71,4 +71,4 @@ ChatGPT 桌面端说明
 
 先退出 CC Switch，再打开 Windows“设置 -> 应用 -> 已安装的应用”，找到“SmartBrain AI Monitor”并点击卸载。也可以再次运行已安装目录中的 SmartBrainAIMonitorSetup.exe --uninstall。
 
-当前仍是局域网 HTTP 试运行环境。外地员工需要 VPN 或公网 HTTPS 网关，正式推广前建议升级 HTTPS。
+当前使用公网 IP + 私有 CA HTTPS。安装器会把内嵌根证书安装到当前 Windows 用户的受信任根证书库。
