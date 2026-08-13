@@ -13,12 +13,16 @@ if (-not $BundleDir) {
 }
 $ccSwitchUsageSource = Join-Path (Split-Path -Parent $PSScriptRoot) "cc_switch_usage_sync.py"
 $ccSwitchUsageTarget = Join-Path $BundleDir "CCSwitchUsageSync.py"
-if (-not (Test-Path -LiteralPath $ccSwitchUsageTarget)) {
-    if (-not (Test-Path -LiteralPath $ccSwitchUsageSource -PathType Leaf)) {
-        throw "CC Switch usage sync source was not found."
-    }
-    Copy-Item -LiteralPath $ccSwitchUsageSource -Destination $ccSwitchUsageTarget -Force
+$sharedCcSwitchSource = Join-Path (Split-Path -Parent $PSScriptRoot) "shared_cc_switch_session.py"
+$sharedCcSwitchTarget = Join-Path $BundleDir "SharedCCSwitchSession.py"
+if (-not (Test-Path -LiteralPath $ccSwitchUsageSource -PathType Leaf)) {
+    throw "CC Switch usage sync source was not found."
 }
+Copy-Item -LiteralPath $ccSwitchUsageSource -Destination $ccSwitchUsageTarget -Force
+if (-not (Test-Path -LiteralPath $sharedCcSwitchSource -PathType Leaf)) {
+    throw "Shared CC Switch session source was not found."
+}
+Copy-Item -LiteralPath $sharedCcSwitchSource -Destination $sharedCcSwitchTarget -Force
 $pythonArchiveName = "python-3.12.10-embed-amd64.zip"
 $pythonUrl = "https://www.python.org/ftp/python/3.12.10/$pythonArchiveName"
 $pythonSha256 = "4ACBED6DD1C744B0376E3B1CF57CE906F9DC9E95E68824584C8099A63025A3C3"
@@ -31,6 +35,7 @@ $required = @(
     "Update-CCSwitchCommonConfig.py",
     "ConversationSync.py",
     "CCSwitchUsageSync.py",
+    "SharedCCSwitchSession.py",
     "manifest.json",
     "chatgpt-web-extension"
 )

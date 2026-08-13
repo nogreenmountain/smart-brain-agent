@@ -30,6 +30,8 @@ class MeResponse(BaseModel):
     nickname: Optional[str] = None
     display_name: str
     ai_detail_visible_to_admin: bool = False
+    is_system_admin: bool = False
+    can_manage_projects: bool = False
     avatar_url: Optional[str] = None
     memberships: List[OrgMembership] = Field(default_factory=list)
 
@@ -65,6 +67,7 @@ def _profile_row(orm: Session, *, user_id: uuid.UUID):
                 pu.nickname AS nickname,
                 COALESCE(NULLIF(BTRIM(pu.nickname), ''), au.email) AS display_name,
                 COALESCE(pu.ai_detail_visible_to_admin, false) AS ai_detail_visible_to_admin,
+                COALESCE(pu.is_system_admin, false) AS is_system_admin,
                 pu.avatar_url AS avatar_url
             FROM auth.users au
             LEFT JOIN public.users pu ON pu.id = au.id
@@ -98,6 +101,19 @@ def _me_response(orm: Session, *, user_id: uuid.UUID) -> MeResponse:
                 role=item.role,
             )
         )
+    system_admin = bool(getattr(row, "is_system_admin", False))
+    can_manage_projects = system_admin
+    if not can_manage_projects:
+        can_manage_projects = orm.execute(
+            text("""
+                SELECT true AS can_manage_projects
+                FROM public.project_members
+                WHERE user_id = :uid
+                  AND role::text IN ('owner', 'admin')
+                LIMIT 1
+            """),
+            {"uid": str(user_id)},
+        ).first() is not None
     return MeResponse(
         user_id=uuid.UUID(row.user_id),
         email=row.email,
@@ -105,6 +121,8 @@ def _me_response(orm: Session, *, user_id: uuid.UUID) -> MeResponse:
         nickname=row.nickname,
         display_name=row.display_name,
         ai_detail_visible_to_admin=bool(getattr(row, "ai_detail_visible_to_admin", False)),
+        is_system_admin=system_admin,
+        can_manage_projects=can_manage_projects,
         avatar_url=row.avatar_url,
         memberships=memberships,
     )

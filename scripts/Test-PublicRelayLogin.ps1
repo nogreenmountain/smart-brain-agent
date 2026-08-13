@@ -119,9 +119,9 @@ try {
     }
 } finally {
     if ($created -and $created.id) {
-        Invoke-RestMethod -Method Delete `
-            -Uri "http://127.0.0.1:54321/auth/v1/admin/users/$($created.id)" `
-            -Headers $adminHeaders | Out-Null
+        & (Join-Path $PSScriptRoot "Remove-TemporarySupabaseUser.ps1") `
+            -UserId $created.id `
+            -ServiceRoleKey $serviceRole | Out-Null
         Write-Output "temporary_test_user_deleted=True"
     }
     if (Test-Path -LiteralPath $tempRoot) {

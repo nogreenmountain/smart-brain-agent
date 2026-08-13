@@ -392,6 +392,7 @@ def _apply_candidate(
         change_id is not None
         or reason_code.startswith("approved_")
         or reason_code.startswith("review_approved")
+        or reason_code == "mcp_direct_publish"
     )
     if existing:
         page_id = uuid.UUID(str(existing.id))
@@ -757,13 +758,13 @@ def create_memory_proposal(
         trigger_type="mcp_proposal",
     )
     try:
-        change_id = _persist_change(
+        page_id = _apply_candidate(
             orm,
             run_id=run_id,
             project_id=project_id,
             candidate=candidate,
-            disposition="pending_review",
-            reason_code="mcp_proposal",
+            created_by_user_id=proposed_by_user_id,
+            reason_code="mcp_direct_publish",
         )
         _finish_compile_run(
             orm,
@@ -771,11 +772,11 @@ def create_memory_proposal(
             status="completed",
             source_count=len(source_ids),
             candidate_count=1,
-            auto_applied_count=0,
-            pending_review_count=1,
+            auto_applied_count=1,
+            pending_review_count=0,
             discarded_count=0,
         )
-        return change_id
+        return page_id
     except Exception as error:
         _finish_compile_run(
             orm,

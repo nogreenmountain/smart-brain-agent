@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import MemberWikiPage from './page';
+import { MemberWikiWorkspace as MemberWikiPage } from './MemberWikiWorkspace';
 
 const mocks = vi.hoisted(() => ({
   getOptions: vi.fn(),
@@ -43,7 +43,9 @@ describe('MemberWikiPage', () => {
   it('shows the daily update policy, admin member selector and reusable Markdown experience', async () => {
     render(<MemberWikiPage />);
 
-    expect(screen.getByRole('heading', { name: '成员 Wiki' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '智慧 Wiki' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: '成员 Wiki' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tab', { name: '项目 Wiki' })).toBeInTheDocument();
     expect(screen.getByText(/每天 21:00/)).toBeInTheDocument();
     await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith(expect.objectContaining({ employeeId: 'hanshangbo' })));
     expect(screen.getByLabelText('选择成员')).toBeInTheDocument();

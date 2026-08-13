@@ -24,6 +24,7 @@ from .project_materials import router as project_materials_router
 from .project_wiki import router as project_wiki_router
 from .member_wiki import router as member_wiki_router
 from .meeting_summaries import router as meeting_summaries_router
+from .team_members import router as team_members_router
 
 __all__ = ["router"]
 
@@ -94,3 +95,4 @@ router.include_router(project_materials_router)
 router.include_router(project_wiki_router)
 router.include_router(member_wiki_router)
 router.include_router(meeting_summaries_router)
+router.include_router(team_members_router)

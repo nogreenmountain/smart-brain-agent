@@ -20,12 +20,15 @@ $conversationRuntime = Join-Path (Join-Path $env:LOCALAPPDATA "AIWorkdayTelemetr
 foreach ($fileName in @(
     "ConversationSync.py",
     "CCSwitchUsageSync.py",
+    "SharedCCSwitchSession.py",
     "Run-ConversationSync.ps1",
     "Run-ConversationSync.vbs",
     "device-credentials.json",
     "conversation-sync-state.json",
     "conversation-sync-status.json",
-    "cc-switch-usage-sync-status.json"
+    "cc-switch-usage-sync-status.json",
+    "shared-cc-switch-session.json",
+    "shared-device.json"
 )) {
     $path = Join-Path $conversationRuntime $fileName
     if (Test-Path -LiteralPath $path) {

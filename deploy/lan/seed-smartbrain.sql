@@ -2,15 +2,6 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 BEGIN;
 
-INSERT INTO public.departments (id, name, sort_order)
-VALUES
-    ('research', '研发', 1),
-    ('marketing', '市场', 2),
-    ('business', '业务', 3)
-ON CONFLICT (id) DO UPDATE
-SET name = EXCLUDED.name,
-    sort_order = EXCLUDED.sort_order;
-
 INSERT INTO public.orgs (id, name, prem_status)
 VALUES (
     'd93e743e-f8bb-48cb-ae05-a74c6ae26620',
@@ -36,7 +27,7 @@ VALUES (
     'f9505558-d67d-462f-b77e-6b9550458a2c',
     '默认研发项目',
     'development',
-    'research',
+    'research-direct',
     NULL
 )
 ON CONFLICT (id) DO UPDATE

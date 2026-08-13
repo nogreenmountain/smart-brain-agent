@@ -77,7 +77,10 @@ def get_clickhouse():
         with _clickhouse_lock:
             # Check again inside the lock to prevent race conditions
             if clickhouse is None:
-                clickhouse = get_client(**ConnectionConfig.to_connection_dict())
+                clickhouse = get_client(
+                    **ConnectionConfig.to_connection_dict(),
+                    autogenerate_session_id=False,
+                )
     return clickhouse
 
 
@@ -96,7 +99,10 @@ async def get_async_clickhouse():
         async with _async_clickhouse_lock:
             # Check again inside the lock to prevent race conditions
             if async_clickhouse is None:
-                async_clickhouse = await get_async_client(**ConnectionConfig.to_connection_dict())
+                async_clickhouse = await get_async_client(
+                    **ConnectionConfig.to_connection_dict(),
+                    autogenerate_session_id=False,
+                )
     return async_clickhouse
 
 

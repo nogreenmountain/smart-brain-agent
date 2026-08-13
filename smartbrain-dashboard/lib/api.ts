@@ -25,6 +25,8 @@ export interface Me {
   nickname?: string | null;
   display_name?: string;
   ai_detail_visible_to_admin?: boolean;
+  is_system_admin?: boolean;
+  can_manage_projects?: boolean;
   memberships: OrgMembership[];
 }
 
@@ -39,14 +41,59 @@ export interface Project {
   completed_at?: string | null;
 }
 
+export type ProjectCreationRequestStatus = 'pending' | 'approved' | 'rejected';
+
+export interface ProjectCreationRequest {
+  id: string;
+  requester_id: string;
+  requester_username: string;
+  org_id: string;
+  org_name: string;
+  name: string;
+  environment: string;
+  department_id: DepartmentId;
+  department_name: string;
+  completed_at?: string | null;
+  reason: string;
+  status: ProjectCreationRequestStatus;
+  review_comment?: string | null;
+  reviewed_by_user_id?: string | null;
+  created_project_id?: string | null;
+  created_at: string;
+  reviewed_at?: string | null;
+}
+
 export type ProjectRole = 'owner' | 'admin' | 'developer' | 'business_user';
 
 export interface ProjectMember {
   user_id: string;
   email: string;
+  username: string;
   nickname?: string | null;
   display_name?: string;
   role: ProjectRole;
+}
+
+export interface ProjectMemberOption {
+  user_id: string;
+  email: string;
+  username: string;
+  nickname?: string | null;
+  display_name: string;
+}
+
+export interface TeamMember extends ProjectMemberOption {
+  is_active: boolean;
+  is_system_admin: boolean;
+  project_count: number;
+  created_at?: string | null;
+  deactivated_at?: string | null;
+}
+
+export interface CreateTeamMemberInput {
+  username: string;
+  nickname?: string | null;
+  password: string;
 }
 
 export interface AddProjectMemberInput {
@@ -189,6 +236,7 @@ export interface KnowledgeLedgerDocument {
 }
 
 export interface KnowledgeLedger {
+  category: KnowledgeLedgerCategory;
   project: KnowledgeLedgerProject;
   permissions: { can_review: boolean };
   leaders: KnowledgeLedgerUser[];
@@ -199,6 +247,7 @@ export interface KnowledgeLedger {
 
 export interface KnowledgeLedgerParams {
   projectId: string;
+  category?: KnowledgeLedgerCategory;
   uploaderUserId?: string;
   approvalStatus?: KnowledgeApprovalStatus;
   uploadedFrom?: string;
@@ -510,6 +559,42 @@ export interface CCSwitchUsageSyncStatus {
   error_message?: string | null;
 }
 
+export type SharedSessionStopMode = 'default_19' | 'custom' | 'manual_only';
+export type SharedSessionStatus =
+  | 'starting'
+  | 'active'
+  | 'finalizing'
+  | 'pending_sync'
+  | 'finalized'
+  | 'cancelled'
+  | 'expired';
+
+export interface SharedCCSwitchSession {
+  id: string;
+  project_id: string;
+  target_employee_id: string;
+  target_employee_name: string;
+  device_id?: string | null;
+  stop_mode: SharedSessionStopMode;
+  stop_reason?: string | null;
+  status: SharedSessionStatus;
+  requested_at: string;
+  started_at?: string | null;
+  scheduled_stop_at: string;
+  actual_stop_at?: string | null;
+  request_count: number;
+  total_tokens: number;
+  finalized_at?: string | null;
+  error_message?: string | null;
+  activation_token?: string | null;
+}
+
+export interface StartSharedCCSwitchSessionInput {
+  projectId: string;
+  stopMode: SharedSessionStopMode;
+  scheduledStopAt?: string;
+}
+
 export interface AIDailyWorkItem {
   title: string;
   problem: string;
@@ -623,18 +708,79 @@ export interface MemberWikiOverviewParams {
   limit?: number;
 }
 
+export interface AIUsageLeaderboardMember {
+  rank: number;
+  employee_id: string;
+  employee_name: string;
+  account: string;
+  total_tokens: number;
+  request_count: number;
+  active_days: number;
+  average_tokens_per_day: number;
+  average_tokens_per_request: number;
+  share_percent: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_creation_tokens: number;
+  error_count: number;
+  total_cost: number;
+  official_cc_switch: boolean;
+}
+
+export interface AIUsageLeaderboardDistributionPoint {
+  key: string;
+  label: string;
+  total_tokens: number;
+  request_count: number;
+  percentage: number;
+}
+
+export interface AIUsageLeaderboardResult {
+  start_date: string;
+  end_date: string;
+  period_days: number;
+  timezone: 'Asia/Shanghai';
+  total_tokens: number;
+  request_count: number;
+  active_users: number;
+  active_days: number;
+  average_tokens_per_user: number;
+  official_cc_switch_users: number;
+  members: AIUsageLeaderboardMember[];
+  daily_usage: Array<{
+    date: string;
+    total_tokens: number;
+    request_count: number;
+    active_users: number;
+  }>;
+  source_usage: AIUsageLeaderboardDistributionPoint[];
+  app_usage: AIUsageLeaderboardDistributionPoint[];
+  token_usage: AIUsageLeaderboardDistributionPoint[];
+  model_usage: AIUsageLeaderboardDistributionPoint[];
+  privacy_notice: string;
+}
+
+export interface AIUsageLeaderboardParams {
+  startDate: string;
+  endDate: string;
+}
+
 export interface MeetingSummary {
   id: string;
   project_id: string;
   project_name: string;
   title: string;
   meeting_date: string;
+  participant_user_ids: string[];
   participants: string[];
   tags: string[];
   summary_markdown: string;
   decisions: string[];
   action_items: string[];
   source_filename: string | null;
+  source_format: string | null;
+  source_size_bytes: number | null;
   created_by: string;
   created_by_name: string;
   created_at: string;
@@ -660,20 +806,46 @@ export interface CreateMeetingSummaryInput {
   projectId: string;
   title: string;
   meetingDate: string;
-  participants: string;
-  tags: string;
-  summary: string;
-  decisions: string;
-  actionItems: string;
-  file: File | null;
+  participantUserIds: string[];
+  file: File;
 }
 
-export type DepartmentId = 'research' | 'marketing' | 'business';
+export type MeetingParticipantOption = ProjectMemberOption;
+
+export type DepartmentId = string;
+
+export type KnowledgeLedgerCategory = 'project_material' | 'project_wiki_source';
 
 export interface Department {
   id: DepartmentId;
   name: string;
   sort_order: number;
+  parent_id?: DepartmentId | null;
+  parent_name?: string | null;
+  allows_projects?: boolean;
+  level?: 1 | 2;
+  is_direct?: boolean;
+}
+
+export interface ProjectDepartmentMigration {
+  id: string;
+  project_id: string;
+  source_department_id: DepartmentId;
+  target_department_id: DepartmentId;
+  status: 'queued' | 'running' | 'completed' | 'failed';
+  progress: number;
+  current_step: string;
+  raw_material_count: number;
+  wiki_page_count: number;
+  meeting_record_count: number;
+  documents_updated?: number;
+  intakes_updated?: number;
+  drafts_updated?: number;
+  verified: boolean;
+  error_message?: string | null;
+  created_at?: string;
+  started_at?: string | null;
+  completed_at?: string | null;
 }
 
 export interface ProjectRepository {
@@ -955,9 +1127,40 @@ export async function createProject(input: {
   });
 }
 
+export async function listProjectCreationRequests(): Promise<ProjectCreationRequest[]> {
+  return call<ProjectCreationRequest[]>('/v4/project-requests');
+}
+
+export async function submitProjectCreationRequest(input: {
+  org_id: string;
+  name: string;
+  environment: 'development' | 'staging' | 'production';
+  department_id: DepartmentId;
+  completed_at?: string | null;
+  reason: string;
+}): Promise<ProjectCreationRequest> {
+  return call<ProjectCreationRequest>('/v4/project-requests', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function reviewProjectCreationRequest(
+  requestId: string,
+  decision: 'approve' | 'reject',
+  comment: string,
+): Promise<ProjectCreationRequest> {
+  return call<ProjectCreationRequest>(`/v4/project-requests/${encodeURIComponent(requestId)}/review`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ decision, comment }),
+  });
+}
+
 export async function updateProject(
   projectId: string,
-  input: { name?: string; completed_at?: string | null },
+  input: { name?: string; completed_at?: string | null; department_id?: DepartmentId },
 ): Promise<Project> {
   return call<Project>(`/v4/projects/${encodeURIComponent(projectId)}`, {
     method: 'PATCH',
@@ -966,14 +1169,44 @@ export async function updateProject(
   });
 }
 
-export async function deleteProject(projectId: string): Promise<void> {
-  return call<void>(`/v4/projects/${encodeURIComponent(projectId)}`, {
+export async function deleteProject(projectId: string, confirmName: string): Promise<void> {
+  const qs = new URLSearchParams({ confirm_name: confirmName });
+  return call<void>(`/v4/projects/${encodeURIComponent(projectId)}?${qs.toString()}`, {
     method: 'DELETE',
   });
 }
 
+export async function startProjectDepartmentMigration(
+  projectId: string,
+  input: {
+    target_department_id: DepartmentId;
+    expected_source_department_id: DepartmentId;
+    migrate_knowledge_base: true;
+    idempotency_key?: string;
+  },
+): Promise<ProjectDepartmentMigration> {
+  return call<ProjectDepartmentMigration>(`/v4/projects/${encodeURIComponent(projectId)}/department-migrations`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function getProjectDepartmentMigration(
+  projectId: string,
+  migrationId: string,
+): Promise<ProjectDepartmentMigration> {
+  return call<ProjectDepartmentMigration>(
+    `/v4/projects/${encodeURIComponent(projectId)}/department-migrations/${encodeURIComponent(migrationId)}`,
+  );
+}
+
 export async function listProjectMembers(projectId: string): Promise<ProjectMember[]> {
   return call<ProjectMember[]>(`/v4/projects/${projectId}/members`);
+}
+
+export async function listProjectMemberOptions(projectId: string): Promise<ProjectMemberOption[]> {
+  return call<ProjectMemberOption[]>(`/v4/projects/${encodeURIComponent(projectId)}/member-options`);
 }
 
 export async function addProjectMember(
@@ -991,21 +1224,6 @@ export async function removeProjectMember(projectId: string, userId: string): Pr
   return call<void>(`/v4/projects/${projectId}/members/${userId}`, {
     method: 'DELETE',
   });
-}
-
-export async function resetProjectMemberPassword(
-  projectId: string,
-  userId: string,
-  password: string,
-): Promise<{ user_id: string; email: string; status: 'updated' }> {
-  return call<{ user_id: string; email: string; status: 'updated' }>(
-    `/v4/projects/${projectId}/members/${userId}/password`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password }),
-    },
-  );
 }
 
 // 知识库
@@ -1060,6 +1278,55 @@ export async function uploadProjectMaterialsBatch(
     method: 'POST',
     body: fd,
   });
+}
+
+export async function listTeamMembers(): Promise<TeamMember[]> {
+  return call<TeamMember[]>('/v4/team-members');
+}
+
+export async function createTeamMember(input: CreateTeamMemberInput): Promise<TeamMember> {
+  return call<TeamMember>('/v4/team-members', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function deactivateTeamMember(userId: string): Promise<void> {
+  return call<void>(`/v4/team-members/${encodeURIComponent(userId)}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function reactivateTeamMember(userId: string): Promise<TeamMember> {
+  return call<TeamMember>(`/v4/team-members/${encodeURIComponent(userId)}/reactivate`, {
+    method: 'POST',
+  });
+}
+
+export async function renameTeamMemberUsername(
+  userId: string,
+  username: string,
+): Promise<TeamMember> {
+  return call<TeamMember>(`/v4/team-members/${encodeURIComponent(userId)}/username`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username }),
+  });
+}
+
+export async function resetTeamMemberPassword(
+  userId: string,
+  password: string,
+): Promise<{ user_id: string; email: string; status: 'updated' }> {
+  return call<{ user_id: string; email: string; status: 'updated' }>(
+    `/v4/team-members/${encodeURIComponent(userId)}/password`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password }),
+    },
+  );
 }
 
 export interface ProjectWikiMcpToken {
@@ -1117,6 +1384,7 @@ export function originalMaterialDownloadUrl(intakeId: string, fileId: string): s
 export async function listKnowledgeLedger(params: KnowledgeLedgerParams): Promise<KnowledgeLedger> {
   const qs = new URLSearchParams();
   qs.set('project_id', params.projectId);
+  qs.set('category', params.category || 'project_material');
   if (params.uploaderUserId) qs.set('uploader_user_id', params.uploaderUserId);
   if (params.approvalStatus) qs.set('approval_status', params.approvalStatus);
   if (params.uploadedFrom) qs.set('uploaded_from', params.uploadedFrom);
@@ -1179,6 +1447,16 @@ export async function getAIUsageOptions(): Promise<AIUsageOptions> {
   return call<AIUsageOptions>('/v4/ai-usage/options');
 }
 
+export async function getAIUsageLeaderboard(
+  params: AIUsageLeaderboardParams,
+): Promise<AIUsageLeaderboardResult> {
+  const qs = new URLSearchParams({
+    start_date: params.startDate,
+    end_date: params.endDate,
+  });
+  return call<AIUsageLeaderboardResult>(`/v4/ai-usage/leaderboard?${qs.toString()}`);
+}
+
 export async function getAIUsageRecords(
   params: AIUsageQueryParams,
 ): Promise<AIUsageQueryResult> {
@@ -1200,6 +1478,63 @@ export async function getCCSwitchUsageSyncStatus(
   if (requestId) qs.set('request_id', requestId);
   const suffix = qs.size > 0 ? `?${qs.toString()}` : '';
   return call<CCSwitchUsageSyncStatus>(`/v4/ai-usage/cc-switch-sync/status${suffix}`);
+}
+
+export async function getCurrentSharedCCSwitchSession(): Promise<SharedCCSwitchSession | null> {
+  return call<SharedCCSwitchSession | null>('/v4/ai-usage/shared-sessions/current');
+}
+
+export async function getSharedCCSwitchSession(
+  sessionId: string,
+): Promise<SharedCCSwitchSession> {
+  return call<SharedCCSwitchSession>(
+    `/v4/ai-usage/shared-sessions/${encodeURIComponent(sessionId)}`,
+  );
+}
+
+export async function startSharedCCSwitchSession(
+  input: StartSharedCCSwitchSessionInput,
+): Promise<SharedCCSwitchSession> {
+  return call<SharedCCSwitchSession>('/v4/ai-usage/shared-sessions/start', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      project_id: input.projectId,
+      stop_mode: input.stopMode,
+      scheduled_stop_at: input.scheduledStopAt,
+    }),
+  });
+}
+
+export async function updateSharedCCSwitchSessionSchedule(
+  sessionId: string,
+  stopMode: SharedSessionStopMode,
+  scheduledStopAt?: string,
+): Promise<SharedCCSwitchSession> {
+  return call<SharedCCSwitchSession>(
+    `/v4/ai-usage/shared-sessions/${encodeURIComponent(sessionId)}/schedule`,
+    {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        stop_mode: stopMode,
+        scheduled_stop_at: scheduledStopAt,
+      }),
+    },
+  );
+}
+
+export async function stopSharedCCSwitchSession(
+  sessionId: string,
+): Promise<SharedCCSwitchSession> {
+  return call<SharedCCSwitchSession>(
+    `/v4/ai-usage/shared-sessions/${encodeURIComponent(sessionId)}/stop`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason: 'manual' }),
+    },
+  );
 }
 
 export async function getAIDailyWorkLogs(
@@ -1242,6 +1577,15 @@ export async function listMeetingSummaries(
   return call<MeetingSummaryList>(`/v4/meeting-summaries?${qs.toString()}`);
 }
 
+export async function listMeetingParticipantOptions(
+  query = '',
+  limit = 200,
+): Promise<MeetingParticipantOption[]> {
+  const qs = new URLSearchParams({ limit: String(limit) });
+  if (query.trim()) qs.set('query', query.trim());
+  return call<MeetingParticipantOption[]>(`/v4/meeting-participant-options?${qs.toString()}`);
+}
+
 export async function createMeetingSummary(
   input: CreateMeetingSummaryInput,
 ): Promise<MeetingSummary> {
@@ -1249,13 +1593,13 @@ export async function createMeetingSummary(
   body.set('project_id', input.projectId);
   body.set('title', input.title);
   body.set('meeting_date', input.meetingDate);
-  body.set('participants', input.participants);
-  body.set('tags', input.tags);
-  body.set('summary', input.summary);
-  body.set('decisions', input.decisions);
-  body.set('action_items', input.actionItems);
-  if (input.file) body.set('file', input.file);
+  body.set('participant_user_ids', JSON.stringify(input.participantUserIds));
+  body.set('file', input.file);
   return call<MeetingSummary>('/v4/meeting-summaries', { method: 'POST', body });
+}
+
+export function meetingSummaryFileUrl(meetingSummaryId: string): string {
+  return `${getApiBase()}/v4/meeting-summaries/${encodeURIComponent(meetingSummaryId)}/file`;
 }
 
 export async function createAIUsageReport(
@@ -1274,8 +1618,39 @@ export async function createAIUsageReport(
 }
 
 // 项目长期记忆
-export async function listProjectMemoryDepartments(): Promise<Department[]> {
-  return call<Department[]>('/v4/project-memory/departments');
+export async function listProjectMemoryDepartments(includeGroups = false): Promise<Department[]> {
+  return call<Department[]>(
+    `/v4/project-memory/departments${includeGroups ? '?include_groups=true' : ''}`,
+  );
+}
+
+export async function createProjectMemoryDepartment(input: {
+  id?: DepartmentId;
+  name: string;
+  parent_id?: DepartmentId | null;
+}): Promise<Department> {
+  return call<Department>('/v4/project-memory/departments', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateProjectMemoryDepartment(
+  departmentId: DepartmentId,
+  input: { name: string; sort_order: number; parent_id?: DepartmentId | null },
+): Promise<Department> {
+  return call<Department>(`/v4/project-memory/departments/${encodeURIComponent(departmentId)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function deleteProjectMemoryDepartment(departmentId: DepartmentId): Promise<void> {
+  return call<void>(`/v4/project-memory/departments/${encodeURIComponent(departmentId)}`, {
+    method: 'DELETE',
+  });
 }
 
 export async function getProjectRepository(

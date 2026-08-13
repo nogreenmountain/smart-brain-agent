@@ -183,6 +183,7 @@ def write_runtime_enrollment(
                 {
                     "api_endpoint": api_endpoint,
                     "project_id": payload["project_id"],
+                    "device_id": device_id,
                     "employee_id": payload["employee_id"],
                     "employee_name": payload["employee_name"],
                     "expires_at": payload["expires_at"],

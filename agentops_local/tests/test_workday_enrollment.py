@@ -179,6 +179,23 @@ class WorkdayEnrollmentTests(unittest.TestCase):
         self.assertEqual(employee_name, "name+team")
         self.assertNotIn("@", employee_id)
 
+    def test_default_collector_endpoint_uses_current_lan_server(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "JWT_SECRET_KEY": "test-secret-with-at-least-32-characters",
+                "WORKDAY_ENROLLMENT_TOKEN_DAYS": "30",
+            },
+            clear=True,
+        ):
+            collector_endpoint, token_days = route._enrollment_settings()
+
+        self.assertEqual(
+            collector_endpoint,
+            "http://192.168.10.29:4318",
+        )
+        self.assertEqual(token_days, 30)
+
 
 if __name__ == "__main__":
     unittest.main()

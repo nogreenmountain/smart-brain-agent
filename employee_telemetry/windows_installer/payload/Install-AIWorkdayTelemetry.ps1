@@ -113,15 +113,19 @@ $syncSource = Join-Path $PSScriptRoot "ConversationSync.py"
 $syncScript = Join-Path $runtimeDir "ConversationSync.py"
 $usageSyncSource = Join-Path $PSScriptRoot "CCSwitchUsageSync.py"
 $usageSyncScript = Join-Path $runtimeDir "CCSwitchUsageSync.py"
+$sharedSyncSource = Join-Path $PSScriptRoot "SharedCCSwitchSession.py"
+$sharedSyncScript = Join-Path $runtimeDir "SharedCCSwitchSession.py"
 $syncRunner = Join-Path $runtimeDir "Run-ConversationSync.ps1"
 $syncRunnerVbs = Join-Path $runtimeDir "Run-ConversationSync.vbs"
 Copy-Item -LiteralPath $syncSource -Destination $syncScript -Force
 Copy-Item -LiteralPath $usageSyncSource -Destination $usageSyncScript -Force
+Copy-Item -LiteralPath $sharedSyncSource -Destination $sharedSyncScript -Force
 $pythonPrefix = if ($pythonCommand.Count -gt 1) { "$($pythonCommand[1]) " } else { "" }
 $runnerContent = @"
 `$ErrorActionPreference = "SilentlyContinue"
 & "$($pythonCommand[0])" $pythonPrefix`"$syncScript`" --runtime-dir `"$runtimeDir`" | Out-Null
 & "$($pythonCommand[0])" $pythonPrefix`"$usageSyncScript`" --runtime-dir `"$runtimeDir`" --trigger automatic | Out-Null
+& "$($pythonCommand[0])" $pythonPrefix`"$sharedSyncScript`" --runtime-dir `"$runtimeDir`" poll | Out-Null
 "@
 Set-Content -LiteralPath $syncRunner -Encoding UTF8 -Value $runnerContent
 $vbsRunnerContent = @(

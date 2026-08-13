@@ -61,6 +61,7 @@ describe('KnowledgePage', () => {
       },
     ]);
     mocks.listKnowledgeLedger.mockResolvedValue({
+      category: 'project_material',
       project: {
         id: 'project-1',
         name: '智慧大脑',
@@ -132,8 +133,8 @@ describe('KnowledgePage', () => {
     render(<KnowledgePage />);
 
     expect(await screen.findByRole('heading', { name: '知识库' })).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: '研发' })).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: '智慧大脑 (development)' })).toBeInTheDocument();
+    expect(await screen.findByRole('option', { name: '研发' })).toBeInTheDocument();
+    expect(await screen.findByRole('option', { name: '智慧大脑 (development)' })).toBeInTheDocument();
     expect(screen.queryByRole('option', { name: '市场素材库 (development)' })).not.toBeInTheDocument();
 
     await waitFor(() => {
@@ -156,16 +157,65 @@ describe('KnowledgePage', () => {
     await waitFor(() => {
       expect(mocks.listKnowledgeLedger).toHaveBeenLastCalledWith({
         projectId: 'project-1',
+        category: 'project_material',
         uploaderUserId: 'user-2',
         approvalStatus: 'pending_review',
       });
     });
   });
 
+  it('selects knowledge projects through the complete first-level hierarchy', async () => {
+    const user = userEvent.setup();
+    mocks.listProjectMemoryDepartments.mockResolvedValue([
+      { id: 'research', name: '研发支撑', sort_order: 1, parent_id: null, allows_projects: true, level: 1 },
+      { id: 'industry', name: '产业侧', sort_order: 2, parent_id: null, allows_projects: false, level: 1 },
+      { id: 'marketing', name: '市场', sort_order: 1, parent_id: 'industry', allows_projects: true, level: 2 },
+    ]);
+
+    render(<KnowledgePage />);
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('第一分级')).toHaveValue('research');
+    });
+    expect(mocks.listProjectMemoryDepartments).toHaveBeenCalledWith(true);
+
+    await user.selectOptions(screen.getByLabelText('第一分级'), 'industry');
+
+    expect(await screen.findByLabelText('第二分级')).toHaveValue('marketing');
+    await waitFor(() => {
+      expect(mocks.listKnowledgeLedger).toHaveBeenLastCalledWith(
+        expect.objectContaining({ projectId: 'project-2' }),
+      );
+    });
+  });
+
+  it('keeps project materials and project wiki source documents in separate categories', async () => {
+    const user = userEvent.setup();
+    render(<KnowledgePage />);
+
+    await screen.findByRole('heading');
+    await waitFor(() => {
+      expect(mocks.listKnowledgeLedger).toHaveBeenCalledWith(
+        expect.objectContaining({ category: 'project_material' }),
+      );
+    });
+
+    await user.selectOptions(screen.getByLabelText('资料分类'), 'project_wiki_source');
+
+    await waitFor(() => {
+      expect(mocks.listKnowledgeLedger).toHaveBeenLastCalledWith(
+        expect.objectContaining({ category: 'project_wiki_source' }),
+      );
+    });
+    expect(screen.getByRole('option', { name: '项目原始资料' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: '项目 Wiki 原始资料' })).toBeInTheDocument();
+  });
+
   it('lets reviewers delete saved documents after confirmation and refreshes the ledger', async () => {
     const user = userEvent.setup();
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
     mocks.listKnowledgeLedger.mockResolvedValueOnce({
+      category: 'project_material',
       project: {
         id: 'project-1',
         name: '鏅烘収澶ц剳',

@@ -11,10 +11,16 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from agentops.ai_usage.access import is_employee_account_email
 from agentops.auth.middleware import AuthenticatedRoute
 from agentops.common.orm import get_orm_session
 from agentops.rag.audit import record_audit
-from agentops.rag.authz import AuthzError, current_user_id, require_member
+from agentops.rag.authz import (
+    AuthzError,
+    current_user_id,
+    is_system_admin,
+    require_member,
+)
 from agentops.workday.identity import derive_employee_identity
 
 
@@ -116,6 +122,73 @@ def _resolve_employee(orm: Session, user_id: uuid.UUID) -> tuple[str, str]:
         email=profile.email,
         full_name=profile.full_name,
     )
+
+
+def _can_query_other_employee_statuses(orm: Session, *, user_id: uuid.UUID) -> bool:
+    if is_system_admin(orm, user_id=user_id):
+        return True
+    return orm.execute(
+        text("""
+            SELECT 1
+            FROM public.user_orgs uo
+            JOIN public.projects p ON p.org_id = uo.org_id
+            JOIN public.project_members pm
+              ON pm.project_id = p.id
+             AND pm.user_id = uo.user_id
+            WHERE uo.user_id = :uid
+              AND uo.role::text IN ('owner', 'admin')
+              AND pm.role::text IN ('owner', 'admin')
+            LIMIT 1
+        """),
+        {"uid": str(user_id)},
+    ).first() is not None
+
+
+def _employee_directory_entry(
+    orm: Session,
+    *,
+    employee_id: str,
+) -> tuple[str, str] | None:
+    rows = orm.execute(
+        text("""
+            SELECT au.id AS user_id, au.email, pu.full_name, pu.nickname
+            FROM auth.users au
+            LEFT JOIN public.users pu ON pu.id = au.id
+            WHERE au.email IS NOT NULL
+        """),
+    ).all()
+    for row in rows:
+        if not is_employee_account_email(row.email):
+            continue
+        candidate_id, candidate_name = derive_employee_identity(
+            user_id=row.user_id,
+            email=row.email,
+            full_name=getattr(row, "nickname", None) or row.full_name,
+        )
+        if candidate_id == employee_id:
+            return candidate_id, candidate_name
+    return None
+
+
+def _resolve_status_employee(
+    orm: Session,
+    *,
+    user_id: uuid.UUID,
+    requested_employee_id: str | None,
+) -> tuple[str, str]:
+    own_employee_id, own_employee_name = _resolve_employee(orm, user_id)
+    resolved_employee_id = (requested_employee_id or own_employee_id).strip()
+    if resolved_employee_id == own_employee_id:
+        return own_employee_id, own_employee_name
+    if not _can_query_other_employee_statuses(orm, user_id=user_id):
+        raise HTTPException(
+            status_code=403,
+            detail="AI Monitor status is visible only to the employee and administrators",
+        )
+    target = _employee_directory_entry(orm, employee_id=resolved_employee_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="employee account not found")
+    return target
 
 
 def _component_map(
@@ -331,10 +404,11 @@ def get_ai_monitor_overall_status(
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error
 
     project_ids = _visible_project_ids(orm, user_id=user_id)
-    resolved_employee_id = employee_id
-    employee_name = None
-    if not resolved_employee_id:
-        resolved_employee_id, employee_name = _resolve_employee(orm, user_id)
+    resolved_employee_id, employee_name = _resolve_status_employee(
+        orm,
+        user_id=user_id,
+        requested_employee_id=employee_id,
+    )
 
     rows = orm.execute(
         text("""
@@ -364,9 +438,6 @@ def get_ai_monitor_overall_status(
         {"employee_id": resolved_employee_id},
     ).all()
     devices = [_row_to_device(row) for row in rows]
-    if employee_name is None and devices:
-        employee_name = devices[0].employee_name
-
     _record_monitor_audit(
         orm,
         request,
@@ -414,10 +485,11 @@ def get_ai_monitor_status(
         )
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error
 
-    resolved_employee_id = employee_id
-    employee_name = None
-    if not resolved_employee_id:
-        resolved_employee_id, employee_name = _resolve_employee(orm, user_id)
+    resolved_employee_id, employee_name = _resolve_status_employee(
+        orm,
+        user_id=user_id,
+        requested_employee_id=employee_id,
+    )
 
     rows = orm.execute(
         text("""
@@ -443,8 +515,6 @@ def get_ai_monitor_status(
         },
     ).all()
     devices = [_row_to_device(row) for row in rows]
-    if employee_name is None and devices:
-        employee_name = devices[0].employee_name
     _record_monitor_audit(
         orm,
         request,

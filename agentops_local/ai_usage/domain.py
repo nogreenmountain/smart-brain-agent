@@ -5,6 +5,58 @@ from datetime import date, datetime, timedelta, timezone
 
 
 SHANGHAI_TIMEZONE = timezone(timedelta(hours=8))
+CACHE_INCLUSIVE_APP_TYPES = frozenset({"codex", "gemini"})
+INPUT_TOKEN_SEMANTICS_LEGACY = 0
+INPUT_TOKEN_SEMANTICS_TOTAL = 1
+INPUT_TOKEN_SEMANTICS_FRESH = 2
+
+
+def cc_switch_fresh_input_tokens(
+    *,
+    app_type: str,
+    input_tokens: int,
+    cache_read_tokens: int,
+    cache_creation_tokens: int,
+    input_token_semantics: int,
+) -> int:
+    if input_token_semantics == INPUT_TOKEN_SEMANTICS_FRESH:
+        return input_tokens
+    if app_type not in CACHE_INCLUSIVE_APP_TYPES:
+        return input_tokens
+    if input_token_semantics == INPUT_TOKEN_SEMANTICS_TOTAL:
+        cached_tokens = cache_read_tokens + cache_creation_tokens
+        if input_tokens >= cached_tokens:
+            return input_tokens - cached_tokens
+        return input_tokens
+    if (
+        input_token_semantics == INPUT_TOKEN_SEMANTICS_LEGACY
+        and input_tokens >= cache_read_tokens
+    ):
+        return input_tokens - cache_read_tokens
+    return input_tokens
+
+
+def cc_switch_total_tokens(
+    *,
+    app_type: str,
+    input_tokens: int,
+    output_tokens: int,
+    cache_read_tokens: int,
+    cache_creation_tokens: int,
+    input_token_semantics: int,
+) -> int:
+    return (
+        cc_switch_fresh_input_tokens(
+            app_type=app_type,
+            input_tokens=input_tokens,
+            cache_read_tokens=cache_read_tokens,
+            cache_creation_tokens=cache_creation_tokens,
+            input_token_semantics=input_token_semantics,
+        )
+        + output_tokens
+        + cache_read_tokens
+        + cache_creation_tokens
+    )
 
 
 @dataclass(frozen=True)

@@ -81,6 +81,21 @@ def _project_name(orm: Session, project_id: uuid.UUID) -> str:
     return str(row.name)
 
 
+def _project_department_id(orm: Session, project_id: uuid.UUID) -> str:
+    row = orm.execute(
+        text("""
+            SELECT department_id
+            FROM public.projects
+            WHERE id = :project_id
+            FOR SHARE
+        """),
+        {"project_id": str(project_id)},
+    ).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="project not found")
+    return str(row.department_id)
+
+
 def _extract_source(filename: str, fmt: str, raw: bytes) -> MaterialSource:
     suffix = ".htm" if fmt == "html" and filename.lower().endswith(".htm") else f".{fmt}"
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as handle:
@@ -119,6 +134,12 @@ def preview_project_materials(
         require_member(orm, user_id=user_id, project_id=project_id)
     except AuthzError as error:
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    current_department_id = _project_department_id(orm, project_id)
+    if department_id != current_department_id:
+        raise HTTPException(
+            status_code=409,
+            detail="project category changed; refresh the project before uploading materials",
+        )
     if not files:
         raise HTTPException(status_code=400, detail="at least one project material file is required")
 

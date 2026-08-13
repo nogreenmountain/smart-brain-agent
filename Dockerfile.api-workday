@@ -17,6 +17,7 @@ COPY agentops_local/project_memory/ /app/agentops/project_memory/
 COPY agentops_local/project_wiki/ /app/agentops/project_wiki/
 COPY agentops_local/member_wiki/ /app/agentops/member_wiki/
 COPY agentops_local/meeting_summaries/ /app/agentops/meeting_summaries/
+COPY api/agentops/api/db/clickhouse_client.py /app/agentops/api/db/clickhouse_client.py
 COPY employee_telemetry/ /app/employee_telemetry/
 
 EXPOSE 8000

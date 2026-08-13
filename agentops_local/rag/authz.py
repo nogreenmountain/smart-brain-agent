@@ -54,10 +54,25 @@ class ProjectRole:
     role: Optional[Role]  # None if not a member
 
 
+def is_system_admin(orm: Session, *, user_id: uuid.UUID) -> bool:
+    """Return whether the user has SmartBrain-wide administrator access."""
+    row = orm.execute(
+        text("""
+            SELECT COALESCE(is_system_admin, false) AS is_system_admin
+            FROM public.users
+            WHERE id = :uid
+        """),
+        {"uid": str(user_id)},
+    ).first()
+    return bool(row and row.is_system_admin)
+
+
 def user_project_role(
     orm: Session, *, user_id: uuid.UUID, project_id: uuid.UUID
 ) -> ProjectRole:
     """Return the user's effective role on a project (None if not a member)."""
+    if is_system_admin(orm, user_id=user_id):
+        return ProjectRole(project_id=project_id, user_id=user_id, role="owner")
     row = orm.execute(
         text("""
             SELECT role::text AS role

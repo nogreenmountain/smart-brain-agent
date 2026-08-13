@@ -26,7 +26,8 @@ class MeetingSummaryDomainTests(unittest.TestCase):
 
         self.assertIn('title: "智慧大脑周会"', markdown)
         self.assertIn("meeting_date: 2026-08-05", markdown)
-        self.assertIn("## 会议摘要", markdown)
+        self.assertIn("## 会议内容", markdown)
+        self.assertNotIn("## 会议摘要", markdown)
         self.assertIn("## 关键决策", markdown)
         self.assertIn("- 会议摘要必须归属项目", markdown)
         self.assertIn("## 行动项", markdown)

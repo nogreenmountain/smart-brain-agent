@@ -33,7 +33,7 @@ services:
       JWT_SECRET: "${JWT_SECRET_KEY}"
 
   api:
-    image: "agentops-api-local:latest"
+    image: "agentops-api-local:smartbrain-portable-2026-08-13"
     restart: unless-stopped
     depends_on:
       - clickhouse
@@ -43,9 +43,9 @@ services:
       - default
       - supabase
     environment:
-      PROTOCOL: "http"
-      API_DOMAIN: "192.168.1.40:8000"
-      APP_DOMAIN: "192.168.1.40:3001"
+      PROTOCOL: "${PROTOCOL}"
+      API_DOMAIN: "${API_DOMAIN}"
+      APP_DOMAIN: "${APP_DOMAIN}"
       SUPABASE_URL: "http://supabase_kong_database:8000"
       SUPABASE_KEY: "${SUPABASE_SERVICE_ROLE_KEY}"
       SUPABASE_HOST: "supabase_db_database"
@@ -56,7 +56,7 @@ services:
       SUPABASE_SSLMODE: "disable"
       SUPABASE_MAX_POOL_SIZE: "10"
       JWT_SECRET_KEY: "${JWT_SECRET_KEY}"
-      WORKDAY_COLLECTOR_ENDPOINT: "http://192.168.1.40:4318"
+      WORKDAY_COLLECTOR_ENDPOINT: "${WORKDAY_COLLECTOR_ENDPOINT}"
       WORKDAY_ENROLLMENT_TOKEN_DAYS: "30"
       SUPABASE_JWT_SECRET: "${SUPABASE_JWT_SECRET}"
       AUTH_COOKIE_SECRET: "${AUTH_COOKIE_SECRET}"
@@ -83,12 +83,12 @@ services:
       NEXT_PUBLIC_SUPABASE_URL: ""
       NEXT_PUBLIC_SUPABASE_ANON_KEY: ""
       SUPABASE_PROJECT_ID: "database"
-      NEXT_PUBLIC_API_URL: "http://192.168.1.40:8000"
-      NEXT_PUBLIC_APP_URL: "http://192.168.1.40:3001"
-      NEXT_PUBLIC_SITE_URL: "http://192.168.1.40:3001"
-      NEXT_PUBLIC_SIGNIN_METHODS: "email"
-      NEXT_PUBLIC_ENVIRONMENT_TYPE: "development"
-      NEXT_PUBLIC_PLAYGROUND: "false"
+      NEXT_PUBLIC_API_URL: "${NEXT_PUBLIC_API_URL}"
+      NEXT_PUBLIC_APP_URL: "${NEXT_PUBLIC_APP_URL}"
+      NEXT_PUBLIC_SITE_URL: "${NEXT_PUBLIC_SITE_URL}"
+      NEXT_PUBLIC_SIGNIN_METHODS: "${NEXT_PUBLIC_SIGNIN_METHODS}"
+      NEXT_PUBLIC_ENVIRONMENT_TYPE: "${NEXT_PUBLIC_ENVIRONMENT_TYPE}"
+      NEXT_PUBLIC_PLAYGROUND: "${NEXT_PUBLIC_PLAYGROUND}"
 
 volumes:
   agentops_clickhouse_data:

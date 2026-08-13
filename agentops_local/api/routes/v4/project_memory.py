@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import shutil
@@ -27,6 +28,7 @@ from agentops.rag.audit import record_audit
 from agentops.rag.authz import (
     AuthzError,
     current_user_id,
+    is_system_admin,
     require_admin,
     require_member,
     require_writer,
@@ -38,21 +40,31 @@ from agentops.project_wiki.service import publish_approved_candidates
 router = APIRouter(route_class=AuthenticatedRoute)
 logger = logging.getLogger(__name__)
 
-DepartmentId = Literal["research", "marketing", "business"]
+DepartmentId = str
 DraftStatus = Literal["pending_review", "approved", "rejected"]
-
-DEPARTMENTS: tuple[dict[str, object], ...] = (
-    {"id": "research", "name": "研发", "sort_order": 1},
-    {"id": "marketing", "name": "市场", "sort_order": 2},
-    {"id": "business", "name": "业务", "sort_order": 3},
-)
-DEPARTMENT_NAME = {str(row["id"]): str(row["name"]) for row in DEPARTMENTS}
 
 
 class DepartmentSchema(BaseModel):
-    id: DepartmentId
+    id: str
     name: str
     sort_order: int
+    parent_id: str | None = None
+    parent_name: str | None = None
+    allows_projects: bool = True
+    level: int = 1
+    is_direct: bool = False
+
+
+class CreateDepartmentRequest(BaseModel):
+    id: str | None = Field(None, pattern="^[a-z][a-z0-9_-]{1,39}$")
+    name: str = Field(..., min_length=1, max_length=80)
+    parent_id: str | None = Field(None, pattern="^[a-z][a-z0-9_-]{1,39}$")
+
+
+class UpdateDepartmentRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=80)
+    sort_order: int = Field(..., ge=0, le=100000)
+    parent_id: str | None = Field(None, pattern="^[a-z][a-z0-9_-]{1,39}$")
 
 
 class ProjectRepositoryRequest(BaseModel):
@@ -96,10 +108,14 @@ class ReviewDraftResponse(BaseModel):
     wiki_page_count: int = 0
 
 
-def _department_name(department_id: str) -> str:
-    if department_id not in DEPARTMENT_NAME:
+def _department_name(orm: Session, department_id: str) -> str:
+    row = orm.execute(
+        text("SELECT name FROM public.departments WHERE id = :department_id"),
+        {"department_id": department_id},
+    ).first()
+    if row is None:
         raise HTTPException(status_code=400, detail="unsupported department")
-    return DEPARTMENT_NAME[department_id]
+    return str(row.name)
 
 
 def _project_name(orm: Session, project_id: uuid.UUID) -> str:
@@ -139,12 +155,12 @@ def _write_material_to_temp(filename: str, fmt: str, raw: bytes) -> Path:
         return Path(tmp.name)
 
 
-def _row_to_draft(row) -> ProjectMemoryDraftSchema:
+def _row_to_draft(orm: Session, row) -> ProjectMemoryDraftSchema:
     return ProjectMemoryDraftSchema(
         id=uuid.UUID(str(row.id)),
         project_id=uuid.UUID(str(row.project_id)),
         department_id=row.department_id,
-        department_name=_department_name(row.department_id),
+        department_name=_department_name(orm, row.department_id),
         title=row.title,
         status=row.status,
         markdown_content=row.markdown_content,
@@ -158,9 +174,325 @@ def _row_to_draft(row) -> ProjectMemoryDraftSchema:
     )
 
 
+def _department_from_row(row) -> DepartmentSchema:
+    return DepartmentSchema(
+        id=str(row.id),
+        name=str(row.name),
+        sort_order=int(row.sort_order or 0),
+        parent_id=getattr(row, "parent_id", None),
+        parent_name=getattr(row, "parent_name", None),
+        allows_projects=bool(getattr(row, "allows_projects", True)),
+        level=int(getattr(row, "level", 1) or 1),
+        is_direct=bool(getattr(row, "is_direct", False)),
+    )
+
+
+def _system_admin_user(request: Request, orm: Session) -> uuid.UUID:
+    try:
+        user_id = current_user_id(request)
+    except AuthzError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    if not is_system_admin(orm, user_id=user_id):
+        raise HTTPException(status_code=403, detail="only system administrators can manage departments")
+    return user_id
+
+
 @router.get("/project-memory/departments", response_model=list[DepartmentSchema])
-def list_project_memory_departments() -> list[DepartmentSchema]:
-    return [DepartmentSchema(**row) for row in DEPARTMENTS]
+def list_project_memory_departments(
+    include_groups: bool = False,
+    orm: Session = Depends(get_orm_session),
+) -> list[DepartmentSchema]:
+    rows = orm.execute(
+        text("""
+            SELECT id, name, sort_order,
+                   parent_id,
+                   parent_name,
+                   allows_projects,
+                   is_direct,
+                   CASE WHEN parent_id IS NULL THEN 1 ELSE 2 END AS level
+            FROM (
+                SELECT department.id,
+                       department.name,
+                       department.sort_order,
+                       department.parent_id,
+                       parent.name AS parent_name,
+                       department.allows_projects,
+                       COALESCE(department.is_direct, false) AS is_direct
+                FROM public.departments department
+                LEFT JOIN public.departments parent ON parent.id = department.parent_id
+                WHERE CAST(:include_groups AS boolean) OR department.allows_projects
+            ) department_tree
+            ORDER BY
+                CASE WHEN parent_id IS NULL THEN sort_order ELSE (
+                    SELECT parent.sort_order
+                    FROM public.departments parent
+                    WHERE parent.id = department_tree.parent_id
+                ) END,
+                CASE WHEN parent_id IS NULL THEN 0 ELSE 1 END,
+                sort_order,
+                name,
+                id
+        """),
+        {"include_groups": include_groups},
+    ).all()
+    return [
+        _department_from_row(row)
+        for row in rows
+    ]
+
+
+@router.post("/project-memory/departments", response_model=DepartmentSchema, status_code=201)
+def create_project_memory_department(
+    request: Request,
+    body: CreateDepartmentRequest,
+    orm: Session = Depends(get_orm_session),
+) -> DepartmentSchema:
+    user_id = _system_admin_user(request, orm)
+
+    department_id = body.id.strip().lower() if body.id else f"dept-{uuid.uuid4().hex}"
+    name = " ".join(body.name.split())
+    parent_id = body.parent_id.strip().lower() if body.parent_id else None
+    parent_name = None
+    if parent_id:
+        parent = orm.execute(
+            text("SELECT id, name, parent_id FROM public.departments WHERE id = :parent_id"),
+            {"parent_id": parent_id},
+        ).first()
+        if parent is None:
+            raise HTTPException(status_code=404, detail="parent department not found")
+        if getattr(parent, "parent_id", None) is not None:
+            raise HTTPException(status_code=400, detail="second-level departments cannot have child categories")
+        parent_name = str(parent.name)
+    existing = orm.execute(
+        text("""
+            SELECT 1
+            FROM public.departments
+            WHERE id = :department_id
+               OR (
+                   parent_id IS NOT DISTINCT FROM :parent_id
+                   AND lower(BTRIM(name)) = lower(BTRIM(:name))
+               )
+        """),
+        {"department_id": department_id, "name": name, "parent_id": parent_id},
+    ).first()
+    if existing is not None:
+        raise HTTPException(status_code=409, detail="department id or name already exists")
+
+    row = orm.execute(
+        text("""
+            INSERT INTO public.departments (
+                id, name, sort_order, parent_id, allows_projects
+            )
+            VALUES (
+                :department_id,
+                :name,
+                COALESCE((
+                    SELECT max(sort_order) + 1
+                    FROM public.departments
+                    WHERE parent_id IS NOT DISTINCT FROM :parent_id
+                ), 1),
+                :parent_id,
+                CAST(:allows_projects AS boolean)
+            )
+            RETURNING id, name, sort_order, parent_id, allows_projects,
+                      COALESCE(is_direct, false) AS is_direct,
+                      CASE WHEN parent_id IS NULL THEN 1 ELSE 2 END AS level
+        """),
+        {
+            "department_id": department_id,
+            "name": name,
+            "parent_id": parent_id,
+            "parent_name": parent_name,
+            "allows_projects": bool(parent_id),
+        },
+    ).first()
+    if parent_id is None:
+        direct_department_id = f"direct-{hashlib.md5(department_id.encode('utf-8')).hexdigest()}"
+        orm.execute(
+            text("""
+                INSERT INTO public.departments (
+                    id, name, sort_order, parent_id, allows_projects, is_direct
+                )
+                VALUES (
+                    :department_id,
+                    :name,
+                    COALESCE((
+                        SELECT max(sort_order) + 1
+                        FROM public.departments
+                        WHERE parent_id = :parent_id
+                    ), 1),
+                    :parent_id,
+                    CAST(:allows_projects AS boolean),
+                    CAST(:is_direct AS boolean)
+                )
+                ON CONFLICT (id) DO UPDATE
+                SET name = EXCLUDED.name,
+                    parent_id = EXCLUDED.parent_id,
+                    allows_projects = true,
+                    is_direct = true
+            """),
+            {
+                "department_id": direct_department_id,
+                "name": "直属分级",
+                "parent_id": department_id,
+                "allows_projects": True,
+                "is_direct": True,
+            },
+        )
+    orm.commit()
+    record_audit(
+        orm,
+        user_id=user_id,
+        action="create_department",
+        resource_type="department",
+        resource_id=department_id,
+        metadata={"name": name, "parent_id": parent_id},
+        request=request,
+    )
+    return DepartmentSchema(
+        id=str(row.id),
+        name=str(row.name),
+        sort_order=int(row.sort_order or 0),
+        parent_id=getattr(row, "parent_id", parent_id),
+        parent_name=parent_name,
+        allows_projects=bool(getattr(row, "allows_projects", bool(parent_id))),
+        level=int(getattr(row, "level", 2 if parent_id else 1)),
+        is_direct=bool(getattr(row, "is_direct", False)),
+    )
+
+
+@router.patch("/project-memory/departments/{department_id}", response_model=DepartmentSchema)
+def update_project_memory_department(
+    request: Request,
+    department_id: str,
+    body: UpdateDepartmentRequest,
+    orm: Session = Depends(get_orm_session),
+) -> DepartmentSchema:
+    user_id = _system_admin_user(request, orm)
+    name = " ".join(body.name.split())
+    current = orm.execute(
+        text("SELECT id, parent_id, is_direct FROM public.departments WHERE id = :department_id"),
+        {"department_id": department_id},
+    ).first()
+    if current is None:
+        raise HTTPException(status_code=404, detail="department not found")
+    if bool(getattr(current, "is_direct", False)):
+        raise HTTPException(
+            status_code=409,
+            detail="the generated direct category cannot be renamed, moved, or disabled",
+        )
+    parent_id = getattr(current, "parent_id", None)
+    if parent_id is not None and "parent_id" in body.model_fields_set:
+        if not body.parent_id:
+            raise HTTPException(status_code=400, detail="second-level departments must keep a root parent")
+        parent = orm.execute(
+            text("SELECT id, name, parent_id FROM public.departments WHERE id = :parent_id"),
+            {"parent_id": body.parent_id},
+        ).first()
+        if parent is None:
+            raise HTTPException(status_code=404, detail="parent department not found")
+        if getattr(parent, "parent_id", None) is not None:
+            raise HTTPException(status_code=400, detail="second-level departments can only move under a root category")
+        parent_id = str(parent.id)
+    row = orm.execute(
+        text("""
+            UPDATE public.departments department
+            SET name = :name,
+                sort_order = :sort_order,
+                parent_id = :parent_id
+            WHERE department.id = :department_id
+            RETURNING department.id, department.name, department.sort_order,
+                      department.parent_id,
+                      (SELECT parent.name FROM public.departments parent WHERE parent.id = department.parent_id) AS parent_name,
+                      department.allows_projects,
+                      CASE WHEN department.parent_id IS NULL THEN 1 ELSE 2 END AS level
+        """),
+        {
+            "department_id": department_id,
+            "name": name,
+            "sort_order": body.sort_order,
+            "parent_id": parent_id,
+        },
+    ).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="department not found")
+    orm.commit()
+    record_audit(
+        orm, user_id=user_id, action="update_department", resource_type="department",
+        resource_id=department_id,
+        metadata={"name": name, "sort_order": body.sort_order, "parent_id": parent_id},
+        request=request,
+    )
+    return _department_from_row(row)
+
+
+@router.delete("/project-memory/departments/{department_id}", status_code=204)
+def delete_project_memory_department(
+    request: Request,
+    department_id: str,
+    orm: Session = Depends(get_orm_session),
+):
+    user_id = _system_admin_user(request, orm)
+    usage = orm.execute(
+        text("""
+            SELECT
+                COALESCE(current_department.is_direct, false) AS is_direct,
+                current_department.parent_id,
+                (SELECT COUNT(*) FROM public.departments
+                 WHERE parent_id = :department_id AND NOT is_direct)::int AS custom_child_count,
+                (SELECT COUNT(*) FROM public.departments
+                 WHERE parent_id = :department_id AND is_direct)::int AS direct_child_count,
+                (SELECT COUNT(*) FROM public.projects project
+                 JOIN public.departments direct_child
+                   ON direct_child.id = project.department_id
+                  AND direct_child.parent_id = :department_id
+                  AND direct_child.is_direct)::int AS direct_project_count,
+                (SELECT COUNT(*) FROM public.project_creation_requests request_row
+                 JOIN public.departments direct_child
+                   ON direct_child.id = request_row.department_id
+                  AND direct_child.parent_id = :department_id
+                  AND direct_child.is_direct)::int AS direct_request_count,
+                (SELECT COUNT(*) FROM public.projects WHERE department_id = :department_id)::int AS project_count,
+                (SELECT COUNT(*) FROM public.project_creation_requests
+                 WHERE department_id = :department_id)::int AS request_count
+            FROM public.departments current_department
+            WHERE current_department.id = :department_id
+        """),
+        {"department_id": department_id},
+    ).first()
+    if usage is None:
+        raise HTTPException(status_code=404, detail="department not found")
+    if usage and bool(getattr(usage, "is_direct", False)):
+        raise HTTPException(
+            status_code=409,
+            detail="the generated direct category cannot be deleted",
+        )
+    if usage and (
+        usage.custom_child_count
+        or usage.direct_project_count
+        or usage.direct_request_count
+        or usage.project_count
+        or usage.request_count
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "department cannot be deleted while it has child categories, projects, "
+                "or project requests"
+            ),
+        )
+    row = orm.execute(
+        text("DELETE FROM public.departments WHERE id = :department_id RETURNING id, name"),
+        {"department_id": department_id},
+    ).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="department not found")
+    orm.commit()
+    record_audit(
+        orm, user_id=user_id, action="delete_department", resource_type="department",
+        resource_id=department_id, metadata={"name": row.name}, request=request,
+    )
+    return None
 
 
 @router.put(
@@ -250,7 +582,7 @@ def create_project_memory_draft(
     if not files:
         raise HTTPException(status_code=400, detail="at least one memory file is required")
 
-    department_name = _department_name(department_id)
+    department_name = _department_name(orm, department_id)
     project_name = _project_name(orm, project_id)
     repository = _repository_for_project(orm, project_id)
     sources: list[SourceText] = []
@@ -347,7 +679,7 @@ def create_project_memory_draft(
         },
         request=request,
     )
-    return _row_to_draft(row)
+    return _row_to_draft(orm, row)
 
 
 @router.get("/project-memory/drafts", response_model=list[ProjectMemoryDraftSchema])
@@ -373,7 +705,7 @@ def list_project_memory_drafts(
         """),
         {"project_id": str(project_id)},
     ).all()
-    return [_row_to_draft(row) for row in rows]
+    return [_row_to_draft(orm, row) for row in rows]
 
 
 @router.post(

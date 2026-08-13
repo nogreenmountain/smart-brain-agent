@@ -111,11 +111,11 @@ class WikiMcpOperationsTests(unittest.TestCase):
                 project_id=None,
             )
 
-    def test_proposal_requires_scope_and_enters_pending_review(self) -> None:
+    def test_proposal_requires_scope_and_publishes_directly(self) -> None:
         module = _load_module()
         project_id = uuid.UUID("00000000-0000-0000-0000-000000000010")
         user_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
-        change_id = uuid.UUID("00000000-0000-0000-0000-000000000040")
+        page_id = uuid.UUID("00000000-0000-0000-0000-000000000040")
         orm = _Orm(user=SimpleNamespace(
             user_id=str(user_id),
             email="uploader@local.dev",
@@ -139,7 +139,7 @@ class WikiMcpOperationsTests(unittest.TestCase):
 
         with (
             patch.object(module, "require_member", return_value=None),
-            patch.object(module, "create_memory_proposal", return_value=change_id) as create,
+            patch.object(module, "create_memory_proposal", return_value=page_id) as create,
         ):
             result = service.propose(
                 user_id=user_id,
@@ -151,8 +151,8 @@ class WikiMcpOperationsTests(unittest.TestCase):
             )
 
         create.assert_called_once()
-        self.assertEqual(result["status"], "pending_review")
-        self.assertEqual(result["change_id"], str(change_id))
+        self.assertEqual(result["status"], "published")
+        self.assertEqual(result["page_id"], str(page_id))
         self.assertEqual(result["uploaded_by"]["user_id"], str(user_id))
         self.assertEqual(result["uploaded_by"]["name"], "上传人昵称")
         self.assertEqual(result["uploaded_by"]["email"], "uploader@local.dev")

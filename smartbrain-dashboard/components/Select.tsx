@@ -8,6 +8,8 @@ interface SelectOption {
 }
 
 interface SelectProps {
+  id?: string;
+  'aria-label'?: string;
   value: string;
   onChange: (v: string) => void;
   options: SelectOption[];
@@ -16,9 +18,11 @@ interface SelectProps {
   className?: string;
 }
 
-export function Select({ value, onChange, options, placeholder, disabled, className = '' }: SelectProps) {
+export function Select({ id, 'aria-label': ariaLabel, value, onChange, options, placeholder, disabled, className = '' }: SelectProps) {
   return (
     <select
+      id={id}
+      aria-label={ariaLabel}
       value={value}
       disabled={disabled}
       onChange={(e) => onChange(e.target.value)}

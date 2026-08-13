@@ -3,17 +3,13 @@
 import * as React from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import {
+  Bot,
   BrainCircuit,
-  BookOpen,
-  CalendarClock,
-  ClipboardList,
-  FileText,
-  Activity,
   LibraryBig,
   LogOut,
   MessageCircle,
-  Network,
   Settings,
+  UploadCloud,
   UserRound,
   Users,
   type LucideIcon,
@@ -26,6 +22,8 @@ interface Me {
   full_name: string | null;
   nickname?: string | null;
   display_name?: string;
+  is_system_admin?: boolean;
+  can_manage_projects?: boolean;
   memberships: { org_id: string; org_name: string; role: string }[];
 }
 
@@ -34,24 +32,33 @@ const NAV: {
   label: string;
   icon: LucideIcon;
   adminOnly?: boolean;
+  systemAdminOnly?: boolean;
+  activePaths?: string[];
 }[] = [
   { href: '/chat', label: '问答', icon: MessageCircle },
   { href: '/knowledge', label: '知识库', icon: LibraryBig },
-  { href: '/wiki', label: '项目 Wiki', icon: Network },
-  { href: '/member-wiki', label: '成员 Wiki', icon: BookOpen },
-  { href: '/meeting-notes', label: '会议记录', icon: ClipboardList },
-  { href: '/workday', label: 'AI 工作记录', icon: CalendarClock },
-  { href: '/worklogs', label: 'AI 工作日志', icon: FileText },
-  { href: '/monitor/setup', label: 'AI Monitor', icon: Activity },
+  { href: '/wiki', label: '智慧 Wiki', icon: LibraryBig, activePaths: ['/wiki', '/member-wiki'] },
+  { href: '/uploads', label: '上传资料', icon: UploadCloud, activePaths: ['/uploads', '/meeting-notes'] },
+  {
+    href: '/workday',
+    label: 'AI 工作台',
+    icon: Bot,
+    activePaths: ['/workday', '/leaderboard', '/worklogs', '/monitor/setup'],
+  },
   { href: '/profile', label: '个人中心', icon: UserRound },
+  { href: '/team', label: '团队管理', icon: Users, systemAdminOnly: true },
   { href: '/members', label: '成员管理', icon: Users },
-  { href: '/admin', label: '项目管理', icon: Settings },
+  { href: '/admin', label: '项目管理', icon: Settings, adminOnly: true },
 ];
 
 export function Shell({ me, children }: { me: Me; children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
-  const isAdmin = me.memberships.some((membership) => membership.role === 'owner' || membership.role === 'admin');
+  const isAdmin = Boolean(
+    me.can_manage_projects ??
+      (me.is_system_admin || me.memberships.some((membership) => membership.role === 'owner' || membership.role === 'admin')),
+  );
+  const isSystemAdmin = Boolean(me.is_system_admin);
 
   async function logout() {
     await logoutApi().catch(() => undefined);
@@ -75,14 +82,17 @@ export function Shell({ me, children }: { me: Me; children: React.ReactNode }) {
         </div>
 
         <nav className="flex-1 px-2.5 py-3 space-y-1">
-          {NAV.filter((n) => !n.adminOnly || isAdmin).map((n) => {
-            const active = pathname === n.href || pathname?.startsWith(n.href + '/');
+          {NAV.filter((n) => (!n.adminOnly || isAdmin) && (!n.systemAdminOnly || isSystemAdmin)).map((n) => {
+            const active = (n.activePaths || [n.href]).some(
+              (activePath) => pathname === activePath || pathname?.startsWith(activePath + '/'),
+            );
             const Icon = n.icon;
+            const label = n.href === '/members' && !isAdmin ? '成员信息' : n.label;
             return (
               <button
                 key={n.href}
                 type="button"
-                title={n.label}
+                title={label}
                 onClick={() => router.push(n.href)}
                 className={`flex h-10 w-full items-center justify-center gap-2.5 rounded-lg px-3 text-sm transition-all duration-150 active:scale-[0.98] md:justify-start ${
                   active
@@ -91,7 +101,7 @@ export function Shell({ me, children }: { me: Me; children: React.ReactNode }) {
                 }`}
               >
                 <Icon size={18} aria-hidden={true} />
-                <span className="hidden md:block">{n.label}</span>
+                <span className="hidden md:block">{label}</span>
               </button>
             );
           })}

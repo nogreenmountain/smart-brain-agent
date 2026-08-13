@@ -400,6 +400,13 @@ def sync_once(
     lookback_days: int = 7,
     now: datetime | None = None,
 ) -> dict[str, Any]:
+    if (runtime_dir / "shared-device.json").is_file():
+        return {
+            "status": "shared_device",
+            "uploaded": 0,
+            "unchanged_files": 0,
+            "errors": 0,
+        }
     credentials = _load_json(runtime_dir / "device-credentials.json")
     api_endpoint = str(credentials.get("api_endpoint") or "").rstrip("/")
     project_id = str(credentials.get("project_id") or "")

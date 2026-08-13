@@ -60,7 +60,7 @@ class CCSwitchUsageCollectionTests(unittest.TestCase):
                         (
                             "2026-08-06", "codex", "provider-a", "gpt-5",
                             "gpt-5", "gpt-5", 3, 3,
-                            100, 20, 400, 50, "0.25", 1200, 1,
+                            1000, 20, 400, 50, "0.25", 1200, 1,
                         ),
                         (
                             "2026-08-07", "claude", "provider-b", "m3",
@@ -85,8 +85,8 @@ class CCSwitchUsageCollectionTests(unittest.TestCase):
 
         self.assertEqual(result.source_table, "usage_daily_rollups")
         self.assertEqual(len(result.rows), 2)
-        self.assertEqual(result.total_tokens, 695)
-        self.assertEqual(result.rows[0].total_tokens, 570)
+        self.assertEqual(result.total_tokens, 1145)
+        self.assertEqual(result.rows[0].total_tokens, 1020)
         self.assertEqual(result.rows[1].total_tokens, 125)
         self.assertEqual(result.request_count, 5)
         self.assertEqual(result.success_count, 4)
@@ -155,7 +155,7 @@ class CCSwitchUsageCollectionTests(unittest.TestCase):
 
         self.assertEqual(result.source_table, "proxy_request_logs")
         self.assertEqual(len(result.rows), 1)
-        self.assertEqual(result.total_tokens, 215)
+        self.assertEqual(result.total_tokens, 165)
         self.assertEqual(result.request_count, 2)
         self.assertEqual(result.success_count, 1)
 
@@ -261,6 +261,15 @@ class CCSwitchUsageCollectionTests(unittest.TestCase):
 
 
 class CCSwitchUsageSyncTests(unittest.TestCase):
+    def test_shared_device_mode_skips_personal_daily_usage_sync(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Path(directory)
+            (runtime / "shared-device.json").write_text("{}", encoding="utf-8")
+
+            status = sync_once(runtime_dir=runtime)
+
+        self.assertEqual(status["status"], "shared_device")
+
     def test_collection_error_is_reported_to_server_for_manual_polling(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -371,7 +380,7 @@ class CCSwitchUsageSyncTests(unittest.TestCase):
                         input_tokens, output_tokens,
                         cache_read_tokens, cache_creation_tokens
                     ) VALUES ('2026-08-07', 'codex', 'provider-a', 'gpt-5',
-                              4, 4, 100, 20, 300, 10)
+                              4, 4, 1000, 20, 300, 0)
                     """
                 )
                 connection.commit()
@@ -382,7 +391,7 @@ class CCSwitchUsageSyncTests(unittest.TestCase):
 
             def capture(url: str, token: str, payload: dict[str, object]):
                 requests.append((url, token, payload))
-                return {"status": "ok", "total_tokens": 430}
+                return {"status": "ok", "total_tokens": 1020}
 
             with (
                 patch(
@@ -408,7 +417,7 @@ class CCSwitchUsageSyncTests(unittest.TestCase):
             )
 
         self.assertEqual(status["status"], "ok")
-        self.assertEqual(status["total_tokens"], 430)
+        self.assertEqual(status["total_tokens"], 1020)
         self.assertIn('"status": "ok"', saved_status)
         self.assertEqual(len(requests), 1)
         url, token, payload = requests[0]
@@ -421,7 +430,7 @@ class CCSwitchUsageSyncTests(unittest.TestCase):
         self.assertEqual(payload["trigger"], "manual")
         self.assertEqual(payload["sync_protocol_version"], 2)
         self.assertEqual(payload["source_table"], "usage_daily_rollups")
-        self.assertEqual(payload["total_tokens"], 430)
+        self.assertEqual(payload["total_tokens"], 1020)
         self.assertEqual(len(payload["rows"]), 1)
 
 

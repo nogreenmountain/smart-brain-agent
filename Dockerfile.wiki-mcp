@@ -1,4 +1,4 @@
-FROM agentops-api-local:patched-2026-08-06-global-read
+FROM agentops-api-local:patched-2026-08-10-wiki-direct-publish-r25
 
 RUN pip install --no-cache-dir \
     --target=/app/.venv/lib/python3.12/site-packages \

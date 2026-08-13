@@ -15,15 +15,15 @@ using Microsoft.Win32;
 [assembly: AssemblyDescription("SmartBrain AI Monitor self-service installer")]
 [assembly: AssemblyCompany("SmartBrain")]
 [assembly: AssemblyProduct("SmartBrain AI Monitor")]
-[assembly: AssemblyVersion("2026.8.7.15")]
-[assembly: AssemblyFileVersion("2026.8.7.15")]
+[assembly: AssemblyVersion("2026.8.13.18")]
+[assembly: AssemblyFileVersion("2026.8.13.18")]
 
 namespace SmartBrain.AIMonitor.Setup
 {
     internal static class Program
     {
         internal const string ProductName = "SmartBrain AI Monitor";
-        internal const string ProductVersion = "2026.08.07.15";
+        internal const string ProductVersion = "2026.08.13.18";
         internal const string ResourceName = "SmartBrainPayload.zip";
         internal const string UninstallKey = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\SmartBrainAIMonitor";
         internal const string UrlProtocolKey = @"Software\Classes\smartbrain-ai-monitor";
@@ -63,6 +63,8 @@ namespace SmartBrain.AIMonitor.Setup
                 }
                 if (args.Length >= 2 && args[0] == "--sync-cc-switch")
                     return RunCcSwitchSync(args[1]);
+                if (args.Length >= 2 && args[0] == "--shared-session")
+                    return RunSharedSession(args[1]);
                 Application.Run(new SetupForm(args.Length > 0 && args[0] == "--uninstall"));
                 return 0;
             }
@@ -165,6 +167,64 @@ namespace SmartBrain.AIMonitor.Setup
             {
                 return 1;
             }
+        }
+
+        private static int RunSharedSession(string requestUri)
+        {
+            try
+            {
+                Uri uri = new Uri(requestUri);
+                if (!string.Equals(uri.Scheme, "smartbrain-ai-monitor", StringComparison.OrdinalIgnoreCase) ||
+                    !string.Equals(uri.Host, "shared-session", StringComparison.OrdinalIgnoreCase))
+                    return 2;
+                Match actionMatch = Regex.Match(uri.Query, @"(?:^|[?&])action=([^&]+)", RegexOptions.IgnoreCase);
+                string action = actionMatch.Success ? Uri.UnescapeDataString(actionMatch.Groups[1].Value) : "start";
+                Match sessionMatch = Regex.Match(uri.Query, @"(?:^|[?&])session_id=([^&]+)", RegexOptions.IgnoreCase);
+                Match tokenMatch = Regex.Match(uri.Query, @"(?:^|[?&])activation_token=([^&]+)", RegexOptions.IgnoreCase);
+                Guid sessionId = Guid.Empty;
+                string activationToken = "";
+                if (string.Equals(action, "start", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!sessionMatch.Success || !tokenMatch.Success ||
+                        !Guid.TryParse(Uri.UnescapeDataString(sessionMatch.Groups[1].Value), out sessionId))
+                        return 2;
+                    activationToken = Uri.UnescapeDataString(tokenMatch.Groups[1].Value);
+                    if (activationToken.Length < 32 || activationToken.Length > 200) return 2;
+                }
+                string runtimeDir = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "AIWorkdayTelemetry", "current"
+                );
+                string script = Path.Combine(runtimeDir, "SharedCCSwitchSession.py");
+                string python = Path.Combine(PayloadRoot, "python-runtime", "python.exe");
+                if (!File.Exists(script) || !File.Exists(python)) return 3;
+                ProcessStartInfo start = new ProcessStartInfo
+                {
+                    FileName = python,
+                    Arguments = QuoteArgument(script) + " --runtime-dir " + QuoteArgument(runtimeDir)
+                        + (string.Equals(action, "stop", StringComparison.OrdinalIgnoreCase)
+                            ? " stop"
+                            : " start --session-id " + sessionId.ToString("D")
+                                + " --activation-token " + QuoteArgument(activationToken)),
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true
+                };
+                start.EnvironmentVariables["PYTHONIOENCODING"] = "utf-8";
+                start.EnvironmentVariables["PYTHONUTF8"] = "1";
+                using (Process process = Process.Start(start))
+                {
+                    if (process == null) return 4;
+                    if (!process.WaitForExit(90000))
+                    {
+                        try { process.Kill(); } catch { }
+                        return 5;
+                    }
+                    return process.ExitCode;
+                }
+            }
+            catch { return 1; }
         }
 
         private static string QuoteArgument(string value)

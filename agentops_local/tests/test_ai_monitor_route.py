@@ -50,9 +50,20 @@ class _Result:
 
 
 class _Orm:
-    def __init__(self, *, profile=None, rows=None) -> None:
+    def __init__(
+        self,
+        *,
+        profile=None,
+        employee_profiles=None,
+        rows=None,
+        system_admin: bool = False,
+        org_admin: bool = False,
+    ) -> None:
         self.profile = profile
+        self.employee_profiles = employee_profiles or []
         self.rows = rows or []
+        self.system_admin = system_admin
+        self.org_admin = org_admin
         self.calls: list[tuple[str, dict]] = []
         self.commits = 0
         self.rollbacks = 0
@@ -61,8 +72,16 @@ class _Orm:
         sql = str(statement)
         payload = dict(params or {})
         self.calls.append((sql, payload))
-        if "FROM auth.users" in sql:
+        if "WHERE au.id = :uid" in sql:
             return _Result(row=self.profile)
+        if "SELECT au.id AS user_id" in sql and "FROM auth.users" in sql:
+            return _Result(rows=self.employee_profiles)
+        if "SELECT COALESCE(is_system_admin" in sql:
+            return _Result(
+                row=SimpleNamespace(is_system_admin=True) if self.system_admin else None
+            )
+        if "FROM public.user_orgs" in sql:
+            return _Result(row=SimpleNamespace(allowed=1) if self.org_admin else None)
         if "FROM public.ai_monitor_devices" in sql:
             return _Result(rows=self.rows)
         if "FROM public.project_members" in sql:
@@ -247,6 +266,102 @@ class AIMonitorRouteTests(unittest.TestCase):
         audit.assert_called_once()
         self.assertEqual(audit.call_args.kwargs["action"], "ai_monitor_status")
         self.assertEqual(audit.call_args.kwargs["resource_type"], "ai_monitor")
+
+    def test_regular_member_cannot_query_another_employee_status(self) -> None:
+        orm = _Orm(
+            profile=self.profile,
+            employee_profiles=[
+                SimpleNamespace(
+                    user_id=self.user_id,
+                    email="test1@local.dev",
+                    full_name="研发一号",
+                    nickname=None,
+                ),
+                SimpleNamespace(
+                    user_id=uuid.UUID("00000000-0000-0000-0000-000000000003"),
+                    email="test2@local.dev",
+                    full_name="研发二号",
+                    nickname=None,
+                ),
+            ],
+        )
+        with (
+            patch.object(route, "current_user_id", return_value=self.user_id),
+            patch.object(route, "record_audit"),
+            self.assertRaises(HTTPException) as raised,
+        ):
+            route.get_ai_monitor_overall_status(
+                request=object(),
+                employee_id="test2",
+                orm=orm,
+            )
+
+        self.assertEqual(raised.exception.status_code, 403)
+        self.assertFalse(
+            any("FROM public.ai_monitor_devices" in sql for sql, _ in orm.calls)
+        )
+
+    def test_regular_member_can_query_own_status(self) -> None:
+        orm = _Orm(profile=self.profile)
+        with (
+            patch.object(route, "current_user_id", return_value=self.user_id),
+            patch.object(route, "record_audit"),
+        ):
+            response = route.get_ai_monitor_overall_status(
+                request=object(),
+                employee_id="test1",
+                orm=orm,
+            )
+
+        self.assertEqual(response.employee_id, "test1")
+
+    def test_system_admin_can_query_another_known_employee_status(self) -> None:
+        orm = _Orm(
+            profile=self.profile,
+            employee_profiles=[
+                SimpleNamespace(
+                    user_id=uuid.UUID("00000000-0000-0000-0000-000000000003"),
+                    email="test2@local.dev",
+                    full_name="研发二号",
+                    nickname=None,
+                )
+            ],
+            system_admin=True,
+        )
+        with (
+            patch.object(route, "current_user_id", return_value=self.user_id),
+            patch.object(route, "record_audit"),
+        ):
+            response = route.get_ai_monitor_overall_status(
+                request=object(),
+                employee_id="test2",
+                orm=orm,
+            )
+
+        self.assertEqual(response.employee_id, "test2")
+        self.assertEqual(response.employee_name, "研发二号")
+
+    def test_system_admin_gets_not_found_for_unknown_employee(self) -> None:
+        orm = _Orm(
+            profile=self.profile,
+            employee_profiles=[],
+            system_admin=True,
+        )
+        with (
+            patch.object(route, "current_user_id", return_value=self.user_id),
+            patch.object(route, "record_audit"),
+            self.assertRaises(HTTPException) as raised,
+        ):
+            route.get_ai_monitor_overall_status(
+                request=object(),
+                employee_id="missing-employee",
+                orm=orm,
+            )
+
+        self.assertEqual(raised.exception.status_code, 404)
+        self.assertFalse(
+            any("FROM public.ai_monitor_devices" in sql for sql, _ in orm.calls)
+        )
 
 
 if __name__ == "__main__":

@@ -22,6 +22,15 @@ def _write_jsonl(path: Path, rows: list[dict]) -> None:
 
 
 class ConversationSyncParserTests(unittest.TestCase):
+    def test_shared_device_mode_skips_personal_conversation_sync(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Path(directory)
+            (runtime / "shared-device.json").write_text("{}", encoding="utf-8")
+
+            status = sync_once(runtime_dir=runtime)
+
+        self.assertEqual(status["status"], "shared_device")
+
     def test_codex_turn_keeps_visible_dialogue_model_and_last_usage(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "rollout.jsonl"

@@ -524,15 +524,19 @@ $syncSource = Join-Path $PSScriptRoot "ConversationSync.py"
 $syncScript = Join-Path $runtimeDir "ConversationSync.py"
 $usageSyncSource = Join-Path $PSScriptRoot "CCSwitchUsageSync.py"
 $usageSyncScript = Join-Path $runtimeDir "CCSwitchUsageSync.py"
+$sharedSyncSource = Join-Path $PSScriptRoot "SharedCCSwitchSession.py"
+$sharedSyncScript = Join-Path $runtimeDir "SharedCCSwitchSession.py"
 $syncRunner = Join-Path $runtimeDir "Run-ConversationSync.ps1"
 $syncRunnerVbs = Join-Path $runtimeDir "Run-ConversationSync.vbs"
 Copy-Item -LiteralPath $syncSource -Destination $syncScript -Force
 Copy-Item -LiteralPath $usageSyncSource -Destination $usageSyncScript -Force
+Copy-Item -LiteralPath $sharedSyncSource -Destination $sharedSyncScript -Force
 $pythonPrefix = if ($pythonCommand.Count -gt 1) { "$($pythonCommand[1]) " } else { "" }
 $runnerContent = @"
 `$ErrorActionPreference = "SilentlyContinue"
 & "$($pythonCommand[0])" $pythonPrefix`"$syncScript`" --runtime-dir `"$runtimeDir`" | Out-Null
 & "$($pythonCommand[0])" $pythonPrefix`"$usageSyncScript`" --runtime-dir `"$runtimeDir`" --trigger automatic | Out-Null
+& "$($pythonCommand[0])" $pythonPrefix`"$sharedSyncScript`" --runtime-dir `"$runtimeDir`" poll | Out-Null
 "@
 Set-Content -LiteralPath $syncRunner -Encoding UTF8 -Value $runnerContent
 $vbsRunnerContent = @(
@@ -630,6 +634,7 @@ Unregister-ScheduledTask -TaskName "SmartBrain AI Conversation Sync" -Confirm:$f
 foreach ($fileName in @(
     "ConversationSync.py",
     "CCSwitchUsageSync.py",
+    "SharedCCSwitchSession.py",
     "Run-ConversationSync.ps1",
     "Run-ConversationSync.vbs",
     "device-credentials.json",
@@ -754,6 +759,10 @@ def create_universal_bundle(
         package_dir / "cc_switch_usage_sync.py",
         output / "CCSwitchUsageSync.py",
     )
+    shutil.copyfile(
+        package_dir / "shared_cc_switch_session.py",
+        output / "SharedCCSwitchSession.py",
+    )
     return output
 
 
@@ -799,7 +808,7 @@ powershell -ExecutionPolicy Bypass -File .\\Install-AIWorkdayTelemetry.ps1
 
 管理员或项目成员打开：
 
-http://192.168.1.40:3002/workday
+http://192.168.10.29:3002/workday
 
 员工编号填写：{request.employee_id}
 

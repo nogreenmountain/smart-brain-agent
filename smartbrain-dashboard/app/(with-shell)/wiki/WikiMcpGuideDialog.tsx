@@ -25,8 +25,8 @@ const STEPS = [
   {
     icon: KeyRound,
     title: '创建个人 MCP Token',
-    description: '填写 Token 名称和有效期，并选择是否允许提交待审批记忆。',
-    detail: '只读 Token 只能查询；勾选后可提交提案，但仍需管理员审批才会进入正式 Wiki。',
+    description: '填写 Token 名称和有效期，并选择是否允许直接写入项目 Wiki。',
+    detail: '只读 Token 只能查询；勾选后，内容通过权限、来源与安全检查后会直接发布。',
   },
   {
     icon: Download,

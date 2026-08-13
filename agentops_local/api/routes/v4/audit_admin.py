@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from agentops.common.orm import get_orm_session
 from agentops.auth.middleware import AuthenticatedRoute
-from agentops.rag.authz import AuthzError, ROLE_RANK, current_user_id
+from agentops.rag.authz import AuthzError, current_user_id, is_system_admin
 
 
 router = APIRouter(route_class=AuthenticatedRoute)
@@ -43,6 +43,8 @@ def _is_audit_admin(orm: Session, user_id: uuid.UUID) -> bool:
     We consider a user an audit admin if they are admin or owner on
     any project (project_members).
     """
+    if is_system_admin(orm, user_id=user_id):
+        return True
     row = orm.execute(
         text("""
             SELECT 1 FROM public.project_members

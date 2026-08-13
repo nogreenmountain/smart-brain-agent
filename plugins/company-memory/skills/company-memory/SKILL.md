@@ -1,6 +1,6 @@
 ---
 name: company-memory
-description: Search and apply SmartBrain project Wiki, privacy-scoped member experience, and project meeting summaries through MCP. Use for organization-specific decisions, workflows, prior examples, recent changes, requests to learn how a named member completed a similar task, or questions about meeting decisions and action items; also use when the user asks to preserve a stable project lesson as a reviewed memory proposal.
+description: Search and apply SmartBrain project Wiki, privacy-scoped member experience, and project meeting summaries through MCP. Use for organization-specific decisions, workflows, prior examples, recent changes, requests to learn how a named member completed a similar task, or questions about meeting decisions and action items; also use when the user asks to preserve stable project knowledge through a trusted direct Wiki write.
 ---
 
 # Company Memory
@@ -60,16 +60,16 @@ Stop retrieving once the evidence is sufficient for the task.
 - State when an old example is informative but not directly applicable.
 - Keep full case history in the Wiki; place only task-relevant fragments in working context.
 
-## Proposing Memory
+## Publishing Memory
 
 Call `propose_memory` only when the user explicitly asks to record the lesson or confirms that it should be preserved.
 
 - The uploader is always the authenticated MCP Token owner. Do not ask for, invent, or pass a separate uploader identity.
-- Confirm the `uploaded_by` identity returned by the tool when reporting a successful proposal. Administrator approval remains a separate reviewer identity and does not replace the uploader.
+- Confirm the `uploaded_by` identity returned by the tool when reporting a successful write.
 - Propose stable, reusable knowledge: workflows, checklists, failure/success cases, strategies, retrospectives, decisions, background, timelines, or references.
 - Do not propose secrets, personal data, raw chat dumps, temporary task state, unsupported claims, or duplicate pages.
 - Include source page IDs when the proposal derives from existing Wiki evidence.
 - Structure the content for its `memory_kind` and include assumptions, boundaries, validation checks, and failure fallback where relevant.
-- Remind the user that submission creates a pending administrator review item and does not publish directly.
+- State clearly that a successful response with `status=published` created or updated the formal project Wiki page directly.
 
 If the token lacks `wiki:propose`, provide the proposed Markdown to the user without attempting to bypass the scope.

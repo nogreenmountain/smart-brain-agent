@@ -2,26 +2,27 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { KeyRound, ShieldCheck, Trash2, UserPlus } from 'lucide-react';
+import { ShieldCheck, Trash2, UserPlus } from 'lucide-react';
 import {
   addProjectMember,
   ApiError,
   Department,
-  DepartmentId,
   getMe,
   listProjectMemoryDepartments,
+  listProjectMemberOptions,
   listProjectMembers,
   listProjectCatalog,
+  listProjects,
   Me,
   Project,
   ProjectMember,
+  ProjectMemberOption,
   ProjectRole,
   removeProjectMember,
-  resetProjectMemberPassword,
 } from '@/lib/api';
 import { Button } from '@/components/Button';
 import { EmptyState, LoadingDots, Toast } from '@/components/Feedback';
-import { Input } from '@/components/Input';
+import { ProjectHierarchySelector } from '@/components/ProjectHierarchySelector';
 import { Select } from '@/components/Select';
 
 const ROLE_OPTIONS: { value: ProjectRole; label: string }[] = [
@@ -61,18 +62,16 @@ export default function MembersPage() {
   const [me, setMe] = useState<Me | null>(null);
   const [departments, setDepartments] = useState<Department[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
-  const [departmentId, setDepartmentId] = useState<DepartmentId>('research');
   const [selectedProjectId, setSelectedProjectId] = useState('');
   const [members, setMembers] = useState<ProjectMember[]>([]);
-  const [memberIdentifier, setMemberIdentifier] = useState('');
+  const [memberOptions, setMemberOptions] = useState<ProjectMemberOption[]>([]);
+  const [memberSearch, setMemberSearch] = useState('');
+  const [selectedMemberId, setSelectedMemberId] = useState('');
   const [memberRole, setMemberRole] = useState<ProjectRole>('developer');
   const [loading, setLoading] = useState(true);
   const [loadingMembers, setLoadingMembers] = useState(false);
   const [saving, setSaving] = useState(false);
   const [deletingUserId, setDeletingUserId] = useState<string | null>(null);
-  const [passwordTarget, setPasswordTarget] = useState<ProjectMember | null>(null);
-  const [newPassword, setNewPassword] = useState('');
-  const [resettingPassword, setResettingPassword] = useState(false);
   const [toast, setToast] = useState<{ msg: string; kind: 'info' | 'error' } | null>(null);
 
   const selectedProject = useMemo(
@@ -80,17 +79,17 @@ export default function MembersPage() {
     [projects, selectedProjectId],
   );
 
-  const filteredProjects = useMemo(
-    () => projects.filter((project) => (project.department_id || 'research') === departmentId),
-    [departmentId, projects],
-  );
-
-  const departmentOptions = useMemo(
-    () => departments.map((department) => ({ value: department.id, label: department.name })),
-    [departments],
-  );
-
   const selectedProjectCanManage = canManageProject(selectedProject);
+
+  const filteredMemberOptions = useMemo(() => {
+    const query = memberSearch.trim().toLocaleLowerCase();
+    if (!query) return memberOptions;
+    return memberOptions.filter((member) => (
+      member.nickname || member.display_name || member.username || member.email
+    ).toLocaleLowerCase().includes(query)
+      || member.username.toLocaleLowerCase().includes(query)
+      || member.email.toLocaleLowerCase().includes(query));
+  }, [memberOptions, memberSearch]);
 
   const privilegedCount = useMemo(
     () => members.filter((member) => isLeaderRole(member.role)).length,
@@ -119,28 +118,41 @@ export default function MembersPage() {
     }
   }, [router]);
 
+  const loadMemberOptions = useCallback(async (projectId: string) => {
+    try {
+      const rows = await listProjectMemberOptions(projectId);
+      setMemberOptions(Array.isArray(rows) ? rows : []);
+    } catch (e: any) {
+      setMemberOptions([]);
+      if (e instanceof ApiError && e.status === 401) {
+        router.replace('/login');
+      } else {
+        setToast({ msg: e?.message || '加载团队成员选项失败', kind: 'error' });
+      }
+    }
+  }, [router]);
+
   useEffect(() => {
     if (didInitialLoad.current) return;
     didInitialLoad.current = true;
     (async () => {
       setLoading(true);
       try {
-        const [currentUser, departmentRows, projectRows] = await Promise.all([
-          getMe(),
-          listProjectMemoryDepartments(),
-          listProjectCatalog(),
+        const currentUser = await getMe();
+        const [departmentRows, projectRows] = await Promise.all([
+          listProjectMemoryDepartments(true),
+          currentUser.is_system_admin ? listProjectCatalog() : listProjects(),
         ]);
         setMe(currentUser);
         setDepartments(departmentRows);
         setProjects(projectRows);
-        const firstDepartment = departmentRows[0]?.id || 'research';
-        setDepartmentId(firstDepartment);
-        const firstProject =
-          projectRows.find((project) => (project.department_id || 'research') === firstDepartment) ||
-          projectRows[0];
+        const firstProject = projectRows[0];
         if (firstProject) {
           setSelectedProjectId(firstProject.id);
           await loadMembers(firstProject.id);
+          if (canManageProject(firstProject)) {
+            await loadMemberOptions(firstProject.id);
+          }
         }
       } catch (e: any) {
         if (e instanceof ApiError && e.status === 401) {
@@ -152,38 +164,36 @@ export default function MembersPage() {
         setLoading(false);
       }
     })();
-  }, [loadMembers, router]);
+  }, [loadMemberOptions, loadMembers, router]);
 
   async function handleProjectChange(projectId: string) {
     setSelectedProjectId(projectId);
-    await loadMembers(projectId);
-  }
-
-  async function handleDepartmentChange(nextDepartmentId: string) {
-    const next = nextDepartmentId as DepartmentId;
-    setDepartmentId(next);
-    const nextProject = projects.find((project) => (project.department_id || 'research') === next);
     setMembers([]);
-    setPasswordTarget(null);
-    setNewPassword('');
-    setSelectedProjectId(nextProject?.id || '');
-    if (nextProject) {
-      await loadMembers(nextProject.id);
+    setMemberOptions([]);
+    setMemberSearch('');
+    setSelectedMemberId('');
+    if (projectId) {
+      await loadMembers(projectId);
+      const project = projects.find((item) => item.id === projectId) || null;
+      if (canManageProject(project)) {
+        await loadMemberOptions(projectId);
+      }
     }
   }
 
   async function handleAddMember(e: React.FormEvent) {
     e.preventDefault();
-    const identifier = memberIdentifier.trim();
-    if (!selectedProjectCanManage || !selectedProjectId || !identifier || saving) return;
+    if (!selectedProjectCanManage || !selectedProjectId || !selectedMemberId || saving) return;
     setSaving(true);
     try {
       await addProjectMember(selectedProjectId, {
-        identifier,
+        user_id: selectedMemberId,
         role: memberRole,
       });
-      setMemberIdentifier('');
+      setMemberSearch('');
+      setSelectedMemberId('');
       await loadMembers(selectedProjectId);
+      await loadMemberOptions(selectedProjectId);
       setToast({ msg: '成员已添加或更新', kind: 'info' });
     } catch (e: any) {
       setToast({ msg: e?.message || '添加成员失败', kind: 'error' });
@@ -194,43 +204,17 @@ export default function MembersPage() {
 
   async function handleRemoveMember(member: ProjectMember) {
     if (!selectedProjectCanManage || !selectedProjectId || deletingUserId) return;
-    if (!window.confirm(`确认删除成员 ${member.email}？`)) return;
+    if (!window.confirm(`确认将 ${member.username || member.email} 从当前项目移除？团队账号和历史记录不会受影响。`)) return;
     setDeletingUserId(member.user_id);
     try {
       await removeProjectMember(selectedProjectId, member.user_id);
-      if (passwordTarget?.user_id === member.user_id) {
-        setPasswordTarget(null);
-        setNewPassword('');
-      }
       await loadMembers(selectedProjectId);
-      setToast({ msg: '成员已删除', kind: 'info' });
+      await loadMemberOptions(selectedProjectId);
+      setToast({ msg: '成员已从项目移除', kind: 'info' });
     } catch (e: any) {
-      setToast({ msg: e?.message || '删除成员失败', kind: 'error' });
+      setToast({ msg: e?.message || '移出项目失败', kind: 'error' });
     } finally {
       setDeletingUserId(null);
-    }
-  }
-
-  function openPasswordEditor(member: ProjectMember) {
-    if (!selectedProjectCanManage) return;
-    setPasswordTarget(member);
-    setNewPassword('');
-  }
-
-  async function handleResetPassword(e: React.FormEvent) {
-    e.preventDefault();
-    const password = newPassword.trim();
-    if (!selectedProjectCanManage || !selectedProjectId || !passwordTarget || password.length < 6 || resettingPassword) return;
-    setResettingPassword(true);
-    try {
-      await resetProjectMemberPassword(selectedProjectId, passwordTarget.user_id, password);
-      setPasswordTarget(null);
-      setNewPassword('');
-      setToast({ msg: '登录密码已修改', kind: 'info' });
-    } catch (e: any) {
-      setToast({ msg: e?.message || '修改密码失败', kind: 'error' });
-    } finally {
-      setResettingPassword(false);
     }
   }
 
@@ -240,13 +224,17 @@ export default function MembersPage() {
         <div className="mx-auto flex max-w-[1320px] flex-wrap items-center gap-3">
           <div className="min-w-0 flex-1">
             <div className="text-xs font-bold text-brand-600">ADMIN WORKBENCH</div>
-            <h1 className="mt-1 text-[26px] font-semibold leading-tight tracking-normal text-[#10213e]">成员管理</h1>
-            <p className="mt-1 text-sm text-[#6e7d97]">维护项目成员、角色权限和登录凭据。</p>
+            <h1 className="mt-1 text-[26px] font-semibold leading-tight tracking-normal text-[#10213e]">
+              {selectedProjectCanManage ? '成员管理' : '成员信息'}
+            </h1>
+            <p className="mt-1 text-sm text-[#6e7d97]">
+              {selectedProjectCanManage ? '把团队管理中已存在的成员加入项目，并维护项目角色。' : '查看你参与项目的成员与角色信息。'}
+            </p>
           </div>
           {me && (
             <div className="flex h-10 w-full items-center gap-2 rounded-lg border border-[#d7e0ec] bg-[#f7f9fc] px-3 text-xs text-[#6e7d97] sm:w-auto">
               <ShieldCheck size={14} className={selectedProjectCanManage ? 'text-[#17a58a]' : 'text-[#8b99ae]'} aria-hidden={true} />
-              <span className="max-w-[220px] truncate">{me.email}</span>
+              <span className="max-w-[220px] truncate">{me.email.split('@', 1)[0]}</span>
               <span className={selectedProjectCanManage ? 'text-[#137f6d]' : 'text-[#6e7d97]'}>
                 {selectedProjectCanManage ? '项目负责人' : '成员列表可见'}
               </span>
@@ -269,7 +257,7 @@ export default function MembersPage() {
                   </h2>
                   <p className="mt-0.5 text-sm text-[#6e7d97]">
                     {selectedProjectCanManage
-                      ? '先按部门定位项目，再维护成员权限和登录密码。'
+                      ? '先按分类定位项目，再从团队成员中选择人员加入项目。'
                       : '同项目成员可以查看负责人和成员名单。'}
                   </p>
                 </div>
@@ -283,43 +271,55 @@ export default function MembersPage() {
             </div>
 
             <div className="p-4 md:p-5">
-              <div className="grid grid-cols-1 gap-3 xl:grid-cols-[160px_minmax(220px,300px)_minmax(0,1fr)]">
-                <label className="block">
-                  <span className="mb-1 block text-xs font-semibold text-[#6e7d97]">选择部门</span>
-                  <Select
-                    value={departmentId}
-                    onChange={handleDepartmentChange}
-                    placeholder={loading ? '加载中' : '暂无部门'}
-                    disabled={loading || departments.length === 0}
-                    options={departmentOptions}
+              <div className="grid min-w-0 grid-cols-1 gap-4">
+                <div aria-label="项目筛选" className="min-w-0">
+                  <ProjectHierarchySelector
+                  departments={departments}
+                  projects={projects}
+                  projectId={selectedProjectId}
+                  onProjectChange={handleProjectChange}
+                  loading={loading}
+                  showEnvironment
                   />
-                </label>
-                <label className="block">
-                  <span className="mb-1 block text-xs font-semibold text-[#6e7d97]">选择项目</span>
-                  <Select
-                    value={selectedProjectId}
-                    onChange={handleProjectChange}
-                    placeholder={loading ? '加载中' : '当前部门暂无项目'}
-                    disabled={loading || filteredProjects.length === 0}
-                    options={filteredProjects.map((project) => ({
-                      value: project.id,
-                      label: `${project.name} (${project.environment})`,
-                    }))}
-                  />
-                </label>
+                </div>
 
                 {selectedProjectCanManage && (
-                  <form onSubmit={handleAddMember} className="grid grid-cols-1 gap-3 md:grid-cols-[minmax(180px,1fr)_150px_112px]">
-                    <label className="block">
-                      <span className="mb-1 block text-xs font-semibold text-[#6e7d97]">用户名或邮箱</span>
-                      <Input
-                        value={memberIdentifier}
-                        onChange={(e) => setMemberIdentifier(e.target.value)}
-                        placeholder="test2 或 test2@local.dev"
+                  <form
+                    aria-label="添加项目成员"
+                    onSubmit={handleAddMember}
+                    className="grid min-w-0 grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-[minmax(180px,0.8fr)_minmax(0,1fr)_minmax(140px,0.45fr)]"
+                  >
+                    <label className="min-w-0">
+                      <span className="mb-1 block text-xs font-semibold text-[#6e7d97]">搜索团队成员</span>
+                      <input
+                        aria-label="搜索团队成员"
+                        value={memberSearch}
+                        onChange={(event) => {
+                          setMemberSearch(event.target.value);
+                          setSelectedMemberId('');
+                        }}
+                        placeholder="输入姓名、昵称或账号中的任意一个字"
+                        disabled={!selectedProjectId || saving}
+                        className="h-10 w-full rounded-lg border border-[#d7e0ec] bg-white px-3 text-sm text-[#10213e] outline-none placeholder:text-[#8b99ae] focus:border-brand-500 focus:ring-4 focus:ring-brand-500/20 disabled:bg-[#f7f9fc] disabled:text-[#8b99ae]"
+                      />
+                    </label>
+                    <label className="min-w-0">
+                      <span className="mb-1 block text-xs font-semibold text-[#6e7d97]">选择团队成员</span>
+                      <Select
+                        aria-label="选择团队成员"
+                        value={selectedMemberId}
+                        onChange={setSelectedMemberId}
+                        placeholder={filteredMemberOptions.length > 0 ? '选择尚未加入项目的成员' : memberOptions.length > 0 ? '没有匹配的团队成员' : '暂无可添加成员'}
+                        options={filteredMemberOptions.map((member) => ({
+                          value: member.user_id,
+                          label: member.nickname
+                            ? `${member.nickname}（账号：${member.username}）`
+                            : member.username,
+                        }))}
                         disabled={!selectedProjectId || saving}
                       />
                     </label>
-                    <label className="block">
+                    <label className="min-w-0">
                       <span className="mb-1 block text-xs font-semibold text-[#6e7d97]">成员角色</span>
                       <Select
                         value={memberRole}
@@ -328,11 +328,11 @@ export default function MembersPage() {
                         disabled={!selectedProjectId || saving}
                       />
                     </label>
-                    <div className="flex items-end">
+                    <div className="flex min-w-0 items-end md:col-span-2 xl:col-span-3">
                       <Button
                         type="submit"
                         className="w-full"
-                        disabled={!selectedProjectId || !memberIdentifier.trim() || saving}
+                        disabled={!selectedProjectId || !selectedMemberId || saving}
                       >
                         {saving ? <LoadingDots /> : '添加成员'}
                       </Button>
@@ -345,10 +345,7 @@ export default function MembersPage() {
                   当前项目：{selectedProject?.name || '未选择项目'}
                 </span>
                 {selectedProjectCanManage ? (
-                  <>
-                    <span>短用户名会自动识别为本地账号邮箱，例如 test2。</span>
-                    <span>账号不存在时会自动创建，初始密码 123456。</span>
-                  </>
+                  <span>这里只能选择团队管理中已启用的成员。</span>
                 ) : (
                   <span>此页面只展示同项目成员和角色，不开放成员管理操作。</span>
                 )}
@@ -373,14 +370,14 @@ export default function MembersPage() {
               <div className="py-12 text-center text-[#8b99ae]">
                 <LoadingDots />
               </div>
-            ) : filteredProjects.length === 0 ? (
-              <EmptyState title="当前部门暂无可查看项目" hint="请联系项目负责人把你加入对应项目" />
+            ) : !selectedProjectId ? (
+              <EmptyState title="当前分类暂无可查看项目" hint="请联系项目负责人把你加入对应项目" />
             ) : members.length === 0 ? (
               <EmptyState title="暂无成员" />
             ) : (
               <div>
-                <div className={`hidden gap-4 border-b border-[#d7e0ec] bg-[#f7f9fc] px-4 py-2.5 text-xs font-semibold text-[#6e7d97] md:px-5 lg:grid ${selectedProjectCanManage ? 'grid-cols-[minmax(220px,1.35fr)_120px_220px]' : 'grid-cols-[minmax(220px,1.35fr)_160px]'}`}>
-                  <div>成员账号</div>
+                <div className={`hidden gap-4 border-b border-[#d7e0ec] bg-[#f7f9fc] px-4 py-2.5 text-xs font-semibold text-[#6e7d97] md:px-5 lg:grid ${selectedProjectCanManage ? 'grid-cols-[minmax(220px,1.35fr)_120px_120px]' : 'grid-cols-[minmax(220px,1.35fr)_160px]'}`}>
+                  <div>成员</div>
                   <div>角色</div>
                   {selectedProjectCanManage && <div className="text-right">操作</div>}
                 </div>
@@ -389,14 +386,16 @@ export default function MembersPage() {
                     <div key={member.user_id} className="px-4 py-3 text-sm hover:bg-[#f7faff] md:px-5">
                       {(() => {
                         const isCurrentUser = member.user_id === me?.user_id;
+                        const memberUsername = member.username || member.email.split('@', 1)[0];
+                        const memberNickname = member.nickname?.trim();
                         return (
-                      <div className={`grid grid-cols-1 gap-3 lg:items-center ${selectedProjectCanManage ? 'lg:grid-cols-[minmax(220px,1.35fr)_120px_220px]' : 'lg:grid-cols-[minmax(220px,1.35fr)_160px]'}`}>
+                      <div className={`grid grid-cols-1 gap-3 lg:items-center ${selectedProjectCanManage ? 'lg:grid-cols-[minmax(220px,1.35fr)_120px_120px]' : 'lg:grid-cols-[minmax(220px,1.35fr)_160px]'}`}>
                         <div className="min-w-0">
                           <div className="break-words font-medium text-[#10213e]">
-                            {member.display_name || member.nickname || member.email}
+                            {memberNickname || memberUsername}
                           </div>
-                          {(member.display_name || member.nickname) && (
-                            <div className="mt-0.5 break-all text-xs text-[#6e7d97]">{member.email}</div>
+                          {memberNickname && (
+                            <div className="mt-1 break-words text-xs text-[#6e7d97]">账号：{memberUsername}</div>
                           )}
                           <div className="mt-1 break-all font-mono text-[11px] text-[#8b99ae]">{member.user_id}</div>
                         </div>
@@ -408,77 +407,21 @@ export default function MembersPage() {
                             <Button
                               type="button"
                               size="sm"
-                              variant="secondary"
-                              className="min-w-[88px]"
-                              aria-label={`修改 ${member.email} 密码`}
-                              title={`修改 ${member.email} 密码`}
-                              onClick={() => openPasswordEditor(member)}
-                            >
-                              <KeyRound size={15} aria-hidden={true} />
-                              <span>改密码</span>
-                            </Button>
-                            <Button
-                              type="button"
-                              size="sm"
                               variant="danger"
                               className="min-w-[72px]"
-                              aria-label={isCurrentUser ? `不能删除当前账号 ${member.email}` : `删除 ${member.email}`}
-                              title={isCurrentUser ? '不能删除当前登录账号' : `删除 ${member.email}`}
+                              aria-label={isCurrentUser ? `不能移出当前账号 ${member.username || member.email.split('@', 1)[0]}` : `移出项目 ${member.username || member.email.split('@', 1)[0]}`}
+                              title={isCurrentUser ? '不能把当前登录账号移出项目' : '从项目移除成员'}
                               disabled={isCurrentUser || deletingUserId === member.user_id}
                               onClick={() => handleRemoveMember(member)}
                             >
                               <Trash2 size={15} aria-hidden={true} />
-                              <span>{deletingUserId === member.user_id ? '删除中' : '删除'}</span>
+                              <span>{deletingUserId === member.user_id ? '移除中' : '移出项目'}</span>
                             </Button>
                           </div>
                         )}
                       </div>
                         );
                       })()}
-
-                      {selectedProjectCanManage && passwordTarget?.user_id === member.user_id && (
-                        <form
-                          onSubmit={handleResetPassword}
-                          className="mt-3 grid grid-cols-1 gap-3 rounded-lg border border-brand-500/20 bg-brand-500/5 p-3 sm:grid-cols-[1fr_120px_88px]"
-                        >
-                          <label className="block">
-                            <span className="mb-1 block text-xs font-medium text-[#253655]">新登录密码</span>
-                            <Input
-                              type="password"
-                              value={newPassword}
-                              onChange={(e) => setNewPassword(e.target.value)}
-                              placeholder="至少 6 位"
-                              minLength={6}
-                              autoComplete="new-password"
-                            />
-                          </label>
-                          <div className="flex items-end">
-                            <Button
-                              type="submit"
-                              size="sm"
-                              className="w-full"
-                              disabled={newPassword.trim().length < 6 || resettingPassword}
-                            >
-                              {resettingPassword ? <LoadingDots /> : '保存新密码'}
-                            </Button>
-                          </div>
-                          <div className="flex items-end">
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="secondary"
-                              className="w-full"
-                              onClick={() => {
-                                setPasswordTarget(null);
-                                setNewPassword('');
-                              }}
-                              disabled={resettingPassword}
-                            >
-                              取消
-                            </Button>
-                          </div>
-                        </form>
-                      )}
                     </div>
                   ))}
                 </div>

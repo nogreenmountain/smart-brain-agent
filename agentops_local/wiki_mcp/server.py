@@ -139,7 +139,7 @@ def list_meeting_summaries(
     )
 
 
-@mcp.tool(description="Search meeting summaries, decisions, action items, participants, and tags using hybrid semantic and keyword retrieval. Access inherits project membership.")
+@mcp.tool(description="Search extracted meeting-file contents, titles, and participants using hybrid semantic and keyword retrieval. Access inherits project membership.")
 def search_meeting_summaries(
     query: str,
     project_id: str | None = None,
@@ -154,7 +154,7 @@ def search_meeting_summaries(
     )
 
 
-@mcp.tool(description="Read one complete standardized Markdown meeting summary. Access inherits project membership.")
+@mcp.tool(description="Read one meeting's complete extracted file content and metadata. Access inherits project membership.")
 def get_meeting_summary(meeting_summary_id: str) -> dict[str, Any]:
     user_id, _ = _identity()
     return operations.get_meeting_summary(
@@ -254,7 +254,7 @@ def get_examples(
     )
 
 
-@mcp.tool(description="Submit a structured memory proposal to the existing administrator review queue. This never publishes directly.")
+@mcp.tool(description="Publish structured memory directly to the project Wiki after scope, project access, source, and content safety checks.")
 def propose_memory(
     project_id: str,
     title: str,
@@ -285,7 +285,7 @@ def main() -> None:
         item.strip()
         for item in _env(
             "WIKI_MCP_ALLOWED_HOSTS",
-            "127.0.0.1:*,localhost:*,192.168.1.40:*,wiki-mcp:*",
+            "127.0.0.1:*,localhost:*,192.168.10.29:*,wiki-mcp:*",
         ).split(",")
         if item.strip()
     ]
@@ -293,7 +293,7 @@ def main() -> None:
         item.strip()
         for item in _env(
             "WIKI_MCP_ALLOWED_ORIGINS",
-            "http://127.0.0.1:*,http://localhost:*,http://192.168.1.40:*",
+            "http://127.0.0.1:*,http://localhost:*,http://192.168.10.29:*",
         ).split(",")
         if item.strip()
     ]

@@ -198,16 +198,16 @@ class ProjectWikiServiceTests(unittest.TestCase):
         finish_run.assert_called_once()
         self.assertEqual(finish_run.call_args.kwargs["pending_review_count"], 0)
 
-    def test_mcp_memory_proposal_is_always_sent_to_admin_review(self) -> None:
+    def test_mcp_memory_proposal_is_published_directly(self) -> None:
         service = _load_module("project_wiki_service_proposal_under_test", "project_wiki/service.py")
         project_id = uuid.UUID("00000000-0000-0000-0000-000000000010")
         user_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
         run_id = uuid.UUID("00000000-0000-0000-0000-000000000099")
-        change_id = uuid.UUID("00000000-0000-0000-0000-000000000040")
+        page_id = uuid.UUID("00000000-0000-0000-0000-000000000040")
 
         with (
             patch.object(service, "_insert_compile_run", return_value=run_id),
-            patch.object(service, "_persist_change", return_value=change_id) as persist,
+            patch.object(service, "_apply_candidate", return_value=page_id) as apply_candidate,
             patch.object(service, "_finish_compile_run") as finish,
         ):
             result = service.create_memory_proposal(
@@ -222,13 +222,14 @@ class ProjectWikiServiceTests(unittest.TestCase):
                 source_page_ids=[],
             )
 
-        self.assertEqual(result, change_id)
-        candidate = persist.call_args.kwargs["candidate"]
+        self.assertEqual(result, page_id)
+        candidate = apply_candidate.call_args.kwargs["candidate"]
         self.assertEqual(candidate.memory_kind, "failure_case")
         self.assertEqual(candidate.tags, ["AI Monitor", "安装"])
-        self.assertEqual(persist.call_args.kwargs["disposition"], "pending_review")
-        self.assertEqual(persist.call_args.kwargs["reason_code"], "mcp_proposal")
-        self.assertEqual(finish.call_args.kwargs["pending_review_count"], 1)
+        self.assertEqual(apply_candidate.call_args.kwargs["created_by_user_id"], user_id)
+        self.assertEqual(apply_candidate.call_args.kwargs["reason_code"], "mcp_direct_publish")
+        self.assertEqual(finish.call_args.kwargs["auto_applied_count"], 1)
+        self.assertEqual(finish.call_args.kwargs["pending_review_count"], 0)
 
 
 if __name__ == "__main__":

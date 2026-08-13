@@ -93,11 +93,14 @@ def _meeting_hit_summary(item: Any, *, include_markdown: bool = False) -> dict[s
         "project_name": item.project_name,
         "title": item.title,
         "meeting_date": str(item.meeting_date),
+        "participant_user_ids": [str(value) for value in item.participant_user_ids],
         "participants": list(item.participants),
         "tags": list(item.tags),
         "decisions": list(item.decisions),
         "action_items": list(item.action_items),
         "source_filename": item.source_filename,
+        "source_format": item.source_format,
+        "source_size_bytes": item.source_size_bytes,
         "created_by_name": item.created_by_name,
         "created_at": str(item.created_at),
         "updated_at": str(item.updated_at),
@@ -600,7 +603,7 @@ class WikiOperations:
                 ).all()
                 if len(rows) != len(set(source_ids)):
                     raise ValueError("Every source page must exist in the selected project")
-            change_id = create_memory_proposal(
+            page_id = create_memory_proposal(
                 orm,
                 project_id=resolved,
                 proposed_by_user_id=user_id,
@@ -612,9 +615,9 @@ class WikiOperations:
                 source_page_ids=source_ids,
             )
         return {
-            "change_id": str(change_id),
+            "page_id": str(page_id),
             "project_id": str(resolved),
-            "status": "pending_review",
+            "status": "published",
             "uploaded_by": uploaded_by,
-            "message": "Proposal created for administrator review; no Wiki page was published directly.",
+            "message": "Memory passed safety checks and was published directly to the project Wiki.",
         }

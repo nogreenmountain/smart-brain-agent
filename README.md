@@ -1,10 +1,12 @@
 # Smart Brain Agent 局域网部署包
 
-这是“智慧大脑 Agent”的可迁移部署包，用于部署项目知识库、持续更新的 Project Wiki、成员 Wiki、会议记录、AI Monitor 和 AgentOps Trace 复盘环境。
+这是“智慧大脑 Agent”的可迁移部署包，用于部署项目知识库、持续更新的智慧 Wiki（项目 Wiki / 成员 Wiki）、统一上传工作区、AI 工作台、AI Monitor 和 AgentOps Trace 复盘环境。
+
+当前代码基线同步自 2026-08-13 生产验收版本。生产数据库、容器卷、机器专用镜像 ID 和真实凭据不属于本仓库。
 
 ## 包含什么
 
-- `agentops_local/`：本项目后端补丁层，包含知识库、Project Wiki、成员 Wiki、会议记录、项目管理、成员管理、AI Monitor、Token 统计与工作日志等接口。
+- `agentops_local/`：本项目后端补丁层，包含知识库、智慧 Wiki、会议记录、三级项目分类、知识资产迁移、成员管理、AI Monitor、Token 排行榜与工作日志等接口。
 - `smartbrain-dashboard/`：中文智慧大脑前端，默认端口 `3002`。
 - `api/`、`dashboard/`、`opentelemetry-collector/`：AgentOps 基础 API、Trace Dashboard、OTLP Collector 源码。
 - `rag_services/`：BGE-M3 embedding 与 reranker 服务。
@@ -27,17 +29,17 @@
 
 - `deploy/lan/README-LAN-DEPLOY.md`
 - `deploy/lan/REUSE-GUIDE.md`
+- `deploy/lan/UPGRADE-2026-08-13.md`
 - `docs/WIKI-MCP.md`
 
 最短流程：
 
 ```powershell
 cd smart-brain-agent
-Copy-Item .env.lan.example .env
+# 先启动/准备 Supabase 本地库，并按文件名顺序执行 supabase/migrations
+# 再生成本机 .env、构建镜像并启动服务
+powershell -ExecutionPolicy Bypass -File deploy/lan/New-LanEnv.ps1 -ServerIP 192.168.1.40
 notepad .env
-
-# 先启动/准备 Supabase 本地库，并执行 supabase/migrations
-# 然后构建镜像并启动服务
 powershell -ExecutionPolicy Bypass -File deploy/lan/Build-Images.ps1
 powershell -ExecutionPolicy Bypass -File deploy/lan/Start-Lan.ps1
 powershell -ExecutionPolicy Bypass -File deploy/lan/Initialize-Database.ps1
@@ -52,7 +54,7 @@ powershell -ExecutionPolicy Bypass -File deploy/lan/Initialize-Database.ps1
 - API：`http://<服务器IP>:8000`
 - OTLP Collector：`http://<服务器IP>:4318`
 
-当前权限口径：所有已登录用户可以只读浏览全部项目的知识库、Project Wiki、会议记录、成员列表和成员 Token 汇总；项目管理仍只显示本人参与的项目。具体 AI 对话与 AI 工作日志仅本人和管理员可见，管理员查看对话还受成员个人隐私开关控制。所有上传、审批、删除和项目管理写操作仍按项目角色授权。
+当前产品口径：侧栏提供“智慧 Wiki”“上传资料”“AI 工作台”等统一入口；项目分类固定为“第一分级 → 第二分级 → 项目”，每个第一分级自动带一个不可单独维护的“直属分级”。所有上传、审批、删除、知识资产迁移和项目管理写操作仍按项目角色授权。
 
 员工端一键安装器可重新构建：
 
@@ -70,4 +72,4 @@ powershell -ExecutionPolicy Bypass -File employee_telemetry\windows_installer\Bu
 - 管理员：`hanshangbo` / `12345678`
 - 测试成员：`test1` 到 `test12` / `123456`
 
-正式给客户部署前，请立即修改管理员密码，并把 HTTP 升级为 HTTPS。
+正式给客户部署前，请立即修改管理员密码、测试账号密码和 ClickHouse 默认密码，并把 HTTP 升级为 HTTPS。初始化 SQL 只适用于演示/验收环境；正式环境应替换为客户自己的组织、成员和项目数据。

@@ -40,12 +40,13 @@ class _Result:
 
 
 class _Orm:
-    def __init__(self):
+    def __init__(self, *, project_department_id="research"):
         self.calls = []
         self.commits = 0
         self.file_insert_count = 0
         self.intake = None
         self.files = []
+        self.project_department_id = project_department_id
 
     def execute(self, statement, params=None):
         sql = str(statement)
@@ -53,6 +54,8 @@ class _Orm:
         self.calls.append((sql, values))
         if "SELECT content_hash" in sql:
             return _Result(rows=[])
+        if "SELECT department_id" in sql and "FROM public.projects" in sql:
+            return _Result(SimpleNamespace(department_id=self.project_department_id))
         if "INSERT INTO public.project_material_intakes" in sql:
             return _Result(SimpleNamespace(id="00000000-0000-0000-0000-000000000040"))
         if "INSERT INTO public.project_material_intake_files" in sql:
@@ -75,6 +78,53 @@ class _Orm:
 
 
 class ProjectMaterialsRouteTests(unittest.TestCase):
+    def test_preview_rejects_stale_department_snapshot(self) -> None:
+        route = _load_route()
+        orm = _Orm(project_department_id="education-direct")
+        project_id = uuid.UUID("00000000-0000-0000-0000-000000000010")
+
+        with (
+            patch.object(route, "current_user_id", return_value=uuid.uuid4()),
+            patch.object(route, "require_member", return_value=None),
+        ):
+            with self.assertRaises(route.HTTPException) as raised:
+                route.preview_project_materials(
+                    request=object(),
+                    project_id=project_id,
+                    department_id="research-direct",
+                    files=[],
+                    orm=orm,
+                )
+
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertIn("project category changed", raised.exception.detail)
+        self.assertFalse(
+            any("INSERT INTO public.project_material_intakes" in sql for sql, _ in orm.calls)
+        )
+
+    def test_preview_uses_locked_current_project_department(self) -> None:
+        route = _load_route()
+        orm = _Orm(project_department_id="research-direct")
+
+        with (
+            patch.object(route, "current_user_id", return_value=uuid.uuid4()),
+            patch.object(route, "require_member", return_value=None),
+        ):
+            with self.assertRaises(route.HTTPException):
+                route.preview_project_materials(
+                    request=object(),
+                    project_id=uuid.UUID("00000000-0000-0000-0000-000000000010"),
+                    department_id="research-direct",
+                    files=[],
+                    orm=orm,
+                )
+
+        project_sql = next(
+            sql for sql, _ in orm.calls
+            if "SELECT department_id" in sql and "FROM public.projects" in sql
+        )
+        self.assertIn("FOR SHARE", project_sql)
+
     def test_preview_stores_pending_files_without_ingesting_documents(self) -> None:
         route = _load_route()
         orm = _Orm()

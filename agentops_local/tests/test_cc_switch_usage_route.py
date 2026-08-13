@@ -5,7 +5,7 @@ import os
 import sys
 import unittest
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -75,6 +75,54 @@ class _Orm:
 
 
 class CCSwitchUsageRouteTests(unittest.TestCase):
+    def test_default_shared_session_stop_is_next_19_shanghai(self) -> None:
+        before_cutoff = datetime(2026, 8, 13, 8, 0, tzinfo=timezone.utc)
+        after_cutoff = datetime(2026, 8, 13, 12, 0, tzinfo=timezone.utc)
+
+        same_day = route.resolve_shared_session_stop_at(
+            stop_mode="default_19",
+            scheduled_stop_at=None,
+            now=before_cutoff,
+        )
+        next_day = route.resolve_shared_session_stop_at(
+            stop_mode="default_19",
+            scheduled_stop_at=None,
+            now=after_cutoff,
+        )
+
+        self.assertEqual(same_day, datetime(2026, 8, 13, 11, 0, tzinfo=timezone.utc))
+        self.assertEqual(next_day, datetime(2026, 8, 14, 11, 0, tzinfo=timezone.utc))
+
+    def test_manual_shared_session_has_24_hour_safety_cutoff(self) -> None:
+        now = datetime(2026, 8, 13, 8, 0, tzinfo=timezone.utc)
+
+        stop_at = route.resolve_shared_session_stop_at(
+            stop_mode="manual_only",
+            scheduled_stop_at=None,
+            now=now,
+        )
+
+        self.assertEqual(stop_at, now + timedelta(hours=24))
+
+    def test_custom_shared_session_stop_rejects_unsafe_ranges(self) -> None:
+        now = datetime(2026, 8, 13, 8, 0, tzinfo=timezone.utc)
+
+        with self.assertRaises(route.HTTPException) as too_soon:
+            route.resolve_shared_session_stop_at(
+                stop_mode="custom",
+                scheduled_stop_at=now + timedelta(minutes=4),
+                now=now,
+            )
+        with self.assertRaises(route.HTTPException) as too_late:
+            route.resolve_shared_session_stop_at(
+                stop_mode="custom",
+                scheduled_stop_at=now + timedelta(hours=25),
+                now=now,
+            )
+
+        self.assertEqual(too_soon.exception.status_code, 422)
+        self.assertEqual(too_late.exception.status_code, 422)
+
     def test_successful_sync_covering_query_marks_snapshot_authoritative(self) -> None:
         class CoverageOrm:
             def __init__(self) -> None:
@@ -169,7 +217,7 @@ class CCSwitchUsageRouteTests(unittest.TestCase):
             source_table="usage_daily_rollups",
             request_count=2,
             success_count=2,
-            total_tokens=430,
+            total_tokens=1620,
             rows=[
                 route.CCSwitchUsageRowInput(
                     usage_date=date(2026, 8, 7),
@@ -180,13 +228,13 @@ class CCSwitchUsageRouteTests(unittest.TestCase):
                     pricing_model="gpt-5",
                     request_count=2,
                     success_count=2,
-                    input_tokens=100,
+                    input_tokens=1000,
                     output_tokens=20,
-                    cache_read_tokens=300,
-                    cache_creation_tokens=10,
-                    total_tokens=430,
+                    cache_read_tokens=600,
+                    cache_creation_tokens=0,
+                    total_tokens=1620,
                     total_cost_usd=0.25,
-                    input_token_semantics=1,
+                    input_token_semantics=0,
                 )
             ],
         )
@@ -210,7 +258,7 @@ class CCSwitchUsageRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status, "ok")
         self.assertEqual(response.employee_id, "test1")
-        self.assertEqual(response.total_tokens, 430)
+        self.assertEqual(response.total_tokens, 1020)
         self.assertEqual(orm.commits, 1)
         self.assertTrue(
             any(
@@ -226,7 +274,7 @@ class CCSwitchUsageRouteTests(unittest.TestCase):
         self.assertEqual(row_insert["user_id"], str(user_id))
         self.assertEqual(row_insert["employee_id"], "test1")
         self.assertEqual(row_insert["device_id"], "device-123")
-        self.assertEqual(row_insert["total_tokens"], 430)
+        self.assertEqual(row_insert["total_tokens"], 1020)
         audit.assert_called_once()
         self.assertEqual(audit.call_args.kwargs["action"], "ai_usage_sync")
 

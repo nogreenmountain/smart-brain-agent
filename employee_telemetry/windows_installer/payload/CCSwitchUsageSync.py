@@ -15,6 +15,10 @@ from typing import Any
 
 
 SHANGHAI_TIMEZONE = timezone(timedelta(hours=8))
+CACHE_INCLUSIVE_APP_TYPES = frozenset({"codex", "gemini"})
+INPUT_TOKEN_SEMANTICS_LEGACY = 0
+INPUT_TOKEN_SEMANTICS_TOTAL = 1
+INPUT_TOKEN_SEMANTICS_FRESH = 2
 
 
 @dataclass(frozen=True)
@@ -35,9 +39,27 @@ class CCSwitchUsageRow:
     input_token_semantics: int
 
     @property
+    def fresh_input_tokens(self) -> int:
+        if self.input_token_semantics == INPUT_TOKEN_SEMANTICS_FRESH:
+            return self.input_tokens
+        if self.app_type not in CACHE_INCLUSIVE_APP_TYPES:
+            return self.input_tokens
+        if self.input_token_semantics == INPUT_TOKEN_SEMANTICS_TOTAL:
+            cached_tokens = self.cache_read_tokens + self.cache_creation_tokens
+            if self.input_tokens >= cached_tokens:
+                return self.input_tokens - cached_tokens
+            return self.input_tokens
+        if (
+            self.input_token_semantics == INPUT_TOKEN_SEMANTICS_LEGACY
+            and self.input_tokens >= self.cache_read_tokens
+        ):
+            return self.input_tokens - self.cache_read_tokens
+        return self.input_tokens
+
+    @property
     def total_tokens(self) -> int:
         return (
-            self.input_tokens
+            self.fresh_input_tokens
             + self.output_tokens
             + self.cache_read_tokens
             + self.cache_creation_tokens
@@ -307,6 +329,15 @@ def sync_once(
         raise ValueError("trigger must be automatic or manual")
     if not 1 <= lookback_days <= 3650:
         raise ValueError("lookback_days must be between 1 and 3650")
+    if (runtime_dir / "shared-device.json").is_file():
+        return {
+            "status": "shared_device",
+            "trigger": trigger,
+            "request_id": request_id,
+            "row_count": 0,
+            "request_count": 0,
+            "total_tokens": 0,
+        }
 
     credentials = _load_json(runtime_dir / "device-credentials.json")
     manifest = _load_json(runtime_dir / "manifest.json")

@@ -105,5 +105,5 @@ docker compose -f compose.server.yaml -f compose.server.override.yaml `
 ```
 
 The SmartBrain page is available at
-`http://192.168.1.40:3002/workday`. Replay links open the AgentOps Dashboard
+`http://192.168.10.29:3002/workday`. Replay links open the AgentOps Dashboard
 on port `3001`.

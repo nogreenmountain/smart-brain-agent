@@ -6,8 +6,8 @@ import { ClipboardCheck, Download, ExternalLink, FileText, FolderKanban, Trash2,
 import {
   ApiError,
   Department,
-  DepartmentId,
   KnowledgeApprovalStatus,
+  KnowledgeLedgerCategory,
   KnowledgeLedger,
   KnowledgeLedgerDocument,
   deleteKnowledgeDocument,
@@ -20,6 +20,7 @@ import {
 import { Button } from '@/components/Button';
 import { EmptyState, LoadingDots, Toast } from '@/components/Feedback';
 import { Input } from '@/components/Input';
+import { ProjectHierarchySelector } from '@/components/ProjectHierarchySelector';
 import { Select } from '@/components/Select';
 
 const APPROVAL_OPTIONS: { value: string; label: string }[] = [
@@ -28,6 +29,11 @@ const APPROVAL_OPTIONS: { value: string; label: string }[] = [
   { value: 'pending_review', label: '待审批' },
   { value: 'approved', label: '已审批入库' },
   { value: 'rejected', label: '已驳回' },
+];
+
+const CATEGORY_OPTIONS: { value: KnowledgeLedgerCategory; label: string }[] = [
+  { value: 'project_material', label: '项目原始资料' },
+  { value: 'project_wiki_source', label: '项目 Wiki 原始资料' },
 ];
 
 const approvalLabel: Record<KnowledgeApprovalStatus, string> = {
@@ -59,8 +65,8 @@ export default function KnowledgePage() {
   const router = useRouter();
   const [departments, setDepartments] = useState<Department[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
-  const [departmentId, setDepartmentId] = useState<DepartmentId>('research');
   const [projectId, setProjectId] = useState('');
+  const [category, setCategory] = useState<KnowledgeLedgerCategory>('project_material');
   const [uploaderUserId, setUploaderUserId] = useState('');
   const [approvalStatus, setApprovalStatus] = useState('');
   const [uploadedFrom, setUploadedFrom] = useState('');
@@ -72,16 +78,6 @@ export default function KnowledgePage() {
   const [loadingLedger, setLoadingLedger] = useState(false);
   const [deletingDocumentId, setDeletingDocumentId] = useState<string | null>(null);
   const [toast, setToast] = useState<{ msg: string; kind: 'info' | 'error' } | null>(null);
-
-  const departmentOptions = useMemo(
-    () => departments.map((department) => ({ value: department.id, label: department.name })),
-    [departments],
-  );
-
-  const filteredProjects = useMemo(
-    () => projects.filter((project) => (project.department_id || 'research') === departmentId),
-    [departmentId, projects],
-  );
 
   const selectedProject = useMemo(
     () => projects.find((project) => project.id === projectId) || null,
@@ -104,7 +100,7 @@ export default function KnowledgePage() {
       setLoading(true);
       try {
         const [departmentRows, projectRows] = await Promise.all([
-          listProjectMemoryDepartments(),
+          listProjectMemoryDepartments(true),
           listProjectCatalog(),
         ]);
         setDepartments(departmentRows);
@@ -116,12 +112,7 @@ export default function KnowledgePage() {
         const queryProject = queryProjectId
           ? projectRows.find((project) => project.id === queryProjectId)
           : null;
-        const firstDepartment = (queryProject?.department_id || departmentRows[0]?.id || 'research') as DepartmentId;
-        setDepartmentId(firstDepartment);
-        const initialProject =
-          queryProject ||
-          projectRows.find((project) => (project.department_id || 'research') === firstDepartment) ||
-          projectRows[0];
+        const initialProject = queryProject || projectRows[0];
         if (initialProject) setProjectId(initialProject.id);
       } catch (e: any) {
         setToast({ msg: e?.message || '加载知识库台账失败', kind: 'error' });
@@ -132,16 +123,6 @@ export default function KnowledgePage() {
   }, []);
 
   useEffect(() => {
-    const next = filteredProjects[0]?.id || '';
-    if (!filteredProjects.some((project) => project.id === projectId)) {
-      setProjectId(next);
-      setUploaderUserId('');
-      setApprovalStatus('');
-      setLedger(null);
-    }
-  }, [filteredProjects, projectId]);
-
-  useEffect(() => {
     if (!projectId) {
       setLedger(null);
       return;
@@ -150,6 +131,7 @@ export default function KnowledgePage() {
     setLoadingLedger(true);
     listKnowledgeLedger({
       projectId,
+      category,
       uploaderUserId: uploaderUserId || undefined,
       approvalStatus: (approvalStatus || undefined) as KnowledgeApprovalStatus | undefined,
       uploadedFrom: uploadedFrom || undefined,
@@ -176,7 +158,14 @@ export default function KnowledgePage() {
     return () => {
       active = false;
     };
-  }, [approvalStatus, projectId, reviewedFrom, reviewedTo, uploadedFrom, uploadedTo, uploaderUserId]);
+  }, [approvalStatus, category, projectId, reviewedFrom, reviewedTo, uploadedFrom, uploadedTo, uploaderUserId]);
+
+  function handleProjectChange(value: string) {
+    setProjectId(value);
+    setUploaderUserId('');
+    setApprovalStatus('');
+    setLedger(null);
+  }
 
   function openReview() {
     if (!projectId) return;
@@ -193,6 +182,7 @@ export default function KnowledgePage() {
       await deleteKnowledgeDocument(document.document_id);
       const data = await listKnowledgeLedger({
         projectId,
+        category,
         uploaderUserId: uploaderUserId || undefined,
         approvalStatus: (approvalStatus || undefined) as KnowledgeApprovalStatus | undefined,
         uploadedFrom: uploadedFrom || undefined,
@@ -233,32 +223,29 @@ export default function KnowledgePage() {
       <main className="flex-1 overflow-y-auto px-4 py-6 md:px-6">
         <div className="mx-auto grid max-w-[1320px] gap-5">
           <section className="rounded-lg border border-[#d7e0ec] bg-white p-4 shadow-[0_10px_24px_rgba(15,35,66,0.04)] md:p-5">
-            <div className="grid grid-cols-1 gap-3 lg:grid-cols-4 xl:grid-cols-7">
-              <Filter label="选择部门">
+            <div className="grid grid-cols-1 gap-3 lg:grid-cols-4 xl:grid-cols-8">
+              <Filter label="资料分类">
                 <Select
-                  value={departmentId}
-                  onChange={(value) => setDepartmentId(value as DepartmentId)}
-                  placeholder={loading ? '加载中' : '选择部门'}
-                  options={departmentOptions}
-                  disabled={loading || departmentOptions.length === 0}
-                />
-              </Filter>
-              <Filter label="选择项目" className="lg:col-span-2">
-                <Select
-                  value={projectId}
+                  value={category}
                   onChange={(value) => {
-                    setProjectId(value);
+                    setCategory(value as KnowledgeLedgerCategory);
                     setUploaderUserId('');
                     setApprovalStatus('');
+                    setReviewedFrom('');
+                    setReviewedTo('');
                   }}
-                  placeholder={filteredProjects.length === 0 ? '当前部门暂无项目' : '选择项目'}
-                  options={filteredProjects.map((project) => ({
-                    value: project.id,
-                    label: `${project.name} (${project.environment})`,
-                  }))}
-                  disabled={loading || filteredProjects.length === 0}
+                  options={CATEGORY_OPTIONS}
                 />
               </Filter>
+              <ProjectHierarchySelector
+                departments={departments}
+                projects={projects}
+                projectId={projectId}
+                onProjectChange={handleProjectChange}
+                loading={loading}
+                showEnvironment
+                className="lg:col-span-3 xl:col-span-3"
+              />
               <Filter label="上传成员">
                 <Select
                   value={uploaderUserId}
@@ -268,22 +255,24 @@ export default function KnowledgePage() {
                   disabled={!projectId || loadingLedger}
                 />
               </Filter>
-              <Filter label="审批状态">
-                <Select
-                  value={approvalStatus}
-                  onChange={setApprovalStatus}
-                  placeholder="全部状态"
-                  options={APPROVAL_OPTIONS}
-                  disabled={!projectId || loadingLedger}
-                />
-              </Filter>
+              {category === 'project_material' && (
+                <Filter label="审批状态">
+                  <Select
+                    value={approvalStatus}
+                    onChange={setApprovalStatus}
+                    placeholder="全部状态"
+                    options={APPROVAL_OPTIONS}
+                    disabled={!projectId || loadingLedger}
+                  />
+                </Filter>
+              )}
               <Filter label="上传开始">
                 <Input type="date" value={uploadedFrom} onChange={(event) => setUploadedFrom(event.target.value)} />
               </Filter>
               <Filter label="上传结束">
                 <Input type="date" value={uploadedTo} onChange={(event) => setUploadedTo(event.target.value)} />
               </Filter>
-              {ledger?.permissions.can_review && (
+              {category === 'project_material' && ledger?.permissions.can_review && (
                 <>
                   <Filter label="审批开始">
                     <Input type="date" value={reviewedFrom} onChange={(event) => setReviewedFrom(event.target.value)} />
@@ -335,7 +324,7 @@ export default function KnowledgePage() {
             <div className="flex flex-wrap items-center gap-3 border-b border-[#d7e0ec] bg-[#f7faff] px-5 py-4">
               <div className="flex items-center gap-2 text-sm font-semibold text-[#10213e]">
                 <ClipboardCheck size={18} className="text-brand-600" aria-hidden={true} />
-                项目资料台账
+                {category === 'project_material' ? '项目原始资料' : '项目 Wiki 原始资料'}
               </div>
               <div className="flex-1" />
               <span className="rounded-full border border-brand-500/20 bg-brand-500/10 px-3 py-1 text-xs font-medium text-brand-700">
@@ -350,7 +339,10 @@ export default function KnowledgePage() {
             ) : !projectId ? (
               <EmptyState title="请选择项目" hint="先选择部门和项目后查看资料台账" />
             ) : !ledger || ledger.documents.length === 0 ? (
-              <EmptyState title="暂无项目资料" hint="项目成员提交原始资料后会在这里形成台账" />
+              <EmptyState
+                title={category === 'project_material' ? '暂无项目原始资料' : '暂无项目 Wiki 原始资料'}
+                hint={category === 'project_material' ? '项目成员提交原始资料后会在这里形成台账' : '项目 Wiki 生成的原始页面资料会单独显示在这里'}
+              />
             ) : (
               <div className="overflow-x-auto">
                 <table className="min-w-[1080px] w-full border-collapse text-sm">

@@ -2,7 +2,7 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import WorkdayPage from './page';
+import WorkdayPage from './legacy-page';
 
 const mocks = vi.hoisted(() => ({
   getAIUsageOptions: vi.fn(),

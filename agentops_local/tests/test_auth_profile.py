@@ -44,10 +44,20 @@ class _Result:
 
 
 class _ProfileOrm:
-    def __init__(self, *, nickname=None, password_matches=True, detail_visible_to_admin=False):
+    def __init__(
+        self,
+        *,
+        nickname=None,
+        password_matches=True,
+        detail_visible_to_admin=False,
+        is_system_admin=False,
+        manages_project=False,
+    ):
         self.nickname = nickname
         self.password_matches = password_matches
         self.detail_visible_to_admin = detail_visible_to_admin
+        self.is_system_admin = is_system_admin
+        self.manages_project = manages_project
         self.calls: list[tuple[str, dict]] = []
         self.commits = 0
         self.rollbacks = 0
@@ -65,11 +75,18 @@ class _ProfileOrm:
                     nickname=self.nickname,
                     display_name=self.nickname or email,
                     ai_detail_visible_to_admin=self.detail_visible_to_admin,
+                    is_system_admin=self.is_system_admin,
                     avatar_url=None,
                 )
             )
         if "FROM public.user_orgs" in sql:
             return _Result(rows=[])
+        if "FROM public.project_members" in sql:
+            return _Result(
+                first=SimpleNamespace(can_manage_projects=True)
+                if self.manages_project
+                else None
+            )
         if "encrypted_password = crypt" in sql:
             return _Result(first=SimpleNamespace(ok=1) if self.password_matches else None)
         if "ai_detail_visible_to_admin" in sql and "INSERT INTO public.users" in sql:
@@ -101,6 +118,26 @@ class AuthProfileTests(unittest.TestCase):
 
         self.assertIsNone(response.nickname)
         self.assertEqual(response.display_name, "test1@local.dev")
+
+    def test_me_exposes_system_administrator_flag(self) -> None:
+        response = route.auth_me(request=_request(), orm=_ProfileOrm(is_system_admin=True))
+
+        self.assertTrue(response.is_system_admin)
+
+    def test_me_grants_project_management_only_for_system_admin_or_direct_project_admin(self) -> None:
+        ordinary = route.auth_me(request=_request(), orm=_ProfileOrm())
+        direct_admin = route.auth_me(
+            request=_request(),
+            orm=_ProfileOrm(manages_project=True),
+        )
+        system_admin = route.auth_me(
+            request=_request(),
+            orm=_ProfileOrm(is_system_admin=True),
+        )
+
+        self.assertFalse(ordinary.can_manage_projects)
+        self.assertTrue(direct_admin.can_manage_projects)
+        self.assertTrue(system_admin.can_manage_projects)
 
     def test_profile_update_trims_nickname_and_returns_it_as_display_name(self) -> None:
         orm = _ProfileOrm(nickname="研发小王")

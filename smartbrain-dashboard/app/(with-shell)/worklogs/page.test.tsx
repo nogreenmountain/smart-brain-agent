@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import WorklogsPage from './page';
+import WorklogsPage from './legacy-page';
 
 const mocks = vi.hoisted(() => ({
   getAIDailyWorkLogs: vi.fn(),

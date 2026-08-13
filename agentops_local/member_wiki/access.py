@@ -78,7 +78,16 @@ def load_member_access_context(orm, *, user_id: uuid.UUID) -> MemberAccessContex
         full_name=profile.full_name,
         nickname=getattr(profile, "nickname", None),
     )
-    is_admin = orm.execute(
+    system_admin_row = orm.execute(
+        text("""
+            SELECT COALESCE(is_system_admin, false) AS is_system_admin
+            FROM public.users
+            WHERE id = :user_id
+        """),
+        {"user_id": str(user_id)},
+    ).first()
+    is_system_admin = bool(system_admin_row and system_admin_row.is_system_admin)
+    is_admin = is_system_admin or orm.execute(
         text("""
             SELECT 1
             FROM public.user_orgs caller_org
@@ -102,8 +111,22 @@ def load_member_access_context(orm, *, user_id: uuid.UUID) -> MemberAccessContex
             accessible_members=(current,),
         )
 
-    rows = orm.execute(
-        text("""
+    if is_system_admin:
+        rows = orm.execute(
+            text("""
+                SELECT DISTINCT au.id::text AS user_id, au.email, pu.full_name, pu.nickname,
+                       COALESCE(NULLIF(BTRIM(pu.nickname), ''), pu.full_name, au.email) AS sort_name
+                FROM public.project_members target
+                JOIN auth.users au ON au.id = target.user_id
+                LEFT JOIN public.users pu ON pu.id = au.id
+                WHERE au.email IS NOT NULL
+                ORDER BY sort_name, au.email
+            """),
+            {"user_id": str(user_id)},
+        ).all()
+    else:
+        rows = orm.execute(
+            text("""
             SELECT DISTINCT au.id::text AS user_id, au.email, pu.full_name, pu.nickname,
                    COALESCE(NULLIF(BTRIM(pu.nickname), ''), pu.full_name, au.email) AS sort_name
             FROM public.user_orgs caller_org
@@ -121,9 +144,9 @@ def load_member_access_context(orm, *, user_id: uuid.UUID) -> MemberAccessContex
               AND caller.role::text IN ('owner', 'admin')
               AND au.email IS NOT NULL
             ORDER BY sort_name, au.email
-        """),
-        {"user_id": str(user_id)},
-    ).all()
+            """),
+            {"user_id": str(user_id)},
+        ).all()
     members = tuple(
         _identity(
             user_id=row.user_id,

@@ -7,7 +7,6 @@ import {
   Clock3,
   Copy,
   Download,
-  ExternalLink,
   GitBranch,
   KeyRound,
   Network,
@@ -17,10 +16,12 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
+import { downloadClaudeCodeInstaller } from '@/utils/claude-code-installer';
 import { CODEX_PLUGIN_BUNDLE_PATH, downloadCodexInstaller } from '@/utils/codex-plugin-installer';
 import { mcpEndpointForLocation } from '@/utils/service-endpoints';
 import {
   ApiError,
+  Department,
   Project,
   ProjectWikiChange,
   ProjectWikiMcpToken,
@@ -31,6 +32,7 @@ import {
   getProjectWikiOverview,
   listProjectWikiMcpTokens,
   listProjectCatalog,
+  listProjectMemoryDepartments,
   revokeProjectWikiMcpToken,
   reviewProjectWikiChange,
 } from '@/lib/api';
@@ -38,8 +40,11 @@ import { Button } from '@/components/Button';
 import { LoadingDots, Toast } from '@/components/Feedback';
 import { Input } from '@/components/Input';
 import { PageBody, PageHeader, PageShell } from '@/components/PageLayout';
+import { ProjectHierarchySelector } from '@/components/ProjectHierarchySelector';
 import { Select } from '@/components/Select';
 import { WikiMcpGuideDialog } from './WikiMcpGuideDialog';
+import { WikiWorkspaceTabs } from '@/components/wiki-workspace/WikiWorkspaceTabs';
+import { MemberWikiWorkspace } from '../member-wiki/MemberWikiWorkspace';
 
 const TYPE_LABELS: Record<string, string> = {
   fact: '事实',
@@ -60,6 +65,11 @@ function fmtTime(value?: string | null): string {
 }
 
 export default function ProjectWikiPage() {
+  const [activeWikiView, setActiveWikiView] = useState<'project' | 'member'>(() => {
+    if (typeof window === 'undefined') return 'project';
+    return new URLSearchParams(window.location.search).get('view') === 'member' ? 'member' : 'project';
+  });
+  const [departments, setDepartments] = useState<Department[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectId, setProjectId] = useState('');
   const [overview, setOverview] = useState<ProjectWikiOverview | null>(null);
@@ -94,8 +104,9 @@ export default function ProjectWikiPage() {
     if (typeof window !== 'undefined') {
       setMcpEndpoint(mcpEndpointForLocation(window.location));
     }
-    listProjectCatalog()
-      .then((rows) => {
+    Promise.all([listProjectMemoryDepartments(true), listProjectCatalog()])
+      .then(([departmentRows, rows]) => {
+        setDepartments(departmentRows);
         setProjects(rows);
         const queryProjectId =
           typeof window !== 'undefined'
@@ -215,8 +226,41 @@ export default function ProjectWikiPage() {
     }
   }
 
-  function handleOpenChatGptSetup() {
-    window.open('https://chatgpt.com/#settings/Connectors', '_blank', 'noopener,noreferrer');
+  function handleDownloadClaudeCodeInstaller() {
+    if (!createdMcpToken) {
+      setToast({ msg: '请先创建一个 MCP Token', kind: 'error' });
+      return;
+    }
+    try {
+      downloadClaudeCodeInstaller({
+        endpoint: mcpEndpoint,
+        token: createdMcpToken.token,
+      });
+      setToast({ msg: 'Claude Code 安装器已下载，请运行下载的 CMD 文件', kind: 'info' });
+    } catch (error: any) {
+      setToast({ msg: error?.message || '生成 Claude Code 安装器失败', kind: 'error' });
+    }
+  }
+
+  useEffect(() => {
+    function restoreWikiView() {
+      setActiveWikiView(new URLSearchParams(window.location.search).get('view') === 'member' ? 'member' : 'project');
+    }
+    window.addEventListener('popstate', restoreWikiView);
+    return () => window.removeEventListener('popstate', restoreWikiView);
+  }, []);
+
+  function selectWikiView(view: 'project' | 'member') {
+    setActiveWikiView(view);
+    const url = new URL(window.location.href);
+    url.pathname = '/wiki';
+    if (view === 'member') url.searchParams.set('view', 'member');
+    else url.searchParams.delete('view');
+    window.history.pushState({}, '', `${url.pathname}${url.search}`);
+  }
+
+  if (activeWikiView === 'member') {
+    return <MemberWikiWorkspace onWorkspaceViewChange={selectWikiView} />;
   }
 
   return (
@@ -225,17 +269,17 @@ export default function ProjectWikiPage() {
       <PageHeader
         eyebrow="LIVING KNOWLEDGE"
         icon={BookOpenText}
-        title="项目 Wiki"
-        description="当前项目的已验证知识、来源和关系。"
+        title="智慧 Wiki"
+        description="统一查看项目知识与成员长期经验，在两个 Wiki 视图间快速切换。"
         actions={
           <>
-          <div className="w-full sm:w-72">
-            <Select
-              value={projectId}
-              onChange={setProjectId}
-              options={projects.map((project) => ({ value: project.id, label: project.name }))}
-              placeholder={loading ? '加载项目中' : '选择项目'}
-              disabled={loading || projects.length === 0}
+          <div className="w-full sm:w-[640px]">
+            <ProjectHierarchySelector
+              departments={departments}
+              projects={projects}
+              projectId={projectId}
+              onProjectChange={setProjectId}
+              loading={loading}
             />
           </div>
           <Button
@@ -254,6 +298,7 @@ export default function ProjectWikiPage() {
       />
 
       <PageBody contentClassName="grid gap-5">
+          <WikiWorkspaceTabs activeView="project" onChange={selectWikiView} />
           {loading || (refreshing && !overview) ? (
             <div className="py-24 text-center text-[#8b99ae]"><LoadingDots /></div>
           ) : !projectId ? (
@@ -285,18 +330,21 @@ export default function ProjectWikiPage() {
                 onRevoke={handleRevokeMcpToken}
                 onCopy={copyMcpValue}
                 onInstallCodex={handleDownloadCodexInstaller}
-                onOpenChatGpt={handleOpenChatGptSetup}
+                onInstallClaudeCode={handleDownloadClaudeCodeInstaller}
               />
 
-              <section className="grid min-h-[620px] gap-4 xl:grid-cols-[280px_minmax(0,1fr)_360px]">
-                <aside className="overflow-hidden rounded-lg border border-[#d7e0ec] bg-white">
+              <section className="grid items-start gap-4 xl:grid-cols-[280px_minmax(0,1fr)_360px]">
+                <aside
+                  aria-label="Wiki 页面目录"
+                  className="flex h-[clamp(560px,72vh,720px)] flex-col overflow-hidden rounded-lg border border-[#d7e0ec] bg-white shadow-[0_10px_24px_rgba(15,35,66,0.035)]"
+                >
                   <div className="border-b border-[#d7e0ec] bg-[#f7faff] px-4 py-3 text-sm font-semibold">
                     页面目录
                   </div>
                   {overview.pages.length === 0 ? (
                     <EmptyPanel title="尚未形成有用知识" compact />
                   ) : (
-                    <div className="max-h-[720px] overflow-y-auto p-2">
+                    <div aria-label="Wiki 页面选择列表" className="min-h-0 flex-1 overflow-y-auto p-2 [scrollbar-gutter:stable]">
                       {overview.pages.map((page) => (
                         <button
                           key={page.id}
@@ -321,10 +369,13 @@ export default function ProjectWikiPage() {
                   )}
                 </aside>
 
-                <article className="min-w-0 overflow-hidden rounded-lg border border-[#d7e0ec] bg-white">
+                <article
+                  aria-label="Wiki Markdown 预览"
+                  className="flex h-[clamp(560px,72vh,720px)] min-w-0 flex-col overflow-hidden rounded-lg border border-[#d7e0ec] bg-white shadow-[0_10px_24px_rgba(15,35,66,0.035)]"
+                >
                   {selectedPage ? (
                     <>
-                      <div className="border-b border-[#d7e0ec] px-5 py-4 md:px-6">
+                      <div className="shrink-0 border-b border-[#d7e0ec] px-5 py-4 md:px-6">
                         <div className="flex flex-wrap items-center gap-2 text-xs text-[#6e7d97]">
                           <span className="rounded border border-brand-500/20 bg-brand-500/10 px-2 py-1 font-medium text-brand-700">
                             {TYPE_LABELS[selectedPage.page_type] || selectedPage.page_type}
@@ -337,7 +388,10 @@ export default function ProjectWikiPage() {
                         <h2 className="mt-3 break-words text-2xl font-semibold">{selectedPage.title}</h2>
                         <p className="mt-2 text-sm leading-6 text-[#6e7d97]">{selectedPage.summary}</p>
                       </div>
-                      <div className="whitespace-pre-wrap break-words px-5 py-5 font-sans text-sm leading-7 text-[#253655] md:px-6">
+                      <div
+                        aria-label="Wiki Markdown 正文"
+                        className="min-h-0 flex-1 overflow-y-auto whitespace-pre-wrap break-words px-5 py-5 font-sans text-sm leading-7 text-[#253655] [scrollbar-gutter:stable] md:px-6"
+                      >
                         {selectedPage.markdown_content}
                       </div>
                     </>
@@ -421,7 +475,7 @@ function McpAccessPanel({
   onRevoke,
   onCopy,
   onInstallCodex,
-  onOpenChatGpt,
+  onInstallClaudeCode,
 }: {
   endpoint: string;
   tokens: ProjectWikiMcpToken[];
@@ -438,7 +492,7 @@ function McpAccessPanel({
   onRevoke: (tokenId: string) => void;
   onCopy: (value: string) => void;
   onInstallCodex: () => void;
-  onOpenChatGpt: () => void;
+  onInstallClaudeCode: () => void;
 }) {
   return (
     <section className="overflow-hidden rounded-lg border border-[#d7e0ec] bg-white shadow-[0_10px_24px_rgba(15,35,66,0.04)]">
@@ -522,7 +576,7 @@ function McpAccessPanel({
               onChange={(event) => onAllowProposeChange(event.target.checked)}
               className="h-4 w-4 rounded border-[#b8c6da] text-brand-600 focus:ring-brand-500"
             />
-            允许提交待审批记忆
+            允许直接写入项目 Wiki
           </label>
           <Button
             type="button"
@@ -561,22 +615,23 @@ function McpAccessPanel({
 
         <div className="rounded-lg border border-[#d7e0ec] bg-white p-4">
           <div className="flex items-center gap-2 text-sm font-semibold text-[#253655]">
-            <ExternalLink size={17} className="text-brand-600" aria-hidden="true" />
-            ChatGPT
+            <Download size={17} className="text-brand-600" aria-hidden="true" />
+            Claude Code
           </div>
           <p className="mt-2 text-xs leading-5 text-[#6e7d97]">
-            当前局域网 HTTP 地址不能被 ChatGPT 云端访问；正式连接需要公网 HTTPS 和 OAuth。
+            自动保存当前 Token，并通过 Claude Code CLI 写入用户级智慧大脑 MCP 配置。
           </p>
           <Button
             type="button"
-            variant="secondary"
             className="mt-3 w-full"
-            aria-label="打开 ChatGPT 接入设置"
-            onClick={onOpenChatGpt}
+            aria-label="一键配置到 Claude Code"
+            disabled={!createdToken}
+            onClick={onInstallClaudeCode}
           >
-            <ExternalLink size={16} aria-hidden="true" />
-            打开 ChatGPT 接入设置
+            <Download size={16} aria-hidden="true" />
+            一键配置到 Claude Code
           </Button>
+          {!createdToken && <div className="mt-2 text-xs text-[#9a5a0d]">先创建 Token 后即可下载安装器。</div>}
         </div>
       </div>
 
@@ -587,7 +642,7 @@ function McpAccessPanel({
               <div className="min-w-0 flex-1">
                 <div className="truncate text-sm font-medium text-[#253655]">{token.name}</div>
                 <div className="mt-1 text-xs text-[#8b99ae]">
-                  {token.scopes.includes('wiki:propose') ? '读取 + 提案' : '只读'} · 到期 {fmtTime(token.expires_at)} · 最近使用 {fmtTime(token.last_used_at)}
+                  {token.scopes.includes('wiki:propose') ? '读取 + 直接写入' : '只读'} · 到期 {fmtTime(token.expires_at)} · 最近使用 {fmtTime(token.last_used_at)}
                 </div>
               </div>
               <Button

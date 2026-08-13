@@ -7,10 +7,14 @@ import ProjectWikiPage from './page';
 const mocks = vi.hoisted(() => ({
   answerQuestion: vi.fn(),
   createProjectWikiMcpToken: vi.fn(),
+  downloadClaudeCodeInstaller: vi.fn(),
   downloadCodexInstaller: vi.fn(),
   getProjectWikiOverview: vi.fn(),
+  getMemberWikiOptions: vi.fn(),
+  getMemberWikiOverview: vi.fn(),
   listProjectWikiMcpTokens: vi.fn(),
   listProjectCatalog: vi.fn(),
+  listProjectMemoryDepartments: vi.fn(),
   revokeProjectWikiMcpToken: vi.fn(),
   reviewProjectWikiChange: vi.fn(),
 }));
@@ -20,6 +24,10 @@ vi.mock('@/utils/codex-plugin-installer', () => ({
   downloadCodexInstaller: mocks.downloadCodexInstaller,
 }));
 
+vi.mock('@/utils/claude-code-installer', () => ({
+  downloadClaudeCodeInstaller: mocks.downloadClaudeCodeInstaller,
+}));
+
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>();
   return {
@@ -27,8 +35,11 @@ vi.mock('@/lib/api', async (importOriginal) => {
     answerQuestion: mocks.answerQuestion,
     createProjectWikiMcpToken: mocks.createProjectWikiMcpToken,
     getProjectWikiOverview: mocks.getProjectWikiOverview,
+    getMemberWikiOptions: mocks.getMemberWikiOptions,
+    getMemberWikiOverview: mocks.getMemberWikiOverview,
     listProjectWikiMcpTokens: mocks.listProjectWikiMcpTokens,
     listProjectCatalog: mocks.listProjectCatalog,
+    listProjectMemoryDepartments: mocks.listProjectMemoryDepartments,
     revokeProjectWikiMcpToken: mocks.revokeProjectWikiMcpToken,
     reviewProjectWikiChange: mocks.reviewProjectWikiChange,
   };
@@ -113,12 +124,17 @@ const overview = {
 describe('ProjectWikiPage', () => {
   beforeEach(() => {
     window.localStorage.clear();
+    window.history.replaceState({}, '', '/wiki');
     mocks.answerQuestion.mockReset();
     mocks.createProjectWikiMcpToken.mockReset();
+    mocks.downloadClaudeCodeInstaller.mockReset();
     mocks.downloadCodexInstaller.mockReset();
     mocks.getProjectWikiOverview.mockReset();
+    mocks.getMemberWikiOptions.mockReset();
+    mocks.getMemberWikiOverview.mockReset();
     mocks.listProjectWikiMcpTokens.mockReset();
     mocks.listProjectCatalog.mockReset();
+    mocks.listProjectMemoryDepartments.mockReset();
     mocks.revokeProjectWikiMcpToken.mockReset();
     mocks.reviewProjectWikiChange.mockReset();
     mocks.listProjectCatalog.mockResolvedValue([
@@ -131,7 +147,23 @@ describe('ProjectWikiPage', () => {
         role: 'owner',
       },
     ]);
+    mocks.listProjectMemoryDepartments.mockResolvedValue([
+      { id: 'research', name: '研发支撑', sort_order: 1, parent_id: null, allows_projects: true, level: 1 },
+    ]);
     mocks.getProjectWikiOverview.mockResolvedValue(overview);
+    mocks.getMemberWikiOptions.mockResolvedValue({
+      mode: 'self',
+      current_member: { user_id: 'user-1', employee_id: 'member-1', name: '成员一', email: 'member-1@local.dev' },
+      members: [],
+    });
+    mocks.getMemberWikiOverview.mockResolvedValue({
+      mode: 'self',
+      member: { user_id: 'user-1', employee_id: 'member-1', name: '成员一', email: 'member-1@local.dev' },
+      timezone: 'Asia/Shanghai',
+      summary: { experience_count: 0, success_count: 0, failure_count: 0, latest_observed: null },
+      experiences: [],
+      latest_run: null,
+    });
     mocks.listProjectWikiMcpTokens.mockResolvedValue([]);
     mocks.createProjectWikiMcpToken.mockResolvedValue({
       id: 'token-1',
@@ -158,7 +190,9 @@ describe('ProjectWikiPage', () => {
   it('shows useful pages sources and the knowledge network', async () => {
     render(<ProjectWikiPage />);
 
-    expect(await screen.findByRole('heading', { name: '项目 Wiki' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: '智慧 Wiki' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: '项目 Wiki' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tab', { name: '成员 Wiki' })).toBeInTheDocument();
     expect(
       await screen.findByRole('heading', { name: 'AI Monitor 后台同步' }),
     ).toBeInTheDocument();
@@ -166,6 +200,42 @@ describe('ProjectWikiPage', () => {
     expect(screen.getByLabelText('知识关系网络')).toBeInTheDocument();
     expect(screen.getByText('chat:session-1')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '立即编译' })).not.toBeInTheDocument();
+  });
+
+  it('switches to member Wiki inside the same workspace without leaving /wiki', async () => {
+    const user = userEvent.setup();
+    window.history.replaceState({}, '', '/wiki');
+    render(<ProjectWikiPage />);
+
+    await user.click(await screen.findByRole('tab', { name: '成员 Wiki' }));
+
+    expect(window.location.pathname).toBe('/wiki');
+    expect(window.location.search).toBe('?view=member');
+    expect(screen.getByRole('tab', { name: '成员 Wiki' })).toHaveAttribute('aria-selected', 'true');
+    expect(await screen.findByText('暂时没有可复用经验')).toBeInTheDocument();
+  });
+
+  it('shows the complete first-level project hierarchy', async () => {
+    render(<ProjectWikiPage />);
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('第一分级')).toHaveValue('research');
+    });
+    expect(mocks.listProjectMemoryDepartments).toHaveBeenCalledWith(true);
+    expect(screen.getByLabelText('选择项目')).toHaveValue('project-1');
+  });
+
+  it('keeps the page directory and Markdown preview equal-height with independent scrolling', async () => {
+    render(<ProjectWikiPage />);
+
+    await screen.findByRole('heading', { name: 'AI Monitor 后台同步' });
+    const directory = screen.getByLabelText('Wiki 页面目录');
+    const preview = screen.getByLabelText('Wiki Markdown 预览');
+
+    expect(directory).toHaveClass('h-[clamp(560px,72vh,720px)]');
+    expect(preview).toHaveClass('h-[clamp(560px,72vh,720px)]');
+    expect(screen.getByLabelText('Wiki 页面选择列表')).toHaveClass('overflow-y-auto');
+    expect(screen.getByLabelText('Wiki Markdown 正文')).toHaveClass('overflow-y-auto');
   });
 
   it('removes project Q&A and lets an administrator approve a useful update', async () => {
@@ -219,20 +289,23 @@ describe('ProjectWikiPage', () => {
     expect(await screen.findByText('Codex 安装器已下载，请运行下载的 CMD 文件')).toBeInTheDocument();
   });
 
-  it('explains the ChatGPT public HTTPS and OAuth requirements', async () => {
+  it('downloads a one-click Claude Code MCP installer after creating a token', async () => {
     const user = userEvent.setup();
-    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
     render(<ProjectWikiPage />);
 
-    await user.click(await screen.findByRole('button', { name: '打开 ChatGPT 接入设置' }));
-    expect(open).toHaveBeenCalledWith(
-      'https://chatgpt.com/#settings/Connectors',
-      '_blank',
-      'noopener,noreferrer',
-    );
-    expect(screen.getByText(/当前局域网 HTTP 地址不能被 ChatGPT 云端访问/)).toBeInTheDocument();
-    expect(screen.getByText(/公网 HTTPS 和 OAuth/)).toBeInTheDocument();
-    open.mockRestore();
+    const installButton = await screen.findByRole('button', { name: '一键配置到 Claude Code' });
+    expect(installButton).toBeDisabled();
+
+    await user.click(screen.getByRole('button', { name: '创建 MCP Token' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: '一键配置到 Claude Code' })).toBeEnabled());
+    await user.click(screen.getByRole('button', { name: '一键配置到 Claude Code' }));
+
+    expect(mocks.downloadClaudeCodeInstaller).toHaveBeenCalledWith({
+      endpoint: 'http://localhost:8010/mcp',
+      token: 'sbmcp_visible_once',
+    });
+    expect(await screen.findByText('Claude Code 安装器已下载，请运行下载的 CMD 文件')).toBeInTheDocument();
+    expect(screen.queryByText('ChatGPT')).not.toBeInTheDocument();
   });
 
   it('automatically shows the Wiki MCP setup guide with the complete Codex desktop flow', async () => {
@@ -240,7 +313,8 @@ describe('ProjectWikiPage', () => {
 
     const dialog = await screen.findByRole('dialog', { name: '智慧大脑 MCP 使用指引' });
     expect(dialog).toHaveTextContent('先确认本机已安装 Codex CLI');
-    expect(dialog).toHaveTextContent('是否允许提交待审批记忆');
+    expect(dialog).toHaveTextContent('是否允许直接写入项目 Wiki');
+    expect(dialog).toHaveTextContent('通过权限、来源与安全检查后会直接发布');
     expect(dialog).toHaveTextContent('创建 Token');
     expect(dialog).toHaveTextContent('安装到 Codex CLI');
     expect(dialog).toHaveTextContent('重新启动 ChatGPT 桌面端');
@@ -270,7 +344,7 @@ describe('ProjectWikiPage', () => {
     expect(window.localStorage.getItem('smartbrain:wiki-mcp-guide:dismissed')).toBe('1');
     first.unmount();
     render(<ProjectWikiPage />);
-    await screen.findByRole('heading', { name: '项目 Wiki' });
+    await screen.findByRole('heading', { name: '智慧 Wiki' });
     expect(screen.queryByRole('dialog', { name: '智慧大脑 MCP 使用指引' })).not.toBeInTheDocument();
   });
 });

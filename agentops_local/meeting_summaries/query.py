@@ -20,12 +20,15 @@ class MeetingSummaryHit:
     project_name: str
     title: str
     meeting_date: date | str
+    participant_user_ids: list[uuid.UUID]
     participants: list[str]
     tags: list[str]
     summary_markdown: str
     decisions: list[str]
     action_items: list[str]
     source_filename: str | None
+    source_format: str | None
+    source_size_bytes: int | None
     created_by: uuid.UUID
     created_by_name: str
     created_at: datetime | str
@@ -47,12 +50,15 @@ def _map(row) -> MeetingSummaryHit:
         project_name=str(row.project_name),
         title=str(row.title),
         meeting_date=row.meeting_date,
+        participant_user_ids=[uuid.UUID(str(item)) for item in (row.participant_user_ids or [])],
         participants=list(row.participants or []),
         tags=list(row.tags or []),
         summary_markdown=str(row.summary_markdown),
         decisions=list(row.decisions or []),
         action_items=list(row.action_items or []),
         source_filename=str(row.source_filename) if row.source_filename else None,
+        source_format=str(row.source_format) if row.source_format else None,
+        source_size_bytes=int(row.source_size_bytes) if row.source_size_bytes is not None else None,
         created_by=uuid.UUID(str(row.created_by)),
         created_by_name=str(row.created_by_name or ""),
         created_at=row.created_at,
@@ -116,13 +122,17 @@ def search_meeting_summaries(
     rows = orm.execute(
         text(f"""
             SELECT ms.id::text, ms.project_id::text, p.name AS project_name,
-                   ms.title, ms.meeting_date, ms.participants, ms.tags,
+                   ms.title, ms.meeting_date, ms.participant_user_ids,
+                   ms.participants, ms.tags,
                    ms.summary_markdown, ms.decisions, ms.action_items,
-                   ms.source_filename, ms.created_by::text,
+                   COALESCE(mf.filename, ms.source_filename) AS source_filename,
+                   mf.format AS source_format, mf.size_bytes AS source_size_bytes,
+                   ms.created_by::text,
                    COALESCE(u.full_name, au.email, ms.created_by::text) AS created_by_name,
                    ms.created_at, ms.updated_at,
                    ({lexical}) AS lexical_score, ({vector}) AS vector_score
             FROM public.meeting_summaries ms
+            LEFT JOIN public.meeting_summary_files mf ON mf.meeting_summary_id = ms.id
             JOIN public.projects p ON p.id = ms.project_id
             LEFT JOIN public.users u ON u.id = ms.created_by
             LEFT JOIN auth.users au ON au.id = ms.created_by
@@ -146,13 +156,17 @@ def get_meeting_summary(
     rows = orm.execute(
         text("""
             SELECT ms.id::text, ms.project_id::text, p.name AS project_name,
-                   ms.title, ms.meeting_date, ms.participants, ms.tags,
+                   ms.title, ms.meeting_date, ms.participant_user_ids,
+                   ms.participants, ms.tags,
                    ms.summary_markdown, ms.decisions, ms.action_items,
-                   ms.source_filename, ms.created_by::text,
+                   COALESCE(mf.filename, ms.source_filename) AS source_filename,
+                   mf.format AS source_format, mf.size_bytes AS source_size_bytes,
+                   ms.created_by::text,
                    COALESCE(u.full_name, au.email, ms.created_by::text) AS created_by_name,
                    ms.created_at, ms.updated_at,
                    0.0 AS lexical_score, NULL::double precision AS vector_score
             FROM public.meeting_summaries ms
+            LEFT JOIN public.meeting_summary_files mf ON mf.meeting_summary_id = ms.id
             JOIN public.projects p ON p.id = ms.project_id
             LEFT JOIN public.users u ON u.id = ms.created_by
             LEFT JOIN auth.users au ON au.id = ms.created_by

@@ -33,6 +33,7 @@ from agentops.rag.answer import synthesize as llm_synthesize
 from agentops.rag.authz import (
     AuthzError,
     current_user_id,
+    is_system_admin,
     require_admin,
     require_writer,
     require_member,
@@ -136,6 +137,7 @@ class KnowledgeLedgerDocument(BaseModel):
 
 
 class KnowledgeLedgerResponse(BaseModel):
+    category: Literal["project_material", "project_wiki_source"]
     project: KnowledgeLedgerProject
     permissions: KnowledgeLedgerPermissions
     leaders: list[KnowledgeLedgerUser]
@@ -174,6 +176,7 @@ def _approval_status(value: str | None) -> Literal["raw_uploaded", "pending_revi
 def get_knowledge_ledger(
     request: Request,
     project_id: uuid.UUID,
+    category: Literal["project_material", "project_wiki_source"] = "project_material",
     uploader_user_id: uuid.UUID | None = None,
     approval_status: Literal["raw_uploaded", "pending_review", "approved", "rejected"] | None = None,
     uploaded_from: str | None = None,
@@ -210,7 +213,9 @@ def get_knowledge_ledger(
         """),
         {"project_id": str(project_id), "user_id": str(user_id)},
     ).first()
-    can_review = bool(role_row and role_row.role in {"owner", "admin"})
+    can_review = is_system_admin(orm, user_id=user_id) or bool(
+        role_row and role_row.role in {"owner", "admin"}
+    )
 
     member_rows = orm.execute(
         text("""
@@ -238,10 +243,17 @@ def get_knowledge_ledger(
         if row.role in {"owner", "admin"}
     ]
 
-    filters = [
-        "d.project_id = :project_id",
-        "COALESCE(d.memory_type, 'raw_project_material') != 'project_long_term_memory'",
-    ]
+    category_filter = (
+        "COALESCE(d.memory_type, 'raw_project_material') = 'raw_project_material'"
+        if category == "project_material"
+        else "d.memory_type = 'project_wiki_page'"
+    )
+    uploader_category_filter = (
+        "COALESCE(doc.memory_type, 'raw_project_material') = 'raw_project_material'"
+        if category == "project_material"
+        else "doc.memory_type = 'project_wiki_page'"
+    )
+    filters = ["d.project_id = :project_id", category_filter]
     params: dict[str, str] = {"project_id": str(project_id)}
     if uploader_user_id is not None:
         filters.append("d.created_by_user_id = :uploader_user_id")
@@ -296,13 +308,13 @@ def get_knowledge_ledger(
     ).all()
 
     uploader_rows = orm.execute(
-        text("""
+        text(f"""
             SELECT DISTINCT doc.created_by_user_id::text AS user_id, au.email
             FROM public.documents doc
             JOIN auth.users au ON au.id = doc.created_by_user_id
             WHERE doc.project_id = :project_id
               AND doc.created_by_user_id IS NOT NULL
-              AND COALESCE(doc.memory_type, 'raw_project_material') != 'project_long_term_memory'
+              AND {uploader_category_filter}
             ORDER BY au.email
         """),
         {"project_id": str(project_id)},
@@ -370,6 +382,7 @@ def get_knowledge_ledger(
     summary.raw_document_count = len(documents)
 
     return KnowledgeLedgerResponse(
+        category=category,
         project=KnowledgeLedgerProject(
             id=uuid.UUID(str(project_row.id)),
             name=project_row.name,
@@ -522,7 +535,7 @@ def knowledge_material_batch_upload(
             detail=f"unsupported format {unsupported[0]}; allowed: {sorted(ALLOWED_FORMATS)}",
         )
 
-    department_name = _department_name(department_id)
+    department_name = _department_name(orm, department_id)
     project_name = _project_name(orm, project_id)
     repository = _repository_for_project(orm, project_id)
     raw_documents: list[MaterialDocumentResponse] = []
@@ -652,7 +665,7 @@ def knowledge_material_batch_upload(
     return MaterialBatchUploadResponse(
         raw_document_count=len(raw_documents),
         raw_documents=raw_documents,
-        draft=_row_to_draft(row),
+        draft=_row_to_draft(orm, row),
     )
 
 

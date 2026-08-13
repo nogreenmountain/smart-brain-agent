@@ -2,8 +2,8 @@
 [CmdletBinding()]
 param(
     [string]$ProjectId = "f9505558-d67d-462f-b77e-6b9550458a2b",
-    [string]$ApiEndpoint = "http://192.168.1.40:8000",
-    [string]$CollectorEndpoint = "http://192.168.1.40:4318",
+    [string]$ApiEndpoint = "http://192.168.10.29:8000",
+    [string]$CollectorEndpoint = "http://192.168.10.29:4318",
     [string]$DefaultEmailDomain = "local.dev",
     [string]$TrustedRootCaFile,
     [string]$OutputRoot = "D:\AgentOpsServer\AgentOps\employee-deploy\universal"

@@ -2,10 +2,17 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import MonitorSetupPage from './page';
+import MonitorSetupPage from './legacy-page';
 
 const mocks = vi.hoisted(() => ({
   getAIMonitorStatus: vi.fn(),
+  getCurrentSharedCCSwitchSession: vi.fn(),
+  getSharedCCSwitchSession: vi.fn(),
+  listProjects: vi.fn(),
+  startSharedCCSwitchSession: vi.fn(),
+  stopSharedCCSwitchSession: vi.fn(),
+  updateSharedCCSwitchSessionSchedule: vi.fn(),
+  logout: vi.fn(),
 }));
 
 vi.mock('@/lib/api', async (importOriginal) => {
@@ -13,6 +20,13 @@ vi.mock('@/lib/api', async (importOriginal) => {
   return {
     ...actual,
     getAIMonitorStatus: mocks.getAIMonitorStatus,
+    getCurrentSharedCCSwitchSession: mocks.getCurrentSharedCCSwitchSession,
+    getSharedCCSwitchSession: mocks.getSharedCCSwitchSession,
+    listProjects: mocks.listProjects,
+    startSharedCCSwitchSession: mocks.startSharedCCSwitchSession,
+    stopSharedCCSwitchSession: mocks.stopSharedCCSwitchSession,
+    updateSharedCCSwitchSessionSchedule: mocks.updateSharedCCSwitchSessionSchedule,
+    logout: mocks.logout,
   };
 });
 
@@ -76,6 +90,18 @@ describe('MonitorSetupPage', () => {
   beforeEach(() => {
     mocks.getAIMonitorStatus.mockReset();
     mocks.getAIMonitorStatus.mockResolvedValue(status);
+    mocks.getCurrentSharedCCSwitchSession.mockReset();
+    mocks.getCurrentSharedCCSwitchSession.mockResolvedValue(null);
+    mocks.getSharedCCSwitchSession.mockReset();
+    mocks.listProjects.mockReset();
+    mocks.listProjects.mockResolvedValue([
+      { id: 'project-1', org_id: 'org-1', name: '智慧大脑agent', environment: 'production' },
+    ]);
+    mocks.startSharedCCSwitchSession.mockReset();
+    mocks.stopSharedCCSwitchSession.mockReset();
+    mocks.updateSharedCCSwitchSessionSchedule.mockReset();
+    mocks.logout.mockReset();
+    window.localStorage.clear();
   });
 
   it('loads employee overall status and renders installer download', async () => {
@@ -119,5 +145,99 @@ describe('MonitorSetupPage', () => {
 
     expect(await screen.findByText('已就绪 3/3')).toBeInTheDocument();
     expect(screen.getByText('0.1.0')).toBeInTheDocument();
+  });
+
+  it('starts a shared session for the current account with 19:00 selected by default', async () => {
+    const user = userEvent.setup();
+    mocks.startSharedCCSwitchSession.mockResolvedValue({
+      id: 'session-1',
+      project_id: 'project-1',
+      target_employee_id: 'test1',
+      target_employee_name: '测试成员',
+      stop_mode: 'default_19',
+      status: 'starting',
+      requested_at: '2026-08-13T06:00:00Z',
+      scheduled_stop_at: '2026-08-13T11:00:00Z',
+      request_count: 0,
+      total_tokens: 0,
+      activation_token: 'activation-token',
+    });
+    render(<MonitorSetupPage />);
+
+    expect(await screen.findByText('公用电脑临时记录')).toBeInTheDocument();
+    expect(screen.getByText('当前登录成员：test1')).toBeInTheDocument();
+    expect(screen.getByLabelText('每天 19:00 自动停止并同步')).toBeChecked();
+    await user.click(screen.getByRole('button', { name: '开始记录' }));
+
+    await waitFor(() => {
+      expect(mocks.startSharedCCSwitchSession).toHaveBeenCalledWith({
+        projectId: 'project-1',
+        stopMode: 'default_19',
+        scheduledStopAt: undefined,
+      });
+    });
+    expect(document.querySelector('iframe')?.getAttribute('src')).toContain(
+      'smartbrain-ai-monitor://shared-session',
+    );
+  });
+
+  it('supports manual-only sessions and manual stop with local finalization', async () => {
+    const user = userEvent.setup();
+    mocks.getCurrentSharedCCSwitchSession.mockResolvedValue({
+      id: 'session-1',
+      project_id: 'project-1',
+      target_employee_id: 'test1',
+      target_employee_name: '测试成员',
+      stop_mode: 'manual_only',
+      status: 'active',
+      requested_at: '2026-08-13T06:00:00Z',
+      started_at: '2026-08-13T06:00:00Z',
+      scheduled_stop_at: '2026-08-14T06:00:00Z',
+      request_count: 0,
+      total_tokens: 0,
+    });
+    mocks.stopSharedCCSwitchSession.mockResolvedValue({
+      id: 'session-1', status: 'finalizing',
+    });
+    render(<MonitorSetupPage />);
+
+    expect(await screen.findByText('正在记录')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '停止并同步' }));
+
+    await waitFor(() => {
+      expect(mocks.stopSharedCCSwitchSession).toHaveBeenCalledWith('session-1');
+    });
+    expect(
+      Array.from(document.querySelectorAll('iframe')).some(
+        (frame) => frame.getAttribute('src')?.includes('action=stop'),
+      ),
+    ).toBe(true);
+  });
+
+  it('offers a 30 second logout countdown after the local session is finalized', async () => {
+    window.localStorage.setItem(
+      'smartbrain-shared-session',
+      JSON.stringify({ sessionId: 'session-1', employeeId: 'test1' }),
+    );
+    mocks.getSharedCCSwitchSession.mockResolvedValue({
+      id: 'session-1',
+      project_id: 'project-1',
+      target_employee_id: 'test1',
+      target_employee_name: '测试成员',
+      stop_mode: 'default_19',
+      status: 'finalized',
+      requested_at: '2026-08-13T06:00:00Z',
+      started_at: '2026-08-13T06:00:00Z',
+      scheduled_stop_at: '2026-08-13T11:00:00Z',
+      actual_stop_at: '2026-08-13T11:00:00Z',
+      request_count: 8,
+      total_tokens: 1200,
+      finalized_at: '2026-08-13T11:00:10Z',
+    });
+
+    render(<MonitorSetupPage />);
+
+    expect(await screen.findByText(/30 秒后自动退出智慧大脑/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '取消自动退出' })).toBeInTheDocument();
   });
 });

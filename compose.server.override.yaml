@@ -7,15 +7,13 @@
 #    `docker commit`; the patch Dockerfile fixes the entrypoint instead).
 #
 # After any backend code change, rebuild with:
-#   cd D:\AgentOpsServer\AgentOps\app
 #   docker build -f Dockerfile.api-workday \
-#     -t agentops-api-local:patched-2026-08-07-ccswitch-sync-r16 .
+#     -t agentops-api-local:smartbrain-portable-2026-08-13 .
 #
 # Setup (PowerShell, in a fresh session):
 #   $env:ANTHROPIC_AUTH_TOKEN = "your-gateway-token"
 #   $env:ANTHROPIC_DOCKER_BASE_URL = "http://host.docker.internal:9000"
 #   $env:RAG_LLM_MODEL = "claude-sonnet-4-6-20250514"
-#   cd D:\AgentOpsServer\AgentOps\app
 #   docker compose -f compose.server.yaml -f compose.server.override.yaml up -d api
 #
 # On this GTX 1080 server, include the GPU override when recreating the RAG
@@ -24,8 +22,8 @@
 #     up -d rag-embedding-service rag-reranker-service
 #
 # Verify:
-#   curl http://192.168.1.40:8000/health              -> 200
-#   curl -X POST http://192.168.1.40:8000/v4/knowledge/answer \
+#   curl http://<server-ip>:8000/health              -> 200
+#   curl -X POST http://<server-ip>:8000/v4/knowledge/answer \
 #     -H "Content-Type: application/json" \
 #     -d '{"project_id":"<uuid>","query":"<text>","k":3}'
 #   Look for "source": "llm" in the response.
@@ -64,14 +62,14 @@ services:
       - rag_model_cache:/models
 
   api:
-    image: agentops-api-local:patched-2026-08-07-ccswitch-sync-r16
+    image: agentops-api-local:smartbrain-portable-2026-08-13
     depends_on:
       - clickhouse
     environment:
       PROTOCOL: ${PROTOCOL:-http}
-      API_DOMAIN: ${API_DOMAIN:-192.168.1.40:8000}
-      APP_DOMAIN: ${APP_DOMAIN:-192.168.1.40:3002}
-      WORKDAY_COLLECTOR_ENDPOINT: ${WORKDAY_COLLECTOR_ENDPOINT:-http://192.168.1.40:4318}
+      API_DOMAIN: ${API_DOMAIN}
+      APP_DOMAIN: ${APP_DOMAIN}
+      WORKDAY_COLLECTOR_ENDPOINT: ${WORKDAY_COLLECTOR_ENDPOINT}
       WIKI_MCP_TOKEN_SECRET: ${WIKI_MCP_TOKEN_SECRET:-}
       # Read token from host shell env. NEVER hardcode secrets in this file.
       # The local gateway performs upstream authentication.
@@ -99,7 +97,7 @@ services:
       PROJECT_WIKI_INCLUDE_AI_CHAT_SOURCES: ${PROJECT_WIKI_INCLUDE_AI_CHAT_SOURCES:-false}
 
   project-wiki-worker:
-    image: agentops-api-local:patched-2026-08-07-ccswitch-sync-r16
+    image: agentops-api-local:smartbrain-portable-2026-08-13
     restart: unless-stopped
     command: ["/app/.venv/bin/python", "-m", "agentops.project_wiki.worker"]
     networks:
@@ -138,7 +136,7 @@ services:
       PROJECT_WIKI_INTERVAL_SECONDS: ${PROJECT_WIKI_INTERVAL_SECONDS:-86400}
 
   ai-worklog-worker:
-    image: agentops-api-local:patched-2026-08-07-ccswitch-sync-r16
+    image: agentops-api-local:smartbrain-portable-2026-08-13
     restart: unless-stopped
     command: ["/app/.venv/bin/python", "-m", "agentops.ai_usage.daily_log_worker"]
     networks:
@@ -167,7 +165,7 @@ services:
       AI_WORKLOG_RETRY_SECONDS: ${AI_WORKLOG_RETRY_SECONDS:-900}
 
   member-wiki-worker:
-    image: agentops-api-local:patched-2026-08-07-ccswitch-sync-r16
+    image: agentops-api-local:smartbrain-portable-2026-08-13
     restart: unless-stopped
     command: ["/app/.venv/bin/python", "-m", "agentops.member_wiki.worker"]
     networks:
@@ -221,12 +219,12 @@ services:
       SUPABASE_PASSWORD: "postgres"
       SUPABASE_SSLMODE: "disable"
       SUPABASE_MAX_POOL_SIZE: "10"
-      API_DOMAIN: ${API_DOMAIN:-192.168.1.40:8000}
+      API_DOMAIN: ${API_DOMAIN}
       AUTH_COOKIE_SECRET: ${AUTH_COOKIE_SECRET}
       WIKI_MCP_TOKEN_SECRET: ${WIKI_MCP_TOKEN_SECRET:-}
-      WIKI_MCP_PUBLIC_URL: ${WIKI_MCP_PUBLIC_URL:-http://192.168.1.40:8010}
-      WIKI_MCP_ALLOWED_HOSTS: ${WIKI_MCP_ALLOWED_HOSTS:-127.0.0.1:*,localhost:*,192.168.1.40:*,wiki-mcp:*}
-      WIKI_MCP_ALLOWED_ORIGINS: ${WIKI_MCP_ALLOWED_ORIGINS:-http://127.0.0.1:*,http://localhost:*,http://192.168.1.40:*}
+      WIKI_MCP_PUBLIC_URL: ${WIKI_MCP_PUBLIC_URL}
+      WIKI_MCP_ALLOWED_HOSTS: ${WIKI_MCP_ALLOWED_HOSTS}
+      WIKI_MCP_ALLOWED_ORIGINS: ${WIKI_MCP_ALLOWED_ORIGINS}
       WIKI_MCP_DEFAULT_PROJECT_ID: ${WIKI_MCP_DEFAULT_PROJECT_ID:-}
       RAG_RETRIEVAL_VERSION: ${RAG_RETRIEVAL_VERSION:-v1}
       RAG_EMBEDDING_SERVICE_URL: ${RAG_EMBEDDING_SERVICE_URL:-http://rag-embedding-service:8080}
@@ -243,7 +241,7 @@ services:
       retries: 5
 
   smartbrain:
-    image: smartbrain-dashboard-local:latest
+    image: smartbrain-dashboard-local:smartbrain-portable-2026-08-13
     restart: unless-stopped
     depends_on:
       - api

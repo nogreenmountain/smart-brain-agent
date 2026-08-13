@@ -2,7 +2,7 @@
 # LAN access diagnostics for the智慧大脑 Agent MVP
 # Run this from a LAN computer (not the server itself)
 
-SERVER="192.168.1.40"
+SERVER="192.168.10.29"
 echo "=== 1. Ping ==="
 ping -c 3 $SERVER
 echo

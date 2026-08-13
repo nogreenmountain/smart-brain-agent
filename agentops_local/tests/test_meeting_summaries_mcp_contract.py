@@ -22,6 +22,9 @@ class MeetingSummaryMcpContractTests(unittest.TestCase):
         self.assertIn("query_search_meeting_summaries", operations)
         self.assertIn("query_get_meeting_summary", operations)
         self.assertIn("_resolve_project", operations)
+        self.assertIn('"participant_user_ids"', operations)
+        self.assertIn('"source_format"', operations)
+        self.assertIn('result["summary_markdown"]', operations)
 
 
 if __name__ == "__main__":

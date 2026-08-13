@@ -1,7 +1,7 @@
 {
   "name": "company-memory",
-  "version": "0.1.0+codex.20260807061335",
-  "description": "Search SmartBrain project memory, privacy-scoped member experience, and project meeting summaries; submit identity-attributed project knowledge for administrator review.",
+  "version": "0.1.0+codex.20260810081637",
+  "description": "Search SmartBrain project memory, privacy-scoped member experience, and project meeting summaries; publish identity-attributed project knowledge after safety checks.",
   "author": {
     "name": "SmartBrain"
   },
@@ -9,7 +9,7 @@
   "interface": {
     "displayName": "Company Memory",
     "shortDescription": "Search project, member, and meeting knowledge on demand.",
-    "longDescription": "Retrieves reviewed project knowledge, privacy-scoped member experience, and project meeting summaries from SmartBrain; proposals are automatically attributed to the authenticated MCP Token owner.",
+    "longDescription": "Retrieves project knowledge, privacy-scoped member experience, and project meeting summaries from SmartBrain; trusted writes are attributed to the authenticated MCP Token owner and published after safety checks.",
     "developerName": "SmartBrain",
     "category": "Productivity",
     "capabilities": [

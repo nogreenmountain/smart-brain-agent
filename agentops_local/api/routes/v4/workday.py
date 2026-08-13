@@ -91,7 +91,7 @@ def _enrollment_settings() -> tuple[str, int]:
     collector_endpoint = normalize_collector_endpoint(
         os.environ.get(
             "WORKDAY_COLLECTOR_ENDPOINT",
-            "http://192.168.1.40:4318",
+            "http://192.168.10.29:4318",
         )
     )
     return collector_endpoint, token_days

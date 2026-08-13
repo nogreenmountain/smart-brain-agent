@@ -22,7 +22,6 @@
 
 ```powershell
 cd smart-brain-agent
-Copy-Item .env.lan.example .env
 powershell -ExecutionPolicy Bypass -File deploy/lan/New-LanEnv.ps1 -ServerIP 192.168.1.40
 notepad .env
 ```
@@ -35,6 +34,8 @@ notepad .env
 - `JWT_SECRET_KEY`
 - `AUTH_COOKIE_SECRET`
 - `ANTHROPIC_AUTH_TOKEN` 和 `ANTHROPIC_BASE_URL`
+
+`New-LanEnv.ps1` 只自动生成本项目的 JWT/Cookie 随机密钥。Supabase JWT Secret 和 Service Role Key 必须从目标 Supabase 实例复制，脚本不会伪造可用值。
 
 如果使用 Supabase CLI，本地启动后可通过 `supabase status` 查看 anon/service role key。
 
@@ -49,7 +50,9 @@ supabase db reset
 
 如果不是全新数据库，不要执行 reset。请改用你们自己的迁移流程执行 `supabase/migrations`。
 
-迁移完成后，初始化智慧大脑默认组织、项目和账号：
+迁移必须按文件名顺序执行到 `20260813000000_add_shared_cc_switch_sessions.sql`。已有数据库升级请先阅读 `UPGRADE-2026-08-13.md` 并完成备份。
+
+迁移完成后，可选择初始化演示组织、项目和账号：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File deploy/lan/Initialize-Database.ps1
@@ -59,6 +62,8 @@ powershell -ExecutionPolicy Bypass -File deploy/lan/Initialize-Database.ps1
 
 - 管理员：`hanshangbo` / `12345678`
 - 测试员工：`test1` 到 `test12` / `123456`
+
+该初始化脚本只用于演示/验收。正式客户环境应使用自有组织、账号和项目数据，且项目必须挂在第二分级；默认演示项目挂在 `研发支撑 / 直属分级`。
 
 ## 4. 构建镜像
 
@@ -87,6 +92,7 @@ powershell -ExecutionPolicy Bypass -File deploy/lan/Start-Lan.ps1
 - AgentOps Trace Dashboard：`http://<服务器IP>:3001`
 - API Health：`http://<服务器IP>:8000/health`
 - OTLP HTTP：`http://<服务器IP>:4318`
+- Wiki MCP：`http://<服务器IP>:8010/mcp`
 
 ## 6. 生成员工端安装包
 
@@ -111,7 +117,10 @@ employee-deploy/universal/ai-workday-universal
 - 用 `hanshangbo/12345678` 登录 `http://<服务器IP>:3002`
 - 成员管理能看到 `test1` 到 `test12`
 - 项目管理能看到默认项目
-- 知识库可按部门和项目查看资料台账
+- 项目管理显示固定三级分类，第一分级自动拥有“直属分级”
+- 上传资料包含项目原始资料、会议记录、GitHub 仓库页签
+- 智慧 Wiki 包含项目 Wiki、成员 Wiki 页签
+- AI 工作台包含工作记录、团队排行、工作日志、设备与同步页签
 - 普通成员不能删除资料；管理员可以删除资料
 - AI 工作日页面可查看 Workday 汇总
 - 员工端安装后，CC Switch / ChatGPT Web 监控数据能进入 AI Monitor
@@ -122,5 +131,6 @@ employee-deploy/universal/ai-workday-universal
 - 修改默认管理员密码。
 - 开启 HTTPS，HTTP 只适合受控内网试运行。
 - 不要把 `.env`、数据库 volume、员工已签发 token 推到 Git。
+- 不要复制生产 `production-backups/`、Docker 网络元数据恢复文件或 `.next*` 构建残留。
 - Docker Desktop 数据目录建议迁到 D/E 盘。
 - 客户环境如果有合规要求，先确认聊天内容采集边界和员工告知流程。

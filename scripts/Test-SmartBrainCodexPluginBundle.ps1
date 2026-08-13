@@ -45,10 +45,19 @@ try {
         throw "Plugin manifest does not advertise member experience and meeting summaries"
     }
     if (-not $manifest.description.Contains("identity-attributed")) {
-        throw "Plugin manifest does not advertise identity-attributed proposals"
+        throw "Plugin manifest does not advertise identity-attributed writes"
     }
     if (-not $skill.Contains("authenticated MCP Token owner")) {
         throw "Plugin skill does not explain automatic uploader attribution"
+    }
+    if (-not $manifest.description.Contains("publish") -or -not $manifest.description.Contains("safety checks")) {
+        throw "Plugin manifest does not advertise direct publishing after safety checks"
+    }
+    if (-not $skill.Contains("status=published")) {
+        throw "Plugin skill does not document the direct-publish success response"
+    }
+    if ($skill.Contains("pending administrator review") -or $skill.Contains("does not publish directly")) {
+        throw "Plugin skill still documents the removed MCP approval flow"
     }
     $hash = Get-FileHash -Algorithm SHA256 -LiteralPath $BundlePath
 

@@ -188,6 +188,14 @@ rag-model-cache/
 .next/
 .npm-cache/
 .tmp/
+production-backups/
+.generated-*/
+cache.db
+*.pre-recovery-*
+*.network-recovery-backup-*
+*.pre-profile-*
+*.pre-wiki-workspace-*
+*.pre-*-build-*
 
 # dependencies
 node_modules/

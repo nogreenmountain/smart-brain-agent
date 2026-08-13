@@ -32,12 +32,15 @@ def _row():
         project_name="智慧大脑",
         title="周会",
         meeting_date="2026-08-05",
+        participant_user_ids=["00000000-0000-0000-0000-000000000002"],
         participants=["张三"],
         tags=["周会"],
         summary_markdown="# 周会",
         decisions=["按项目授权"],
         action_items=["完成 MCP"],
         source_filename="meeting.md",
+        source_format="md",
+        source_size_bytes=128,
         created_by="00000000-0000-0000-0000-000000000001",
         created_by_name="张三",
         created_at="2026-08-05T01:00:00+00:00",
@@ -64,6 +67,8 @@ class MeetingSummaryQueryTests(unittest.TestCase):
         self.assertIn("project_id = ANY", sql)
         self.assertEqual(params["project_ids"], [str(project_id)])
         self.assertEqual(hits[0].project_name, "智慧大脑")
+        self.assertEqual(hits[0].participant_user_ids, [uuid.UUID("00000000-0000-0000-0000-000000000002")])
+        self.assertIn("LEFT JOIN public.meeting_summary_files", sql)
 
     def test_read_requires_summary_to_be_in_accessible_projects(self) -> None:
         orm = _Orm([_row()])

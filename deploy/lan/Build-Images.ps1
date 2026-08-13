@@ -23,7 +23,7 @@ Invoke-Step "Build AgentOps API base image" {
 }
 
 Invoke-Step "Build SmartBrain patched API image" {
-    docker build -f Dockerfile.api-workday -t agentops-api-local:patched-2026-08-06-global-read .
+    docker build -f Dockerfile.api-workday -t agentops-api-local:smartbrain-portable-2026-08-13 .
 }
 
 Invoke-Step "Build SmartBrain Wiki MCP image" {
@@ -37,7 +37,7 @@ if (-not $SkipAgentOpsDashboard) {
 }
 
 Invoke-Step "Build SmartBrain Dashboard image" {
-    docker build -t smartbrain-dashboard-local:latest smartbrain-dashboard
+    docker build -t smartbrain-dashboard-local:smartbrain-portable-2026-08-13 smartbrain-dashboard
 }
 
 Invoke-Step "Build OTLP Collector image" {

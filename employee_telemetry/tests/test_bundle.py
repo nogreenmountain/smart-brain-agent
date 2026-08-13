@@ -355,6 +355,7 @@ class BundleTests(unittest.TestCase):
                 "Enroll-AIWorkday.py",
                 "ConversationSync.py",
                 "CCSwitchUsageSync.py",
+                "SharedCCSwitchSession.py",
                 "Update-CCSwitchCommonConfig.py",
                 "AIWorkdayConfig.py",
                 "README.txt",
@@ -453,6 +454,8 @@ class BundleTests(unittest.TestCase):
         self.assertIn("PasswordChar", source)
         self.assertIn("--uninstall", source)
         self.assertIn("--sync-cc-switch", source)
+        self.assertIn("--shared-session", source)
+        self.assertIn("SharedCCSwitchSession.py", source)
         self.assertIn("smartbrain-ai-monitor", source)
         self.assertIn("RegisterUrlProtocol", source)
         self.assertIn("UninstallString", source)
@@ -463,6 +466,7 @@ class BundleTests(unittest.TestCase):
         self.assertIn("Get-FileHash", build_script)
         self.assertIn("trusted_root_ca_file", build_script)
         self.assertIn("CCSwitchUsageSync.py", build_script)
+        self.assertIn("SharedCCSwitchSession.py", build_script)
 
         payload_root = installer_root / "payload"
         self.assertTrue((payload_root / "Install-AIMonitor.ps1").is_file())
@@ -475,6 +479,7 @@ class BundleTests(unittest.TestCase):
             "smartbrain-root-ca.crt",
         )
         self.assertTrue((payload_root / "smartbrain-root-ca.crt").is_file())
+        self.assertTrue((payload_root / "SharedCCSwitchSession.py").is_file())
         monitor_install = (payload_root / "Install-AIMonitor.ps1").read_text(
             encoding="utf-8-sig"
         )
