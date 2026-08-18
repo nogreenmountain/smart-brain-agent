@@ -74,6 +74,35 @@ class AuthzTests(unittest.TestCase):
         self.assertEqual(role.role, "developer")
         self.assertTrue(any("FROM public.project_members" in sql for sql in orm.sql))
 
+    def test_project_owner_can_permanently_delete_content(self) -> None:
+        user_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        project_id = uuid.UUID("00000000-0000-0000-0000-000000000010")
+        orm = _Orm(system_admin=False, project_role="owner")
+
+        role = authz.require_owner(orm, user_id=user_id, project_id=project_id)
+
+        self.assertEqual(role.role, "owner")
+
+    def test_project_admin_cannot_permanently_delete_content(self) -> None:
+        user_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        project_id = uuid.UUID("00000000-0000-0000-0000-000000000010")
+        orm = _Orm(system_admin=False, project_role="admin")
+
+        with self.assertRaises(authz.AuthzError) as raised:
+            authz.require_owner(orm, user_id=user_id, project_id=project_id)
+
+        self.assertEqual(raised.exception.status_code, 403)
+        self.assertIn("owner", raised.exception.detail)
+
+    def test_system_admin_keeps_owner_delete_override(self) -> None:
+        user_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        project_id = uuid.UUID("00000000-0000-0000-0000-000000000010")
+        orm = _Orm(system_admin=True)
+
+        role = authz.require_owner(orm, user_id=user_id, project_id=project_id)
+
+        self.assertEqual(role.role, "owner")
+
 
 if __name__ == "__main__":
     unittest.main()

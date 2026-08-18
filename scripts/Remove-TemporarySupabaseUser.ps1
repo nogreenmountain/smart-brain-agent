@@ -96,9 +96,58 @@ $headers = @{
     apikey = $ServiceRoleKey
     Authorization = "Bearer $ServiceRoleKey"
 }
-Invoke-RestMethod -Method Delete `
-    -Uri "http://127.0.0.1:54321/auth/v1/admin/users/$UserId" `
-    -Headers $headers | Out-Null
+try {
+    Invoke-RestMethod -Method Delete `
+        -Uri "http://127.0.0.1:54321/auth/v1/admin/users/$UserId" `
+        -Headers $headers `
+        -TimeoutSec 5 | Out-Null
+} catch {
+    $python = @'
+import os
+import sys
+import urllib.error
+import urllib.request
+
+user_id = sys.argv[1]
+service_role = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+if not service_role:
+    raise SystemExit("Missing SUPABASE_SERVICE_ROLE_KEY inside Admin API transport.")
+
+request = urllib.request.Request(
+    "http://supabase_kong_database:8000/auth/v1/admin/users/" + user_id,
+    method="DELETE",
+    headers={
+        "apikey": service_role,
+        "Authorization": "Bearer " + service_role,
+    },
+)
+try:
+    with urllib.request.urlopen(request, timeout=30) as response:
+        response.read()
+except urllib.error.HTTPError as exc:
+    detail = exc.read().decode("utf-8", errors="replace")
+    print(f"Supabase Admin API returned HTTP {exc.code}: {detail}", file=sys.stderr)
+    raise SystemExit(1)
+'@
+
+    $previousServiceRole = $env:SUPABASE_SERVICE_ROLE_KEY
+    try {
+        $env:SUPABASE_SERVICE_ROLE_KEY = $ServiceRoleKey
+        $python | & docker exec -i `
+            -e SUPABASE_SERVICE_ROLE_KEY `
+            agentops-api-1 `
+            /app/.venv/bin/python - $UserId | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw "Supabase Admin API container transport failed while deleting temporary user $UserId."
+        }
+    } finally {
+        if ($null -eq $previousServiceRole) {
+            Remove-Item Env:SUPABASE_SERVICE_ROLE_KEY -ErrorAction SilentlyContinue
+        } else {
+            $env:SUPABASE_SERVICE_ROLE_KEY = $previousServiceRole
+        }
+    }
+}
 
 Write-Output "temporary_user_deleted=True"
 Write-Output "empty_private_orgs_deleted=True"

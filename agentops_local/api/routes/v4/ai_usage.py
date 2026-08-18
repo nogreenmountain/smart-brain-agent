@@ -58,6 +58,8 @@ SHANGHAI_TIMEZONE = timezone(timedelta(hours=8))
 SHARED_SESSION_ACTIVATION_TTL = timedelta(minutes=10)
 SHARED_SESSION_MIN_DURATION = timedelta(minutes=5)
 SHARED_SESSION_MAX_DURATION = timedelta(hours=24)
+TEMPORARY_MONITOR_PROBE_TTL = timedelta(minutes=5)
+TEMPORARY_MONITOR_PROBE_DETECTION_MAX_AGE = timedelta(minutes=10)
 
 DEPARTMENTS = (
     ("research", "研发"),
@@ -298,9 +300,36 @@ SharedSessionStatus = Literal[
 
 
 class SharedSessionStartRequest(BaseModel):
-    project_id: uuid.UUID
+    installation_probe_id: uuid.UUID
+    project_id: uuid.UUID | None = None
     stop_mode: SharedSessionStopMode = "default_19"
     scheduled_stop_at: datetime | None = None
+
+
+TemporaryMonitorProbeStatus = Literal["pending", "detected", "expired", "consumed"]
+
+
+class TemporaryMonitorProbeCreateResponse(BaseModel):
+    id: uuid.UUID
+    status: Literal["pending"] = "pending"
+    probe_token: str
+    expires_at: datetime
+
+
+class TemporaryMonitorProbeResponse(BaseModel):
+    id: uuid.UUID
+    status: TemporaryMonitorProbeStatus
+    expires_at: datetime
+    detected_at: datetime | None = None
+    device_id: str | None = None
+    installer_version: str | None = None
+
+
+class TemporaryMonitorProbeConfirmRequest(BaseModel):
+    probe_id: uuid.UUID
+    probe_token: str = Field(..., min_length=32, max_length=200)
+    device_id: str = Field(..., min_length=3, max_length=200)
+    installer_version: str = Field(..., min_length=1, max_length=100)
 
 
 class SharedSessionScheduleRequest(BaseModel):
@@ -314,7 +343,7 @@ class SharedSessionStopRequest(BaseModel):
 
 class SharedSessionResponse(BaseModel):
     id: uuid.UUID
-    project_id: uuid.UUID
+    project_id: uuid.UUID | None = None
     target_employee_id: str
     target_employee_name: str
     device_id: str | None = None
@@ -327,6 +356,8 @@ class SharedSessionResponse(BaseModel):
     actual_stop_at: datetime | None = None
     request_count: int = 0
     total_tokens: int = 0
+    last_synced_at: datetime | None = None
+    last_synced_watermark: str | None = None
     finalized_at: datetime | None = None
     error_message: str | None = None
     activation_token: str | None = None
@@ -345,6 +376,7 @@ class SharedSessionDeviceCommandRequest(BaseModel):
     activation_token: str = Field(..., min_length=32, max_length=200)
     device_id: str = Field(..., min_length=3, max_length=200)
     checked_at: datetime
+    stop_reason: Literal["replaced_by_next_user"] | None = None
 
 
 class SharedSessionDeviceCommandResponse(BaseModel):
@@ -370,6 +402,27 @@ class SharedSessionRequestInput(BaseModel):
     total_tokens: int = Field(0, ge=0)
     total_cost_usd: float = Field(0, ge=0)
     input_token_semantics: int = Field(0, ge=0)
+
+
+class SharedSessionDeviceSyncRequest(BaseModel):
+    session_id: uuid.UUID
+    activation_token: str = Field(..., min_length=32, max_length=200)
+    device_id: str = Field(..., min_length=3, max_length=200)
+    checked_at: datetime
+    last_watermark: str | None = Field(None, max_length=200)
+    requests: list[SharedSessionRequestInput] = Field(default_factory=list, max_length=2000)
+
+
+class SharedSessionDeviceSyncResponse(BaseModel):
+    status: SharedSessionStatus
+    action: Literal["continue", "stop"]
+    scheduled_stop_at: datetime
+    stop_at: datetime | None = None
+    stop_reason: str | None = None
+    request_count: int = 0
+    total_tokens: int = 0
+    last_synced_at: datetime | None = None
+    accepted_watermark: str | None = None
 
 
 class SharedSessionDeviceFinalizeRequest(BaseModel):
@@ -482,10 +535,30 @@ def _shared_token_hash(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+def _temporary_monitor_probe_response(row) -> TemporaryMonitorProbeResponse:
+    now = datetime.now(timezone.utc)
+    if row.consumed_at is not None:
+        status: TemporaryMonitorProbeStatus = "consumed"
+    elif row.expires_at <= now:
+        status = "expired"
+    elif row.detected_at is not None:
+        status = "detected"
+    else:
+        status = "pending"
+    return TemporaryMonitorProbeResponse(
+        id=row.id,
+        status=status,
+        expires_at=row.expires_at,
+        detected_at=row.detected_at,
+        device_id=row.device_id,
+        installer_version=row.installer_version,
+    )
+
+
 def _shared_session_response(row, *, activation_token: str | None = None) -> SharedSessionResponse:
     return SharedSessionResponse(
         id=row.id,
-        project_id=row.project_id,
+        project_id=getattr(row, "project_id", None),
         target_employee_id=row.target_employee_id,
         target_employee_name=row.target_employee_name,
         device_id=getattr(row, "device_id", None),
@@ -498,6 +571,8 @@ def _shared_session_response(row, *, activation_token: str | None = None) -> Sha
         actual_stop_at=getattr(row, "actual_stop_at", None),
         request_count=int(getattr(row, "request_count", 0) or 0),
         total_tokens=int(getattr(row, "total_tokens", 0) or 0),
+        last_synced_at=getattr(row, "last_synced_at", None),
+        last_synced_watermark=getattr(row, "last_synced_watermark", None),
         finalized_at=getattr(row, "finalized_at", None),
         error_message=getattr(row, "error_message", None),
         activation_token=activation_token,
@@ -527,6 +602,7 @@ def _get_shared_session(
                    activation_token_hash, activation_expires_at,
                    requested_at, started_at, scheduled_stop_at,
                    actual_stop_at, request_count, total_tokens,
+                   last_synced_at, last_synced_watermark,
                    finalized_at, error_message
             FROM public.cc_switch_attribution_sessions
             WHERE {where}
@@ -537,17 +613,38 @@ def _get_shared_session(
     ).first()
 
 
+def _expire_stale_shared_sessions(
+    orm: Session,
+    *,
+    target_user_id: uuid.UUID | None = None,
+) -> None:
+    condition = ""
+    params: dict[str, str] = {}
+    if target_user_id is not None:
+        condition = " AND target_user_id = :target_user_id"
+        params["target_user_id"] = str(target_user_id)
+    orm.execute(
+        text(f"""
+            UPDATE public.cc_switch_attribution_sessions
+            SET status = 'expired', error_message = 'activation window expired',
+                updated_at = now()
+            WHERE status = 'starting'
+              AND activation_expires_at < now()
+              {condition}
+        """),
+        params,
+    )
+
+
 def _verify_shared_device_session(
     row,
     *,
     activation_token: str,
     device_id: str,
-    claims: dict[str, Any],
+    claims: dict[str, Any] | None = None,
 ) -> None:
     if row is None:
         raise HTTPException(status_code=404, detail="shared session not found")
-    if str(row.project_id) != str(claims["project_id"]):
-        raise HTTPException(status_code=403, detail="project is outside the device scope")
     if not secrets.compare_digest(row.activation_token_hash, _shared_token_hash(activation_token)):
         raise HTTPException(status_code=401, detail="shared session activation token is invalid")
     expires_at = row.activation_expires_at
@@ -575,7 +672,7 @@ def _shared_session_audit(
         resource_type="ai_usage",
         resource_id=str(row.id),
         metadata={
-            "project_id": str(row.project_id),
+            "project_id": str(row.project_id) if getattr(row, "project_id", None) else None,
             "employee_id": row.target_employee_id,
             "device_id": getattr(row, "device_id", None),
             **(metadata or {}),
@@ -1011,7 +1108,17 @@ def _attach_messages(
     orm: Session,
     records: list[UsageRecord],
 ) -> list[UsageRecord]:
-    chat_ids = [item.id for item in records if item.record_type == "chat"]
+    chat_ids: list[str] = []
+    for item in records:
+        if item.record_type != "chat":
+            continue
+        try:
+            uuid.UUID(str(item.id))
+        except (AttributeError, TypeError, ValueError):
+            # Shared temporary-token sessions use a stable pseudo id such as
+            # ``shared:<uuid>`` and have no rows in ai_chat_messages.
+            continue
+        chat_ids.append(item.id)
     if not chat_ids:
         return records
     placeholders, params = _bind_list(chat_ids, "session")
@@ -1260,7 +1367,7 @@ def _shared_cc_switch_records(
                    CASE WHEN count(DISTINCT r.model) = 1 THEN max(r.model)
                         ELSE 'multiple' END AS model
             FROM public.cc_switch_attribution_sessions s
-            JOIN public.projects p ON p.id = s.project_id
+            LEFT JOIN public.projects p ON p.id = s.project_id
             LEFT JOIN public.cc_switch_attributed_requests r ON r.session_id = s.id
             WHERE s.target_employee_id = :employee_id
               AND s.status = 'finalized'
@@ -1275,8 +1382,8 @@ def _shared_cc_switch_records(
         UsageRecord(
             id=f"shared:{row.id}",
             record_type="chat",
-            project_id=str(row.project_id),
-            project_name=str(row.project_name),
+            project_id=str(row.project_id or uuid.UUID(int=0)),
+            project_name=str(row.project_name or "无项目归属"),
             employee_id=str(row.target_employee_id),
             employee_name=str(row.target_employee_name),
             source="cc_switch",
@@ -1509,6 +1616,105 @@ def _leaderboard_distribution(
     ]
 
 
+@router.post(
+    "/ai-usage/temporary-monitor-probes",
+    response_model=TemporaryMonitorProbeCreateResponse,
+)
+def create_temporary_monitor_probe(
+    request: Request,
+    orm: Session = Depends(get_orm_session),
+) -> TemporaryMonitorProbeCreateResponse:
+    try:
+        user_id = current_user_id(request)
+    except AuthzError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    now = datetime.now(timezone.utc)
+    probe_token = secrets.token_urlsafe(32)
+    row = orm.execute(
+        text("""
+            INSERT INTO public.cc_switch_temporary_monitor_probes (
+                target_user_id, probe_token_hash, expires_at
+            ) VALUES (:target_user_id, :probe_token_hash, :expires_at)
+            RETURNING id, expires_at
+        """),
+        {
+            "target_user_id": str(user_id),
+            "probe_token_hash": _shared_token_hash(probe_token),
+            "expires_at": now + TEMPORARY_MONITOR_PROBE_TTL,
+        },
+    ).first()
+    orm.commit()
+    return TemporaryMonitorProbeCreateResponse(
+        id=row.id,
+        probe_token=probe_token,
+        expires_at=row.expires_at,
+    )
+
+
+@router.get(
+    "/ai-usage/temporary-monitor-probes/{probe_id}",
+    response_model=TemporaryMonitorProbeResponse,
+)
+def get_temporary_monitor_probe(
+    request: Request,
+    probe_id: uuid.UUID,
+    orm: Session = Depends(get_orm_session),
+) -> TemporaryMonitorProbeResponse:
+    try:
+        user_id = current_user_id(request)
+    except AuthzError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    row = orm.execute(
+        text("""
+            SELECT id, target_user_id, expires_at, detected_at, consumed_at,
+                   device_id, installer_version
+            FROM public.cc_switch_temporary_monitor_probes
+            WHERE id = :probe_id AND target_user_id = :target_user_id
+        """),
+        {"probe_id": str(probe_id), "target_user_id": str(user_id)},
+    ).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="temporary monitor probe not found")
+    return _temporary_monitor_probe_response(row)
+
+
+@device_router.post(
+    "/ai-usage/temporary-monitor-probes/device-confirm",
+    response_model=TemporaryMonitorProbeResponse,
+)
+def confirm_temporary_monitor_probe(
+    body: TemporaryMonitorProbeConfirmRequest,
+    orm: Session = Depends(get_orm_session),
+) -> TemporaryMonitorProbeResponse:
+    now = datetime.now(timezone.utc)
+    row = orm.execute(
+        text("""
+            UPDATE public.cc_switch_temporary_monitor_probes
+            SET detected_at = :detected_at,
+                device_id = :device_id,
+                installer_version = :installer_version
+            WHERE id = :probe_id
+              AND probe_token_hash = :probe_token_hash
+              AND expires_at > :detected_at
+              AND consumed_at IS NULL
+            RETURNING id, target_user_id, expires_at, detected_at, consumed_at,
+                      device_id, installer_version
+        """),
+        {
+            "probe_id": str(body.probe_id),
+            "probe_token_hash": _shared_token_hash(body.probe_token),
+            "detected_at": now,
+            "device_id": body.device_id,
+            "installer_version": body.installer_version,
+        },
+    ).first()
+    if row is None:
+        orm.rollback()
+        raise HTTPException(status_code=404, detail="temporary monitor probe is invalid or expired")
+    orm.commit()
+    return _temporary_monitor_probe_response(row)
+
+
 @router.post("/ai-usage/shared-sessions/start", response_model=SharedSessionResponse)
 def start_shared_session(
     request: Request,
@@ -1517,10 +1723,35 @@ def start_shared_session(
 ) -> SharedSessionResponse:
     try:
         user_id = current_user_id(request)
-        require_member(orm, user_id=user_id, project_id=body.project_id)
     except AuthzError as error:
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    now = datetime.now(timezone.utc)
+    probe = orm.execute(
+        text("""
+            SELECT id, device_id, installer_version, detected_at
+            FROM public.cc_switch_temporary_monitor_probes
+            WHERE id = :probe_id
+              AND target_user_id = :target_user_id
+              AND detected_at IS NOT NULL
+              AND consumed_at IS NULL
+              AND expires_at > :now
+              AND detected_at >= :minimum_detected_at
+            FOR UPDATE
+        """),
+        {
+            "probe_id": str(body.installation_probe_id),
+            "target_user_id": str(user_id),
+            "now": now,
+            "minimum_detected_at": now - TEMPORARY_MONITOR_PROBE_DETECTION_MAX_AGE,
+        },
+    ).first()
+    if probe is None:
+        raise HTTPException(
+            status_code=409,
+            detail="detect the Temporary Token Monitor before starting a session",
+        )
     employee = _current_employee(orm, user_id)
+    _expire_stale_shared_sessions(orm, target_user_id=user_id)
     existing = orm.execute(
         text("""
             SELECT id
@@ -1533,15 +1764,15 @@ def start_shared_session(
     ).first()
     if existing is not None:
         raise HTTPException(status_code=409, detail="this member already has an active shared session")
-    now = datetime.now(timezone.utc)
     stop_at = resolve_shared_session_stop_at(
         stop_mode=body.stop_mode,
         scheduled_stop_at=body.scheduled_stop_at,
         now=now,
     )
     activation_token = secrets.token_urlsafe(32)
-    row = orm.execute(
-        text("""
+    try:
+        row = orm.execute(
+            text("""
             INSERT INTO public.cc_switch_attribution_sessions (
                 project_id, target_user_id,
                 target_employee_id, target_employee_name,
@@ -1559,10 +1790,11 @@ def start_shared_session(
                       activation_token_hash, activation_expires_at,
                       requested_at, started_at, scheduled_stop_at,
                       actual_stop_at, request_count, total_tokens,
+                      last_synced_at, last_synced_watermark,
                       finalized_at, error_message
-        """),
-        {
-            "project_id": str(body.project_id),
+            """),
+            {
+            "project_id": None,
             "target_user_id": str(user_id),
             "target_employee_id": employee.id,
             "target_employee_name": employee.name,
@@ -1571,16 +1803,45 @@ def start_shared_session(
             "activation_expires_at": now + SHARED_SESSION_ACTIVATION_TTL,
             "requested_at": now,
             "scheduled_stop_at": stop_at,
-        },
-    ).first()
-    orm.commit()
+            },
+        ).first()
+        orm.execute(
+            text("""
+                UPDATE public.cc_switch_temporary_monitor_probes
+                SET consumed_at = :consumed_at
+                WHERE id = :probe_id AND target_user_id = :target_user_id
+            """),
+            {
+                "probe_id": str(body.installation_probe_id),
+                "target_user_id": str(user_id),
+                "consumed_at": now,
+            },
+        )
+        orm.commit()
+    except Exception as error:
+        try:
+            orm.rollback()
+        except Exception:
+            pass
+        if "uq_cc_switch_attribution_active_member" in str(error):
+            raise HTTPException(
+                status_code=409,
+                detail="this member already has an active shared session",
+            ) from error
+        raise
     _shared_session_audit(
         orm,
         request,
         user_id=user_id,
         action="ai_shared_session_start",
         row=row,
-        metadata={"stop_mode": body.stop_mode, "scheduled_stop_at": stop_at.isoformat()},
+        metadata={
+            "stop_mode": body.stop_mode,
+            "scheduled_stop_at": stop_at.isoformat(),
+            "installation_probe_id": str(body.installation_probe_id),
+            "device_id": probe.device_id,
+            "installer_version": probe.installer_version,
+        },
     )
     return _shared_session_response(row, activation_token=activation_token)
 
@@ -1594,6 +1855,7 @@ def get_current_shared_session(
         user_id = current_user_id(request)
     except AuthzError as error:
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    _expire_stale_shared_sessions(orm, target_user_id=user_id)
     row = orm.execute(
         text("""
             SELECT id, project_id, target_user_id,
@@ -1602,6 +1864,7 @@ def get_current_shared_session(
                    activation_token_hash, activation_expires_at,
                    requested_at, started_at, scheduled_stop_at,
                    actual_stop_at, request_count, total_tokens,
+                   last_synced_at, last_synced_watermark,
                    finalized_at, error_message
             FROM public.cc_switch_attribution_sessions
             WHERE target_user_id = :target_user_id
@@ -1669,6 +1932,7 @@ def update_shared_session_schedule(
                       activation_token_hash, activation_expires_at,
                       requested_at, started_at, scheduled_stop_at,
                       actual_stop_at, request_count, total_tokens,
+                      last_synced_at, last_synced_watermark,
                       finalized_at, error_message
         """),
         {
@@ -1706,7 +1970,9 @@ def stop_shared_session(
     existing = _get_shared_session(orm, session_id=session_id, target_user_id=user_id)
     if existing is None:
         raise HTTPException(status_code=404, detail="shared session not found")
-    if existing.status not in {"starting", "active", "pending_sync"}:
+    if existing.status == "pending_sync":
+        return _shared_session_response(existing)
+    if existing.status not in {"starting", "active"}:
         raise HTTPException(status_code=409, detail="shared session is already stopped")
     stopped_at = datetime.now(timezone.utc)
     status = "finalizing" if existing.device_id else "cancelled"
@@ -1722,6 +1988,7 @@ def stop_shared_session(
                       activation_token_hash, activation_expires_at,
                       requested_at, started_at, scheduled_stop_at,
                       actual_stop_at, request_count, total_tokens,
+                      last_synced_at, last_synced_watermark,
                       finalized_at, error_message
         """),
         {
@@ -2393,13 +2660,11 @@ def device_activate_shared_session(
     body: SharedSessionDeviceActivateRequest,
     orm: Session = Depends(get_orm_session),
 ) -> SharedSessionResponse:
-    claims = _device_claims(request)
     row = _get_shared_session(orm, session_id=body.session_id)
     _verify_shared_device_session(
         row,
         activation_token=body.activation_token,
         device_id=body.device_id,
-        claims=claims,
     )
     if row.status != "starting":
         raise HTTPException(status_code=409, detail="shared session is not waiting for activation")
@@ -2417,6 +2682,7 @@ def device_activate_shared_session(
                           activation_token_hash, activation_expires_at,
                           requested_at, started_at, scheduled_stop_at,
                           actual_stop_at, request_count, total_tokens,
+                          last_synced_at, last_synced_watermark,
                           finalized_at, error_message
             """),
             {
@@ -2464,17 +2730,22 @@ def device_shared_session_command(
     body: SharedSessionDeviceCommandRequest,
     orm: Session = Depends(get_orm_session),
 ) -> SharedSessionDeviceCommandResponse:
-    claims = _device_claims(request)
     row = _get_shared_session(orm, session_id=body.session_id)
     _verify_shared_device_session(
         row,
         activation_token=body.activation_token,
         device_id=body.device_id,
-        claims=claims,
     )
-    if row.status == "active" and body.checked_at >= row.scheduled_stop_at:
-        reason = "safety_timeout" if row.stop_mode == "manual_only" else "scheduled"
-        stop_at = row.scheduled_stop_at
+    if row.status == "active" and (
+        body.stop_reason == "replaced_by_next_user"
+        or body.checked_at >= row.scheduled_stop_at
+    ):
+        if body.stop_reason == "replaced_by_next_user":
+            reason = body.stop_reason
+            stop_at = body.checked_at
+        else:
+            reason = "safety_timeout" if row.stop_mode == "manual_only" else "scheduled"
+            stop_at = row.scheduled_stop_at
         orm.execute(
             text("""
                 UPDATE public.cc_switch_attribution_sessions
@@ -2506,6 +2777,175 @@ def device_shared_session_command(
     )
 
 
+def _store_shared_session_requests(
+    orm: Session,
+    *,
+    row,
+    device_id: str,
+    requests: list[SharedSessionRequestInput],
+    stop_at: datetime,
+) -> dict[str, int | float]:
+    if row.started_at is None:
+        raise HTTPException(status_code=422, detail="shared session has not started")
+    if any(item.requested_at < row.started_at or item.requested_at > stop_at for item in requests):
+        raise HTTPException(status_code=422, detail="shared request falls outside the session")
+    for request_row in requests:
+        total_tokens = cc_switch_total_tokens(
+            app_type=request_row.app_type.lower(),
+            input_tokens=request_row.input_tokens,
+            output_tokens=request_row.output_tokens,
+            cache_read_tokens=request_row.cache_read_tokens,
+            cache_creation_tokens=request_row.cache_creation_tokens,
+            input_token_semantics=request_row.input_token_semantics,
+        )
+        orm.execute(
+            text("""
+                INSERT INTO public.cc_switch_attributed_requests (
+                    session_id, project_id, target_user_id,
+                    target_employee_id, target_employee_name,
+                    device_id, request_id, requested_at, usage_date,
+                    app_type, provider_id, model, request_model,
+                    pricing_model, status_code,
+                    input_tokens, output_tokens,
+                    cache_read_tokens, cache_creation_tokens,
+                    total_tokens, total_cost_usd, input_token_semantics
+                ) VALUES (
+                    :session_id, :project_id, :target_user_id,
+                    :target_employee_id, :target_employee_name,
+                    :device_id, :request_id, :requested_at,
+                    (:requested_at AT TIME ZONE 'Asia/Shanghai')::date,
+                    :app_type, :provider_id, :model, :request_model,
+                    :pricing_model, :status_code,
+                    :input_tokens, :output_tokens,
+                    :cache_read_tokens, :cache_creation_tokens,
+                    :total_tokens, :total_cost_usd, :input_token_semantics
+                )
+                ON CONFLICT (device_id, request_id) DO NOTHING
+            """),
+            {
+                "session_id": str(row.id),
+                "project_id": str(row.project_id) if row.project_id else None,
+                "target_user_id": str(row.target_user_id),
+                "target_employee_id": row.target_employee_id,
+                "target_employee_name": row.target_employee_name,
+                "device_id": device_id,
+                "request_id": request_row.request_id,
+                "requested_at": request_row.requested_at,
+                "app_type": request_row.app_type.lower(),
+                "provider_id": request_row.provider_id,
+                "model": request_row.model,
+                "request_model": request_row.request_model,
+                "pricing_model": request_row.pricing_model,
+                "status_code": request_row.status_code,
+                "input_tokens": request_row.input_tokens,
+                "output_tokens": request_row.output_tokens,
+                "cache_read_tokens": request_row.cache_read_tokens,
+                "cache_creation_tokens": request_row.cache_creation_tokens,
+                "total_tokens": total_tokens,
+                "total_cost_usd": request_row.total_cost_usd,
+                "input_token_semantics": request_row.input_token_semantics,
+            },
+        )
+    aggregate = orm.execute(
+        text("""
+            SELECT count(*)::bigint AS request_count,
+                   COALESCE(sum(input_tokens), 0)::bigint AS input_tokens,
+                   COALESCE(sum(output_tokens), 0)::bigint AS output_tokens,
+                   COALESCE(sum(cache_read_tokens), 0)::bigint AS cache_read_tokens,
+                   COALESCE(sum(cache_creation_tokens), 0)::bigint AS cache_creation_tokens,
+                   COALESCE(sum(total_tokens), 0)::bigint AS total_tokens,
+                   COALESCE(sum(total_cost_usd), 0)::double precision AS total_cost_usd
+            FROM public.cc_switch_attributed_requests
+            WHERE session_id = :session_id
+        """),
+        {"session_id": str(row.id)},
+    ).first()
+    return {
+        "request_count": int(aggregate.request_count or 0),
+        "input_tokens": int(aggregate.input_tokens or 0),
+        "output_tokens": int(aggregate.output_tokens or 0),
+        "cache_read_tokens": int(aggregate.cache_read_tokens or 0),
+        "cache_creation_tokens": int(aggregate.cache_creation_tokens or 0),
+        "total_tokens": int(aggregate.total_tokens or 0),
+        "total_cost_usd": float(aggregate.total_cost_usd or 0),
+    }
+
+
+@device_router.post(
+    "/ai-usage/shared-sessions/device-sync",
+    response_model=SharedSessionDeviceSyncResponse,
+)
+def device_sync_shared_session(
+    request: Request,
+    body: SharedSessionDeviceSyncRequest,
+    orm: Session = Depends(get_orm_session),
+) -> SharedSessionDeviceSyncResponse:
+    row = _get_shared_session(orm, session_id=body.session_id)
+    _verify_shared_device_session(row, activation_token=body.activation_token, device_id=body.device_id)
+    if row.status not in {"active", "finalizing", "pending_sync"}:
+        raise HTTPException(status_code=409, detail="shared session cannot be synchronized")
+    should_stop = row.status in {"finalizing", "pending_sync"} or body.checked_at >= row.scheduled_stop_at
+    if should_stop:
+        stop_at = row.actual_stop_at or row.scheduled_stop_at
+        stop_reason = row.stop_reason or ("safety_timeout" if row.stop_mode == "manual_only" else "scheduled")
+    else:
+        stop_at = body.checked_at
+        stop_reason = None
+    synced_at = datetime.now(timezone.utc)
+    try:
+        totals = _store_shared_session_requests(
+            orm, row=row, device_id=body.device_id, requests=body.requests, stop_at=stop_at,
+        )
+        if should_stop and row.status == "active":
+            status = "finalizing"
+            actual_stop_at = stop_at
+        else:
+            status = row.status
+            actual_stop_at = row.actual_stop_at
+        orm.execute(
+            text("""
+                UPDATE public.cc_switch_attribution_sessions
+                SET status = :status, stop_reason = COALESCE(:stop_reason, stop_reason),
+                    actual_stop_at = COALESCE(:actual_stop_at, actual_stop_at),
+                    request_count = :request_count, input_tokens = :input_tokens,
+                    output_tokens = :output_tokens, cache_read_tokens = :cache_read_tokens,
+                    cache_creation_tokens = :cache_creation_tokens,
+                    total_tokens = :total_tokens, total_cost_usd = :total_cost_usd,
+                    last_synced_at = :last_synced_at,
+                    last_synced_watermark = COALESCE(:last_synced_watermark, last_synced_watermark),
+                    error_message = NULL, updated_at = now()
+                WHERE id = :session_id
+            """),
+            {
+                "session_id": str(row.id),
+                "status": status,
+                "stop_reason": stop_reason,
+                "actual_stop_at": actual_stop_at,
+                "last_synced_at": synced_at,
+                "last_synced_watermark": body.last_watermark,
+                **totals,
+            },
+        )
+        orm.commit()
+    except HTTPException:
+        orm.rollback()
+        raise
+    except Exception as error:
+        orm.rollback()
+        raise HTTPException(status_code=503, detail="shared session synchronization unavailable") from error
+    return SharedSessionDeviceSyncResponse(
+        status=status,
+        action="stop" if should_stop else "continue",
+        scheduled_stop_at=row.scheduled_stop_at,
+        stop_at=stop_at if should_stop else None,
+        stop_reason=stop_reason,
+        request_count=int(totals["request_count"]),
+        total_tokens=int(totals["total_tokens"]),
+        last_synced_at=synced_at,
+        accepted_watermark=body.last_watermark,
+    )
+
+
 @device_router.post(
     "/ai-usage/shared-sessions/device-finalize",
     response_model=SharedSessionResponse,
@@ -2515,13 +2955,11 @@ def device_finalize_shared_session(
     body: SharedSessionDeviceFinalizeRequest,
     orm: Session = Depends(get_orm_session),
 ) -> SharedSessionResponse:
-    claims = _device_claims(request)
     row = _get_shared_session(orm, session_id=body.session_id)
     _verify_shared_device_session(
         row,
         activation_token=body.activation_token,
         device_id=body.device_id,
-        claims=claims,
     )
     if row.status == "finalized":
         return _shared_session_response(row)
@@ -2530,112 +2968,10 @@ def device_finalize_shared_session(
     stopped_at = row.actual_stop_at or body.stopped_at
     if row.started_at is None or stopped_at <= row.started_at:
         raise HTTPException(status_code=422, detail="shared session time range is invalid")
-    if any(
-        request_row.requested_at < row.started_at
-        or request_row.requested_at > stopped_at
-        for request_row in body.requests
-    ):
-        raise HTTPException(status_code=422, detail="shared request falls outside the session")
-    totals = {
-        "request_count": 0,
-        "input_tokens": 0,
-        "output_tokens": 0,
-        "cache_read_tokens": 0,
-        "cache_creation_tokens": 0,
-        "total_tokens": 0,
-        "total_cost_usd": 0.0,
-    }
     try:
-        for request_row in body.requests:
-            total_tokens = cc_switch_total_tokens(
-                app_type=request_row.app_type.lower(),
-                input_tokens=request_row.input_tokens,
-                output_tokens=request_row.output_tokens,
-                cache_read_tokens=request_row.cache_read_tokens,
-                cache_creation_tokens=request_row.cache_creation_tokens,
-                input_token_semantics=request_row.input_token_semantics,
-            )
-            inserted = orm.execute(
-                text("""
-                    INSERT INTO public.cc_switch_attributed_requests (
-                        session_id, project_id, target_user_id,
-                        target_employee_id, target_employee_name,
-                        device_id, request_id, requested_at, usage_date,
-                        app_type, provider_id, model, request_model,
-                        pricing_model, status_code,
-                        input_tokens, output_tokens,
-                        cache_read_tokens, cache_creation_tokens,
-                        total_tokens, total_cost_usd, input_token_semantics
-                    ) VALUES (
-                        :session_id, :project_id, :target_user_id,
-                        :target_employee_id, :target_employee_name,
-                        :device_id, :request_id, :requested_at,
-                        (:requested_at AT TIME ZONE 'Asia/Shanghai')::date,
-                        :app_type, :provider_id, :model, :request_model,
-                        :pricing_model, :status_code,
-                        :input_tokens, :output_tokens,
-                        :cache_read_tokens, :cache_creation_tokens,
-                        :total_tokens, :total_cost_usd, :input_token_semantics
-                    )
-                    ON CONFLICT (device_id, request_id) DO NOTHING
-                    RETURNING total_tokens
-                """),
-                {
-                    "session_id": str(row.id),
-                    "project_id": str(row.project_id),
-                    "target_user_id": str(row.target_user_id),
-                    "target_employee_id": row.target_employee_id,
-                    "target_employee_name": row.target_employee_name,
-                    "device_id": body.device_id,
-                    "request_id": request_row.request_id,
-                    "requested_at": request_row.requested_at,
-                    "app_type": request_row.app_type.lower(),
-                    "provider_id": request_row.provider_id,
-                    "model": request_row.model,
-                    "request_model": request_row.request_model,
-                    "pricing_model": request_row.pricing_model,
-                    "status_code": request_row.status_code,
-                    "input_tokens": request_row.input_tokens,
-                    "output_tokens": request_row.output_tokens,
-                    "cache_read_tokens": request_row.cache_read_tokens,
-                    "cache_creation_tokens": request_row.cache_creation_tokens,
-                    "total_tokens": total_tokens,
-                    "total_cost_usd": request_row.total_cost_usd,
-                    "input_token_semantics": request_row.input_token_semantics,
-                },
-            ).first()
-            if inserted is None:
-                continue
-            totals["request_count"] += 1
-            totals["input_tokens"] += request_row.input_tokens
-            totals["output_tokens"] += request_row.output_tokens
-            totals["cache_read_tokens"] += request_row.cache_read_tokens
-            totals["cache_creation_tokens"] += request_row.cache_creation_tokens
-            totals["total_tokens"] += total_tokens
-            totals["total_cost_usd"] += request_row.total_cost_usd
-        aggregate = orm.execute(
-            text("""
-                SELECT count(*)::bigint AS request_count,
-                       COALESCE(sum(input_tokens), 0)::bigint AS input_tokens,
-                       COALESCE(sum(output_tokens), 0)::bigint AS output_tokens,
-                       COALESCE(sum(cache_read_tokens), 0)::bigint AS cache_read_tokens,
-                       COALESCE(sum(cache_creation_tokens), 0)::bigint AS cache_creation_tokens,
-                       COALESCE(sum(total_tokens), 0)::bigint AS total_tokens,
-                       COALESCE(sum(total_cost_usd), 0)::double precision AS total_cost_usd
-                FROM public.cc_switch_attributed_requests
-                WHERE session_id = :session_id
-            """),
-            {"session_id": str(row.id)},
-        ).first()
-        totals = {
-            "request_count": int(aggregate.request_count or 0),
-            "input_tokens": int(aggregate.input_tokens or 0),
-            "output_tokens": int(aggregate.output_tokens or 0),
-            "cache_read_tokens": int(aggregate.cache_read_tokens or 0),
-            "cache_creation_tokens": int(aggregate.cache_creation_tokens or 0),
-            "total_tokens": int(aggregate.total_tokens or 0),
-            "total_cost_usd": float(aggregate.total_cost_usd or 0),
-        }
+        totals = _store_shared_session_requests(
+            orm, row=row, device_id=body.device_id, requests=body.requests, stop_at=stopped_at,
+        )
         finalized_at = datetime.now(timezone.utc)
         updated = orm.execute(
             text("""
@@ -2649,6 +2985,7 @@ def device_finalize_shared_session(
                     cache_creation_tokens = :cache_creation_tokens,
                     total_tokens = :total_tokens,
                     total_cost_usd = :total_cost_usd,
+                    last_synced_at = :finalized_at,
                     finalized_at = :finalized_at,
                     error_message = NULL, updated_at = now()
                 WHERE id = :session_id
@@ -2658,6 +2995,7 @@ def device_finalize_shared_session(
                           activation_token_hash, activation_expires_at,
                           requested_at, started_at, scheduled_stop_at,
                           actual_stop_at, request_count, total_tokens,
+                          last_synced_at, last_synced_watermark,
                           finalized_at, error_message
             """),
             {

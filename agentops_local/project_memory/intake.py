@@ -3,8 +3,13 @@ from __future__ import annotations
 from typing import Iterable, Protocol, TypeVar
 
 
+# Meeting uploads intentionally keep their existing 20 MB limit. Project
+# original materials have a separate, larger boundary because they can include
+# complete source decks and document archives.
 MAX_FILE_BYTES = 20 * 1024 * 1024
-MAX_BATCH_BYTES = 50 * 1024 * 1024
+MAX_MATERIAL_FILE_BYTES = 500 * 1024 * 1024
+MAX_MATERIAL_BATCH_BYTES = 500 * 1024 * 1024
+MAX_BATCH_BYTES = MAX_MATERIAL_BATCH_BYTES
 HARD_BLOCKED_RECOMMENDATIONS = {"review", "duplicate", "sensitive", "low_value"}
 
 
@@ -31,10 +36,10 @@ def validate_batch_limits(files: Iterable[tuple[str, int]]) -> None:
     for filename, size_bytes in rows:
         if size_bytes <= 0:
             raise ValueError(f"file is empty: {filename}")
-        if size_bytes > MAX_FILE_BYTES:
-            raise ValueError(f"single file exceeds 20 MB: {filename}")
-    if sum(size for _, size in rows) > MAX_BATCH_BYTES:
-        raise ValueError("batch exceeds 50 MB")
+        if size_bytes > MAX_MATERIAL_FILE_BYTES:
+            raise ValueError(f"single file exceeds 500 MB: {filename}")
+    if sum(size for _, size in rows) > MAX_MATERIAL_BATCH_BYTES:
+        raise ValueError("batch exceeds 500 MB")
 
 
 def select_confirmed_files(
@@ -66,7 +71,7 @@ def build_original_material_review_markdown(
     ) or "- 无可提交文件"
     return f"""# {project_name} 原始项目资料审批
 
-本批资料仅完成敏感信息安全检查，未进行 AI 总结或归纳。
+文件已直接上传，未执行 AI 敏感信息识别，也未进行 AI 总结或归纳。
 
 ## 待审批原始文件
 

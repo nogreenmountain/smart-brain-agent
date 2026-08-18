@@ -18,7 +18,6 @@ import { Button } from '@/components/Button';
 import { EmptyState, LoadingDots } from '@/components/Feedback';
 import { Input } from '@/components/Input';
 import { PageHeader, PageShell } from '@/components/PageLayout';
-import { SharedDeviceSessionPanel } from '@/components/ai-workspace/SharedDeviceSessionPanel';
 import {
   AIMonitorComponentName,
   AIMonitorComponentStatus,
@@ -188,7 +187,7 @@ export default function MonitorSetupPage({ embedded = false }: { embedded?: bool
   const readyCount = installedCount(summary);
 
   return (
-    <PageShell className={embedded ? 'h-full' : ''}>
+    <PageShell fillParent={embedded}>
       {!embedded && <PageHeader
         eyebrow="DEVICE READINESS"
         icon={MonitorCheck}
@@ -260,8 +259,7 @@ export default function MonitorSetupPage({ embedded = false }: { embedded?: bool
         )}
 
         {!loadingStatus && (
-          <div className="mx-auto max-w-[1320px] space-y-5 px-4 py-6 md:px-6">
-            <SharedDeviceSessionPanel status={status} />
+          <div className="mx-auto max-w-[1320px] space-y-5 px-4 py-6 pb-8 md:px-6 md:pb-10">
             <section className="rounded-lg border border-[#d7e0ec] bg-white p-4 shadow-[0_10px_24px_rgba(15,35,66,0.04)]">
               <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
                 <div className="min-w-0">

@@ -33,6 +33,7 @@ const NAV: {
   icon: LucideIcon;
   adminOnly?: boolean;
   systemAdminOnly?: boolean;
+  nonAdminOnly?: boolean;
   activePaths?: string[];
 }[] = [
   { href: '/chat', label: '问答', icon: MessageCircle },
@@ -46,9 +47,14 @@ const NAV: {
     activePaths: ['/workday', '/leaderboard', '/worklogs', '/monitor/setup'],
   },
   { href: '/profile', label: '个人中心', icon: UserRound },
-  { href: '/team', label: '团队管理', icon: Users, systemAdminOnly: true },
-  { href: '/members', label: '成员管理', icon: Users },
-  { href: '/admin', label: '项目管理', icon: Settings, adminOnly: true },
+  { href: '/members', label: '成员信息', icon: Users, nonAdminOnly: true },
+  {
+    href: '/admin',
+    label: '管理工作台',
+    icon: Settings,
+    adminOnly: true,
+    activePaths: ['/admin', '/team'],
+  },
 ];
 
 export function Shell({ me, children }: { me: Me; children: React.ReactNode }) {
@@ -82,12 +88,16 @@ export function Shell({ me, children }: { me: Me; children: React.ReactNode }) {
         </div>
 
         <nav className="flex-1 px-2.5 py-3 space-y-1">
-          {NAV.filter((n) => (!n.adminOnly || isAdmin) && (!n.systemAdminOnly || isSystemAdmin)).map((n) => {
+          {NAV.filter((n) => (
+            (!n.adminOnly || isAdmin)
+            && (!n.systemAdminOnly || isSystemAdmin)
+            && (!n.nonAdminOnly || !isAdmin)
+          )).map((n) => {
             const active = (n.activePaths || [n.href]).some(
               (activePath) => pathname === activePath || pathname?.startsWith(activePath + '/'),
             );
             const Icon = n.icon;
-            const label = n.href === '/members' && !isAdmin ? '成员信息' : n.label;
+            const label = n.label;
             return (
               <button
                 key={n.href}

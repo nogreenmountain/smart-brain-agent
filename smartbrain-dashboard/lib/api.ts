@@ -187,6 +187,26 @@ export interface MaterialIntakeConfirmResult {
   draft_id: string;
 }
 
+export interface MaterialUploadSessionFile {
+  id: string;
+  filename: string;
+  format: string;
+  size_bytes: number;
+  received_bytes: number;
+}
+
+export interface MaterialUploadSession {
+  intake_id: string;
+  status: 'uploading' | 'pending_review';
+  files: MaterialUploadSessionFile[];
+}
+
+interface MaterialUploadChunkResult {
+  file_id: string;
+  received_bytes: number;
+  size_bytes: number;
+}
+
 export type KnowledgeApprovalStatus = 'raw_uploaded' | 'pending_review' | 'approved' | 'rejected';
 
 export interface KnowledgeLedgerUser {
@@ -215,7 +235,9 @@ export interface KnowledgeLedgerSummary {
 }
 
 export interface KnowledgeLedgerDocument {
-  document_id: string;
+  asset_id: string;
+  asset_type: 'project_material' | 'project_wiki' | 'meeting_record';
+  document_id: string | null;
   filename: string;
   display_name: string;
   format: string;
@@ -233,12 +255,13 @@ export interface KnowledgeLedgerDocument {
   approved_memory_document_id: string | null;
   intake_id?: string | null;
   original_file_id?: string | null;
+  meeting_date?: string | null;
 }
 
 export interface KnowledgeLedger {
   category: KnowledgeLedgerCategory;
   project: KnowledgeLedgerProject;
-  permissions: { can_review: boolean };
+  permissions: { can_review: boolean; can_manage: boolean; can_delete: boolean };
   leaders: KnowledgeLedgerUser[];
   uploaders: KnowledgeLedgerUser[];
   summary: KnowledgeLedgerSummary;
@@ -571,7 +594,7 @@ export type SharedSessionStatus =
 
 export interface SharedCCSwitchSession {
   id: string;
-  project_id: string;
+  project_id?: string | null;
   target_employee_id: string;
   target_employee_name: string;
   device_id?: string | null;
@@ -584,15 +607,27 @@ export interface SharedCCSwitchSession {
   actual_stop_at?: string | null;
   request_count: number;
   total_tokens: number;
+  last_synced_at?: string | null;
+  last_synced_watermark?: string | null;
   finalized_at?: string | null;
   error_message?: string | null;
   activation_token?: string | null;
 }
 
 export interface StartSharedCCSwitchSessionInput {
-  projectId: string;
+  installationProbeId: string;
   stopMode: SharedSessionStopMode;
   scheduledStopAt?: string;
+}
+
+export interface TemporaryMonitorProbe {
+  id: string;
+  status: 'pending' | 'detected' | 'expired' | 'consumed';
+  expires_at: string;
+  detected_at?: string | null;
+  device_id?: string | null;
+  installer_version?: string | null;
+  probe_token?: string;
 }
 
 export interface AIDailyWorkItem {
@@ -802,6 +837,14 @@ export interface MeetingSummaryListParams {
   limit?: number;
 }
 
+export interface MeetingSubmission {
+  id: string;
+  draft_id: string;
+  project_id: string;
+  title: string;
+  status: 'pending_review';
+}
+
 export interface CreateMeetingSummaryInput {
   projectId: string;
   title: string;
@@ -814,7 +857,7 @@ export type MeetingParticipantOption = ProjectMemberOption;
 
 export type DepartmentId = string;
 
-export type KnowledgeLedgerCategory = 'project_material' | 'project_wiki_source';
+export type KnowledgeLedgerCategory = 'project_material' | 'project_wiki_source' | 'meeting_record';
 
 export interface Department {
   id: DepartmentId;
@@ -830,8 +873,10 @@ export interface Department {
 export interface ProjectDepartmentMigration {
   id: string;
   project_id: string;
-  source_department_id: DepartmentId;
-  target_department_id: DepartmentId;
+  source_department_id?: DepartmentId | null;
+  target_department_id?: DepartmentId | null;
+  source_department_name: string;
+  target_department_name: string;
   status: 'queued' | 'running' | 'completed' | 'failed';
   progress: number;
   current_step: string;
@@ -852,6 +897,8 @@ export interface ProjectRepository {
   project_id: string;
   git_url: string;
   git_branch: string;
+  status?: 'pending_review' | 'approved' | 'rejected' | null;
+  draft_id?: string | null;
 }
 
 export interface ProjectMemoryDraft {
@@ -871,10 +918,38 @@ export interface ProjectMemoryDraft {
   updated_at: string | null;
 }
 
+export interface ProjectMemoryReviewQueueItem {
+  id: string;
+  project_id: string;
+  project_name: string;
+  department_id: DepartmentId;
+  department_name: string;
+  department_path: string;
+  title: string;
+  status: 'pending_review' | 'approved' | 'rejected';
+  markdown_content: string;
+  source_count: number;
+  review_kind?: 'project_material' | 'meeting_summary' | 'project_repository';
+  uploader: {
+    user_id: string | null;
+    username: string | null;
+    nickname: string | null;
+    display_name: string;
+  };
+  file_names: string[];
+  total_size_bytes: number;
+  repository_url?: string | null;
+  repository_branch?: string | null;
+  meeting_date?: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
 export interface ProjectMemoryReviewResult {
   id: string;
   status: 'pending_review' | 'approved' | 'rejected';
   document_id: string | null;
+  resource_id?: string | null;
   chunk_count: number;
   wiki_page_count: number;
 }
@@ -1032,6 +1107,15 @@ export class ApiError extends Error {
   }
 }
 
+export interface UploadProgress {
+  phase: 'uploading' | 'processing';
+  percent: number | null;
+  loadedBytes: number;
+  totalBytes: number;
+}
+
+export type UploadProgressHandler = (progress: UploadProgress) => void;
+
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${getApiBase()}${path}`, {
     credentials: 'include',
@@ -1052,6 +1136,102 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
   }
   if (res.status === 204) return undefined as T;
   return res.json();
+}
+
+function multipartCallWithProgress<T>(
+  path: string,
+  body: FormData,
+  onProgress: UploadProgressHandler,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open('POST', `${getApiBase()}${path}`);
+    request.withCredentials = true;
+    let loadedBytes = 0;
+    let totalBytes = 0;
+    request.upload.onprogress = (event) => {
+      loadedBytes = event.loaded;
+      totalBytes = event.lengthComputable ? event.total : 0;
+      onProgress({
+        phase: 'uploading',
+        percent: event.lengthComputable && event.total > 0
+          ? Math.min(100, Math.round((event.loaded / event.total) * 100))
+          : null,
+        loadedBytes,
+        totalBytes,
+      });
+    };
+    request.upload.onload = () => {
+      onProgress({
+        phase: 'processing',
+        percent: null,
+        loadedBytes: totalBytes || loadedBytes,
+        totalBytes: totalBytes || loadedBytes,
+      });
+    };
+    request.onerror = () => reject(new Error('网络连接失败，文件尚未完成上传，请检查网络后重试。'));
+    request.onabort = () => reject(new Error('上传已取消。'));
+    request.onload = () => {
+      let responseBody: unknown = null;
+      if (request.responseText) {
+        try {
+          responseBody = JSON.parse(request.responseText);
+        } catch {
+          responseBody = null;
+        }
+      }
+      if (request.status < 200 || request.status >= 300) {
+        const detail = responseBody
+          && typeof responseBody === 'object'
+          && 'detail' in responseBody
+          && typeof (responseBody as { detail: unknown }).detail === 'string'
+          ? (responseBody as { detail: string }).detail
+          : `请求失败 (${request.status || '网络错误'})`;
+        reject(new ApiError(request.status, responseBody, detail));
+        return;
+      }
+      resolve(responseBody as T);
+    };
+    request.send(body);
+  });
+}
+
+function binaryCallWithProgress<T>(
+  path: string,
+  body: Blob,
+  onProgress: (loadedBytes: number) => void,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open('PUT', `${getApiBase()}${path}`);
+    request.withCredentials = true;
+    request.setRequestHeader('Content-Type', 'application/octet-stream');
+    request.upload.onprogress = (event) => onProgress(event.loaded);
+    request.onerror = () => reject(new Error('网络连接失败，当前分块尚未确认，请检查网络后重试。'));
+    request.onabort = () => reject(new Error('上传已取消。'));
+    request.onload = () => {
+      let responseBody: unknown = null;
+      if (request.responseText) {
+        try {
+          responseBody = JSON.parse(request.responseText);
+        } catch {
+          responseBody = null;
+        }
+      }
+      if (request.status < 200 || request.status >= 300) {
+        const detail = responseBody
+          && typeof responseBody === 'object'
+          && 'detail' in responseBody
+          && typeof (responseBody as { detail: unknown }).detail === 'string'
+          ? (responseBody as { detail: string }).detail
+          : `请求失败 (${request.status || '网络错误'})`;
+        reject(new ApiError(request.status, responseBody, detail));
+        return;
+      }
+      resolve(responseBody as T);
+    };
+    request.send(body);
+  });
 }
 
 // 鉴权
@@ -1346,15 +1526,93 @@ export async function previewProjectMaterials(
   projectId: string,
   departmentId: DepartmentId,
   files: File[],
+  onProgress?: UploadProgressHandler,
 ): Promise<MaterialIntakePreview> {
   const fd = new FormData();
   fd.append('project_id', projectId);
   fd.append('department_id', departmentId);
   files.forEach((file) => fd.append('files', file));
+  if (onProgress) {
+    return multipartCallWithProgress<MaterialIntakePreview>(
+      '/v4/knowledge/material-intakes/preview',
+      fd,
+      onProgress,
+    );
+  }
   return call<MaterialIntakePreview>('/v4/knowledge/material-intakes/preview', {
     method: 'POST',
     body: fd,
   });
+}
+
+const MATERIAL_UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024;
+
+export async function uploadProjectMaterialsDirect(
+  projectId: string,
+  departmentId: DepartmentId,
+  files: File[],
+  clientUploadId: string,
+  onProgress?: UploadProgressHandler,
+): Promise<MaterialIntakeConfirmResult> {
+  const session = await call<MaterialUploadSession>('/v4/knowledge/material-intakes/upload-sessions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      project_id: projectId,
+      department_id: departmentId,
+      client_upload_id: clientUploadId,
+      files: files.map((file) => ({ filename: file.name, size_bytes: file.size })),
+    }),
+  });
+  const totalBytes = files.reduce((total, file) => total + file.size, 0);
+  let confirmedBytes = session.files.reduce((total, file) => total + file.received_bytes, 0);
+  const emitUploadProgress = (loadedBytes: number) => {
+    onProgress?.({
+      phase: 'uploading',
+      percent: totalBytes > 0 ? Math.min(100, Math.round((loadedBytes / totalBytes) * 100)) : 100,
+      loadedBytes,
+      totalBytes,
+    });
+  };
+  emitUploadProgress(confirmedBytes);
+
+  const localFiles = new Map(files.map((file) => [file.name, file]));
+  for (const remoteFile of session.files) {
+    const localFile = localFiles.get(remoteFile.filename);
+    if (!localFile) {
+      throw new Error(`上传会话中的文件与当前选择不一致：${remoteFile.filename}`);
+    }
+    if (remoteFile.received_bytes < 0 || remoteFile.received_bytes > localFile.size) {
+      throw new Error(`服务器返回了无效的上传进度：${remoteFile.filename}`);
+    }
+    let offset = remoteFile.received_bytes;
+    while (offset < localFile.size) {
+      const chunk = localFile.slice(offset, Math.min(offset + MATERIAL_UPLOAD_CHUNK_BYTES, localFile.size));
+      const confirmedBeforeChunk = confirmedBytes;
+      const response = await binaryCallWithProgress<MaterialUploadChunkResult>(
+        `/v4/knowledge/material-intakes/upload-sessions/${encodeURIComponent(session.intake_id)}/files/${encodeURIComponent(remoteFile.id)}?offset=${offset}`,
+        chunk,
+        (chunkLoadedBytes) => emitUploadProgress(confirmedBeforeChunk + chunkLoadedBytes),
+      );
+      if (response.received_bytes <= offset || response.received_bytes > localFile.size) {
+        throw new Error(`服务器未确认完整上传分块：${remoteFile.filename}`);
+      }
+      confirmedBytes += response.received_bytes - offset;
+      offset = response.received_bytes;
+      emitUploadProgress(confirmedBytes);
+    }
+  }
+
+  onProgress?.({
+    phase: 'processing',
+    percent: null,
+    loadedBytes: totalBytes,
+    totalBytes,
+  });
+  return call<MaterialIntakeConfirmResult>(
+    `/v4/knowledge/material-intakes/upload-sessions/${encodeURIComponent(session.intake_id)}/complete`,
+    { method: 'POST' },
+  );
 }
 
 export async function confirmMaterialIntake(
@@ -1447,6 +1705,60 @@ export async function getAIUsageOptions(): Promise<AIUsageOptions> {
   return call<AIUsageOptions>('/v4/ai-usage/options');
 }
 
+export type KnowledgeAssetType = 'project_material' | 'project_wiki' | 'meeting_record';
+
+export interface KnowledgeAssetPreview {
+  asset_id: string;
+  asset_type: KnowledgeAssetType;
+  project_id: string;
+  name: string;
+  format: string;
+  content: string;
+}
+
+export async function renameKnowledgeAsset(
+  assetType: KnowledgeAssetType,
+  assetId: string,
+  name: string,
+): Promise<void> {
+  await call(`/v4/knowledge/assets/${encodeURIComponent(assetType)}/${encodeURIComponent(assetId)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+}
+
+export async function moveKnowledgeAsset(
+  assetType: KnowledgeAssetType,
+  assetId: string,
+  targetProjectId: string,
+): Promise<void> {
+  await call(`/v4/knowledge/assets/${encodeURIComponent(assetType)}/${encodeURIComponent(assetId)}/move`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ target_project_id: targetProjectId }),
+  });
+}
+
+export async function deleteKnowledgeAsset(assetType: KnowledgeAssetType, assetId: string): Promise<void> {
+  await call(`/v4/knowledge/assets/${encodeURIComponent(assetType)}/${encodeURIComponent(assetId)}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function previewKnowledgeAsset(
+  assetType: KnowledgeAssetType,
+  assetId: string,
+): Promise<KnowledgeAssetPreview> {
+  return call<KnowledgeAssetPreview>(
+    `/v4/knowledge/assets/${encodeURIComponent(assetType)}/${encodeURIComponent(assetId)}/preview`,
+  );
+}
+
+export function knowledgeAssetDownloadUrl(assetType: KnowledgeAssetType, assetId: string): string {
+  return `${getApiBase()}/v4/knowledge/assets/${encodeURIComponent(assetType)}/${encodeURIComponent(assetId)}/download`;
+}
+
 export async function getAIUsageLeaderboard(
   params: AIUsageLeaderboardParams,
 ): Promise<AIUsageLeaderboardResult> {
@@ -1484,6 +1796,18 @@ export async function getCurrentSharedCCSwitchSession(): Promise<SharedCCSwitchS
   return call<SharedCCSwitchSession | null>('/v4/ai-usage/shared-sessions/current');
 }
 
+export async function createTemporaryMonitorProbe(): Promise<TemporaryMonitorProbe> {
+  return call<TemporaryMonitorProbe>('/v4/ai-usage/temporary-monitor-probes', {
+    method: 'POST',
+  });
+}
+
+export async function getTemporaryMonitorProbe(probeId: string): Promise<TemporaryMonitorProbe> {
+  return call<TemporaryMonitorProbe>(
+    `/v4/ai-usage/temporary-monitor-probes/${encodeURIComponent(probeId)}`,
+  );
+}
+
 export async function getSharedCCSwitchSession(
   sessionId: string,
 ): Promise<SharedCCSwitchSession> {
@@ -1499,7 +1823,7 @@ export async function startSharedCCSwitchSession(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      project_id: input.projectId,
+      installation_probe_id: input.installationProbeId,
       stop_mode: input.stopMode,
       scheduled_stop_at: input.scheduledStopAt,
     }),
@@ -1588,14 +1912,18 @@ export async function listMeetingParticipantOptions(
 
 export async function createMeetingSummary(
   input: CreateMeetingSummaryInput,
-): Promise<MeetingSummary> {
+  onProgress?: UploadProgressHandler,
+): Promise<MeetingSubmission> {
   const body = new FormData();
   body.set('project_id', input.projectId);
   body.set('title', input.title);
   body.set('meeting_date', input.meetingDate);
   body.set('participant_user_ids', JSON.stringify(input.participantUserIds));
   body.set('file', input.file);
-  return call<MeetingSummary>('/v4/meeting-summaries', { method: 'POST', body });
+  if (onProgress) {
+    return multipartCallWithProgress<MeetingSubmission>('/v4/meeting-summaries', body, onProgress);
+  }
+  return call<MeetingSubmission>('/v4/meeting-summaries', { method: 'POST', body });
 }
 
 export function meetingSummaryFileUrl(meetingSummaryId: string): string {
@@ -1642,6 +1970,17 @@ export async function updateProjectMemoryDepartment(
 ): Promise<Department> {
   return call<Department>(`/v4/project-memory/departments/${encodeURIComponent(departmentId)}`, {
     method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function reorderProjectMemoryDepartments(input: {
+  parent_id?: DepartmentId | null;
+  department_ids: DepartmentId[];
+}): Promise<Department[]> {
+  return call<Department[]>('/v4/project-memory/departments/reorder', {
+    method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(input),
   });
@@ -1745,6 +2084,10 @@ export async function reviewProjectWikiChange(
       body: JSON.stringify({ decision, comment }),
     },
   );
+}
+
+export async function listProjectMemoryReviewQueue(): Promise<ProjectMemoryReviewQueueItem[]> {
+  return call<ProjectMemoryReviewQueueItem[]>('/v4/project-memory/review-queue');
 }
 
 export async function listProjectWikiMcpTokens(): Promise<ProjectWikiMcpToken[]> {

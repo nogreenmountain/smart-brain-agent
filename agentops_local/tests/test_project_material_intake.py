@@ -25,15 +25,23 @@ def _load_module():
 
 
 class ProjectMaterialIntakeTests(unittest.TestCase):
-    def test_batch_limits_reject_oversized_file_and_batch(self) -> None:
+    def test_original_material_limit_is_500_mb_while_meeting_limit_stays_20_mb(self) -> None:
         intake = _load_module()
 
-        with self.assertRaisesRegex(ValueError, "single file"):
-            intake.validate_batch_limits([("large.pdf", 21 * 1024 * 1024)])
+        self.assertEqual(intake.MAX_FILE_BYTES, 20 * 1024 * 1024)
+        self.assertEqual(intake.MAX_MATERIAL_FILE_BYTES, 500 * 1024 * 1024)
+        self.assertEqual(intake.MAX_MATERIAL_BATCH_BYTES, 500 * 1024 * 1024)
 
+        intake.validate_batch_limits([("limit.pdf", 500 * 1024 * 1024)])
+        with self.assertRaisesRegex(ValueError, "single file"):
+            intake.validate_batch_limits([("large.pdf", 500 * 1024 * 1024 + 1)])
+
+        intake.validate_batch_limits(
+            [("one.pdf", 250 * 1024 * 1024), ("two.pdf", 250 * 1024 * 1024)]
+        )
         with self.assertRaisesRegex(ValueError, "batch"):
             intake.validate_batch_limits(
-                [("one.pdf", 20 * 1024 * 1024), ("two.pdf", 20 * 1024 * 1024), ("three.pdf", 11 * 1024 * 1024)]
+                [("one.pdf", 250 * 1024 * 1024), ("two.pdf", 250 * 1024 * 1024), ("extra.txt", 1)]
             )
 
     def test_confirmation_never_allows_hard_blocked_files(self) -> None:
@@ -68,6 +76,8 @@ class ProjectMaterialIntakeTests(unittest.TestCase):
         self.assertIn("原始项目资料审批", markdown)
         self.assertIn("README.md", markdown)
         self.assertIn("architecture.pdf", markdown)
+        self.assertIn("文件已直接上传，未执行 AI 敏感信息识别", markdown)
+        self.assertNotIn("敏感信息安全检查", markdown)
         self.assertNotIn("整理后的项目资料", markdown)
         self.assertNotIn("Skill", markdown)
 

@@ -361,7 +361,9 @@ function NoticeMessage({ notice }: { notice: Exclude<Notice, null> }) {
 }
 
 function projectRoleLabel(role?: Project['role']): string {
-  return role === 'owner' || role === 'admin' ? '项目负责人' : '项目成员';
+  if (role === 'owner') return '总负责人';
+  if (role === 'admin') return '项目负责人';
+  return '项目成员';
 }
 
 function formatDate(value?: string | null): string {

@@ -2,6 +2,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { TeamDirectoryPanel } from '@/components/management-workspace/TeamDirectoryPanel';
 import TeamPage from './page';
 
 const mocks = vi.hoisted(() => ({
@@ -16,7 +17,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('next/navigation', () => ({
-  useRouter: () => ({ replace: mocks.replace }),
+  redirect: mocks.replace,
 }));
 
 vi.mock('@/lib/api', async (importOriginal) => {
@@ -105,14 +106,21 @@ describe('TeamPage', () => {
   it('creates and deactivates SmartBrain team members from one system-admin page', async () => {
     vi.spyOn(window, 'confirm').mockReturnValue(true);
     const user = userEvent.setup();
-    render(<TeamPage />);
+    render(<TeamDirectoryPanel currentUser={{
+      user_id: 'admin-1',
+      email: 'hanshangbo@local.dev',
+      full_name: 'Admin',
+      is_system_admin: true,
+      memberships: [],
+    }} />);
 
-    expect(await screen.findByRole('heading', { name: '团队管理' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: '团队账号' })).toBeInTheDocument();
     expect(await screen.findByText('韩尚博')).toBeInTheDocument();
+    expect(screen.getByTestId('team-member-list')).toHaveClass('max-h-[440px]', 'overflow-y-auto');
     expect(screen.getByText('账号：hanshangbo')).toBeInTheDocument();
     expect(screen.getByText('已加入 5 个项目')).toBeInTheDocument();
 
-    await user.type(screen.getByLabelText('用户名'), 'newmember');
+    await user.type(screen.getByLabelText('登录账号'), 'newmember');
     await user.type(screen.getByLabelText('昵称'), '新成员');
     await user.type(screen.getByLabelText('初始密码'), '654321');
     await user.click(screen.getByRole('button', { name: '创建团队成员' }));
@@ -146,7 +154,13 @@ describe('TeamPage', () => {
       email: 'member@local.dev',
       status: 'updated',
     });
-    render(<TeamPage />);
+    render(<TeamDirectoryPanel currentUser={{
+      user_id: 'admin-1',
+      email: 'hanshangbo@local.dev',
+      full_name: 'Admin',
+      is_system_admin: true,
+      memberships: [],
+    }} />);
 
     expect(await screen.findByText('member')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: '修改 member 用户名' }));
@@ -166,20 +180,10 @@ describe('TeamPage', () => {
     });
   });
 
-  it('redirects non-system-admin users away from team management', async () => {
-    mocks.getMe.mockResolvedValue({
-      user_id: 'user-2',
-      email: 'member@local.dev',
-      full_name: 'Member',
-      is_system_admin: false,
-      memberships: [{ org_id: 'org-1', org_name: '研发', role: 'owner' }],
-    });
+  it('keeps the legacy team route compatible with the member-management tab', async () => {
+    TeamPage();
 
-    render(<TeamPage />);
-
-    await waitFor(() => {
-      expect(mocks.replace).toHaveBeenCalledWith('/chat');
-    });
+    expect(mocks.replace).toHaveBeenCalledWith('/admin?view=members');
     expect(mocks.listTeamMembers).not.toHaveBeenCalled();
   });
 });

@@ -3,13 +3,15 @@ import { type LucideIcon } from 'lucide-react';
 
 export function PageShell({
   className = '',
+  fillParent = false,
   children,
 }: {
   className?: string;
+  fillParent?: boolean;
   children: React.ReactNode;
 }) {
   return (
-    <div className={`flex h-screen min-w-0 flex-col bg-[#eef3f9] text-[#10213e] ${className}`}>
+    <div className={`flex ${fillParent ? 'h-full min-h-0' : 'h-screen'} min-w-0 flex-col bg-[#eef3f9] text-[#10213e] ${className}`}>
       {children}
     </div>
   );

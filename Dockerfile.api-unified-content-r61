@@ -1,0 +1,10 @@
+FROM agentops-api-local:direct-upload-concurrency-r59
+
+COPY agentops_local/api/routes/v4/knowledge.py /app/agentops/api/routes/v4/knowledge.py
+COPY agentops_local/api/routes/v4/meeting_summaries.py /app/agentops/api/routes/v4/meeting_summaries.py
+COPY agentops_local/api/routes/v4/project_memory.py /app/agentops/api/routes/v4/project_memory.py
+COPY agentops_local/wiki_mcp /app/agentops/wiki_mcp
+COPY agentops_local/workday /app/workday
+COPY agentops_local/tests /app/agentops/tests
+COPY supabase/migrations /app/supabase/migrations
+COPY deploy/public-relay/nginx/smartbrain-ip.conf /app/deploy/public-relay/nginx/smartbrain-ip.conf

@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   listProjectCatalog: vi.fn(),
   listProjectMemoryDepartments: vi.fn(),
   listProjectMemoryDrafts: vi.fn(),
+  listProjectMemoryReviewQueue: vi.fn(),
   listProjects: vi.fn(),
   reviewProjectMemoryDraft: vi.fn(),
   updateProject: vi.fn(),
@@ -37,6 +38,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     listProjectCatalog: mocks.listProjectCatalog,
     listProjectMemoryDepartments: mocks.listProjectMemoryDepartments,
     listProjectMemoryDrafts: mocks.listProjectMemoryDrafts,
+    listProjectMemoryReviewQueue: mocks.listProjectMemoryReviewQueue,
     listProjects: mocks.listProjects,
     reviewProjectMemoryDraft: mocks.reviewProjectMemoryDraft,
     updateProject: mocks.updateProject,
@@ -107,8 +109,8 @@ describe('ProjectMemoryPage compatibility route', () => {
     vi.clearAllMocks();
     mocks.getMe.mockResolvedValue({
       user_id: 'admin-1',
-      email: 'admin@local.dev',
-      full_name: 'Admin',
+      email: 'hanshangbo@local.dev',
+      full_name: 'hanshangbo',
       is_system_admin: true,
       can_manage_projects: true,
       memberships: [{ org_id: 'org-1', org_name: '研发部', role: 'owner' }],
@@ -117,6 +119,21 @@ describe('ProjectMemoryPage compatibility route', () => {
     mocks.listProjectCatalog.mockResolvedValue([project]);
     mocks.listProjects.mockResolvedValue([project]);
     mocks.listProjectMemoryDrafts.mockResolvedValue([draft]);
+    mocks.listProjectMemoryReviewQueue.mockResolvedValue([
+      {
+        ...draft,
+        project_name: '智慧大脑',
+        department_path: '研发支撑 / 直属分级',
+        uploader: {
+          user_id: 'member-1',
+          username: 'member1',
+          nickname: '普通成员',
+          display_name: '普通成员',
+        },
+        file_names: ['项目资料.docx'],
+        total_size_bytes: 1024,
+      },
+    ]);
     mocks.getProjectRepository.mockResolvedValue({
       project_id: 'project-1',
       git_url: 'https://github.com/example/smartbrain.git',
@@ -137,7 +154,8 @@ describe('ProjectMemoryPage compatibility route', () => {
     const user = userEvent.setup();
     render(<ProjectMemoryPage />);
 
-    expect(await screen.findByRole('heading', { name: '项目管理' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: '管理工作台' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: '项目管理' })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByText('PROJECT PROFILE')).toBeInTheDocument();
     expect((await screen.findAllByText('智慧大脑 长期记忆')).length).toBeGreaterThan(0);
     expect(screen.getByText(/# 项目长期记忆：智慧大脑/)).toBeInTheDocument();
@@ -213,10 +231,12 @@ describe('ProjectMemoryPage compatibility route', () => {
     expect(screen.getByRole('dialog', { name: '分类管理' })).toBeInTheDocument();
     expect(screen.getByText(/第一、第二分级只用于分类/)).toBeInTheDocument();
     expect(screen.getAllByText('系统分级 · 自动维护')).toHaveLength(2);
-    expect(screen.getAllByRole('button', { name: '改名排序' })).toHaveLength(3);
+    expect(screen.getAllByRole('button', { name: '改名' })).toHaveLength(3);
     expect(screen.getAllByRole('button', { name: '删除分类' })).toHaveLength(3);
+    expect(screen.getAllByRole('button', { name: /拖动排序/ }).length).toBeGreaterThan(0);
+    expect(screen.queryByRole('spinbutton', { name: /分类排序/ })).not.toBeInTheDocument();
 
-    await user.click(screen.getAllByRole('button', { name: '改名排序' })[0]);
+    await user.click(screen.getAllByRole('button', { name: '改名' })[0]);
     expect(screen.getByRole('button', { name: '保存分类' })).toBeInTheDocument();
   });
 

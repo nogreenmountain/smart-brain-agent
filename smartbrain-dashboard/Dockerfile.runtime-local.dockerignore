@@ -1,0 +1,9 @@
+node_modules
+.next.pre-*
+.next.interrupted-*
+.next.build-interrupted-*
+npm-debug.log*
+.env*
+Dockerfile
+Dockerfile.*
+.dockerignore

@@ -2,7 +2,7 @@
 
 import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { ClipboardCheck, Download, ExternalLink, FileText, FolderKanban, Trash2, Users } from 'lucide-react';
+import { ClipboardCheck, Download, ExternalLink, Eye, FileText, FolderKanban, MoveRight, Pencil, Trash2, Users, X } from 'lucide-react';
 import {
   ApiError,
   Department,
@@ -10,11 +10,15 @@ import {
   KnowledgeLedgerCategory,
   KnowledgeLedger,
   KnowledgeLedgerDocument,
-  deleteKnowledgeDocument,
+  deleteKnowledgeAsset,
+  knowledgeAssetDownloadUrl,
   listKnowledgeLedger,
   listProjectMemoryDepartments,
   listProjectCatalog,
-  originalMaterialDownloadUrl,
+  moveKnowledgeAsset,
+  previewKnowledgeAsset,
+  renameKnowledgeAsset,
+  type KnowledgeAssetPreview,
   Project,
 } from '@/lib/api';
 import { Button } from '@/components/Button';
@@ -34,7 +38,14 @@ const APPROVAL_OPTIONS: { value: string; label: string }[] = [
 const CATEGORY_OPTIONS: { value: KnowledgeLedgerCategory; label: string }[] = [
   { value: 'project_material', label: '项目原始资料' },
   { value: 'project_wiki_source', label: '项目 Wiki 原始资料' },
+  { value: 'meeting_record', label: '会议记录' },
 ];
+
+const categoryLabel: Record<KnowledgeLedgerCategory, string> = {
+  project_material: '项目原始资料',
+  project_wiki_source: '项目 Wiki 资料',
+  meeting_record: '会议记录',
+};
 
 const approvalLabel: Record<KnowledgeApprovalStatus, string> = {
   raw_uploaded: '未生成草稿',
@@ -76,7 +87,12 @@ export default function KnowledgePage() {
   const [ledger, setLedger] = useState<KnowledgeLedger | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingLedger, setLoadingLedger] = useState(false);
-  const [deletingDocumentId, setDeletingDocumentId] = useState<string | null>(null);
+  const [busyAssetId, setBusyAssetId] = useState<string | null>(null);
+  const [actionAsset, setActionAsset] = useState<KnowledgeLedgerDocument | null>(null);
+  const [actionMode, setActionMode] = useState<'rename' | 'move' | null>(null);
+  const [actionName, setActionName] = useState('');
+  const [targetProjectId, setTargetProjectId] = useState('');
+  const [preview, setPreview] = useState<KnowledgeAssetPreview | null>(null);
   const [toast, setToast] = useState<{ msg: string; kind: 'info' | 'error' } | null>(null);
 
   const selectedProject = useMemo(
@@ -172,30 +188,78 @@ export default function KnowledgePage() {
     router.push(`/admin?project_id=${encodeURIComponent(projectId)}`);
   }
 
+  async function reloadLedger() {
+    const data = await listKnowledgeLedger({
+      projectId,
+      category,
+      uploaderUserId: uploaderUserId || undefined,
+      approvalStatus: (approvalStatus || undefined) as KnowledgeApprovalStatus | undefined,
+      uploadedFrom: uploadedFrom || undefined,
+      uploadedTo: uploadedTo || undefined,
+      reviewedFrom: reviewedFrom || undefined,
+      reviewedTo: reviewedTo || undefined,
+    });
+    setLedger(data);
+  }
+
   async function handleDeleteDocument(document: KnowledgeLedgerDocument) {
     const name = document.display_name || document.filename;
     if (!window.confirm(`确定删除资料「${name}」吗？删除后将从知识库台账和检索库中移除。`)) {
       return;
     }
-    setDeletingDocumentId(document.document_id);
+    setBusyAssetId(document.asset_id);
     try {
-      await deleteKnowledgeDocument(document.document_id);
-      const data = await listKnowledgeLedger({
-        projectId,
-        category,
-        uploaderUserId: uploaderUserId || undefined,
-        approvalStatus: (approvalStatus || undefined) as KnowledgeApprovalStatus | undefined,
-        uploadedFrom: uploadedFrom || undefined,
-        uploadedTo: uploadedTo || undefined,
-        reviewedFrom: reviewedFrom || undefined,
-        reviewedTo: reviewedTo || undefined,
-      });
-      setLedger(data);
+      await deleteKnowledgeAsset(document.asset_type, document.asset_id);
+      await reloadLedger();
       setToast({ msg: '资料已删除', kind: 'info' });
     } catch (e: any) {
       setToast({ msg: e?.message || '删除资料失败', kind: 'error' });
     } finally {
-      setDeletingDocumentId(null);
+      setBusyAssetId(null);
+    }
+  }
+
+  async function handlePreview(document: KnowledgeLedgerDocument) {
+    setBusyAssetId(document.asset_id);
+    try {
+      setPreview(await previewKnowledgeAsset(document.asset_type, document.asset_id));
+    } catch (e: any) {
+      setToast({ msg: e?.message || '预览资料失败', kind: 'error' });
+    } finally {
+      setBusyAssetId(null);
+    }
+  }
+
+  function openRename(document: KnowledgeLedgerDocument) {
+    setActionAsset(document);
+    setActionMode('rename');
+    setActionName(document.display_name || document.filename);
+  }
+
+  function openMove(document: KnowledgeLedgerDocument) {
+    setActionAsset(document);
+    setActionMode('move');
+    setTargetProjectId(projects.find((project) => project.id !== projectId)?.id || '');
+  }
+
+  async function submitAssetAction() {
+    if (!actionAsset || !actionMode) return;
+    setBusyAssetId(actionAsset.asset_id);
+    try {
+      if (actionMode === 'rename') {
+        await renameKnowledgeAsset(actionAsset.asset_type, actionAsset.asset_id, actionName.trim());
+        setToast({ msg: '资料已重命名', kind: 'info' });
+      } else {
+        await moveKnowledgeAsset(actionAsset.asset_type, actionAsset.asset_id, targetProjectId);
+        setToast({ msg: '资料已迁移到目标项目', kind: 'info' });
+      }
+      setActionAsset(null);
+      setActionMode(null);
+      await reloadLedger();
+    } catch (e: any) {
+      setToast({ msg: e?.message || '资料操作失败', kind: 'error' });
+    } finally {
+      setBusyAssetId(null);
     }
   }
 
@@ -207,7 +271,7 @@ export default function KnowledgePage() {
             <div className="text-[12px] font-bold tracking-[0.04em] text-brand-600">KNOWLEDGE LEDGER</div>
             <h1 className="mt-1 text-[26px] font-semibold leading-tight tracking-normal text-[#10213e]">知识库</h1>
             <p className="mt-1 text-sm leading-6 text-[#6e7d97]">
-              查看项目原始资料、上传成员、审批负责人和入库状态。
+              统一查看项目原始资料、项目 Wiki 和会议记录，并按权限预览、下载与管理。
             </p>
           </div>
           <div className="flex-1" />
@@ -255,7 +319,7 @@ export default function KnowledgePage() {
                   disabled={!projectId || loadingLedger}
                 />
               </Filter>
-              {category === 'project_material' && (
+              {category !== 'project_wiki_source' && (
                 <Filter label="审批状态">
                   <Select
                     value={approvalStatus}
@@ -272,7 +336,7 @@ export default function KnowledgePage() {
               <Filter label="上传结束">
                 <Input type="date" value={uploadedTo} onChange={(event) => setUploadedTo(event.target.value)} />
               </Filter>
-              {category === 'project_material' && ledger?.permissions.can_review && (
+              {category !== 'project_wiki_source' && ledger?.permissions.can_review && (
                 <>
                   <Filter label="审批开始">
                     <Input type="date" value={reviewedFrom} onChange={(event) => setReviewedFrom(event.target.value)} />
@@ -324,7 +388,7 @@ export default function KnowledgePage() {
             <div className="flex flex-wrap items-center gap-3 border-b border-[#d7e0ec] bg-[#f7faff] px-5 py-4">
               <div className="flex items-center gap-2 text-sm font-semibold text-[#10213e]">
                 <ClipboardCheck size={18} className="text-brand-600" aria-hidden={true} />
-                {category === 'project_material' ? '项目原始资料' : '项目 Wiki 原始资料'}
+                {categoryLabel[category]}
               </div>
               <div className="flex-1" />
               <span className="rounded-full border border-brand-500/20 bg-brand-500/10 px-3 py-1 text-xs font-medium text-brand-700">
@@ -340,8 +404,8 @@ export default function KnowledgePage() {
               <EmptyState title="请选择项目" hint="先选择部门和项目后查看资料台账" />
             ) : !ledger || ledger.documents.length === 0 ? (
               <EmptyState
-                title={category === 'project_material' ? '暂无项目原始资料' : '暂无项目 Wiki 原始资料'}
-                hint={category === 'project_material' ? '项目成员提交原始资料后会在这里形成台账' : '项目 Wiki 生成的原始页面资料会单独显示在这里'}
+                 title={`暂无${categoryLabel[category]}`}
+                 hint={category === 'meeting_record' ? '审批通过的会议记录会在这里显示' : '资料生成或审批入库后会在这里形成台账'}
               />
             ) : (
               <div className="overflow-x-auto">
@@ -356,18 +420,23 @@ export default function KnowledgePage() {
                       <th className="px-4 py-3">审批人</th>
                       <th className="px-4 py-3">审批时间</th>
                       <th className="px-4 py-3">项目记忆</th>
-                      {ledger.permissions.can_review && <th className="px-5 py-3 text-right">操作</th>}
+                      <th className="px-5 py-3 text-right">操作</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[#d7e0ec]">
                     {ledger.documents.map((document) => (
                       <LedgerRow
-                        key={document.document_id}
+                        key={document.asset_id}
                         document={document}
                         canReview={ledger.permissions.can_review}
-                        deleting={deletingDocumentId === document.document_id}
+                        canManage={ledger.permissions.can_manage}
+                        canDelete={ledger.permissions.can_delete}
+                        busy={busyAssetId === document.asset_id}
                         onDelete={() => handleDeleteDocument(document)}
                         onReview={openReview}
+                        onPreview={() => void handlePreview(document)}
+                        onRename={() => openRename(document)}
+                        onMove={() => openMove(document)}
                       />
                     ))}
                   </tbody>
@@ -377,6 +446,53 @@ export default function KnowledgePage() {
           </section>
         </div>
       </main>
+
+      {actionAsset && actionMode && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#10213e]/55 p-4 backdrop-blur-[2px]">
+          <section role="dialog" aria-modal="true" aria-labelledby="knowledge-action-title" className="w-full max-w-lg rounded-xl bg-white p-5 shadow-2xl">
+            <div className="flex items-start gap-3">
+              <div className="min-w-0 flex-1">
+                <h2 id="knowledge-action-title" className="text-lg font-semibold text-[#10213e]">
+                  {actionMode === 'rename' ? '重命名资料' : '迁移到其他项目'}
+                </h2>
+                <p className="mt-1 break-words text-sm text-[#6e7d97]">{actionAsset.display_name || actionAsset.filename}</p>
+              </div>
+              <button type="button" aria-label="关闭资料操作" onClick={() => { setActionAsset(null); setActionMode(null); }} className="rounded-md p-2 text-[#6e7d97] hover:bg-[#f2f5f9]"><X size={18} /></button>
+            </div>
+            <div className="mt-5">
+              {actionMode === 'rename' ? (
+                <Filter label="新名称"><Input value={actionName} onChange={(event) => setActionName(event.target.value)} autoFocus /></Filter>
+              ) : (
+                <Filter label="目标项目">
+                  <Select
+                    value={targetProjectId}
+                    onChange={setTargetProjectId}
+                    options={projects.filter((project) => project.id !== projectId).map((project) => ({ value: project.id, label: project.name }))}
+                  />
+                </Filter>
+              )}
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <Button type="button" variant="secondary" onClick={() => { setActionAsset(null); setActionMode(null); }}>取消</Button>
+              <Button type="button" disabled={busyAssetId === actionAsset.asset_id || (actionMode === 'rename' ? !actionName.trim() : !targetProjectId)} onClick={() => void submitAssetAction()}>
+                {busyAssetId === actionAsset.asset_id ? '处理中…' : '确认'}
+              </Button>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {preview && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#10213e]/55 p-3 backdrop-blur-[2px] sm:p-6">
+          <section role="dialog" aria-modal="true" aria-labelledby="knowledge-preview-title" className="flex max-h-[calc(100vh-2rem)] w-full max-w-4xl flex-col overflow-hidden rounded-xl bg-white shadow-2xl">
+            <header className="flex items-start gap-3 border-b border-[#d7e0ec] px-5 py-4">
+              <div className="min-w-0 flex-1"><h2 id="knowledge-preview-title" className="break-words text-lg font-semibold text-[#10213e]">{preview.name}</h2><p className="mt-1 text-xs text-[#6e7d97]">简单预览 · {preview.format}</p></div>
+              <button type="button" aria-label="关闭资料预览" onClick={() => setPreview(null)} className="rounded-md p-2 text-[#6e7d97] hover:bg-[#f2f5f9]"><X size={18} /></button>
+            </header>
+            <pre className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-words bg-[#fbfcfe] p-5 font-sans text-sm leading-7 text-[#243a57]">{preview.content || '该资料暂无可预览文本，请下载原文件查看。'}</pre>
+          </section>
+        </div>
+      )}
 
       {toast && <Toast message={toast.msg} kind={toast.kind} />}
     </div>
@@ -404,15 +520,25 @@ function Metric({ title, value }: { title: string; value: string }) {
 function LedgerRow({
   document,
   canReview,
-  deleting,
+  canManage,
+  canDelete,
+  busy,
   onDelete,
   onReview,
+  onPreview,
+  onRename,
+  onMove,
 }: {
   document: KnowledgeLedgerDocument;
   canReview: boolean;
-  deleting: boolean;
+  canManage: boolean;
+  canDelete: boolean;
+  busy: boolean;
   onDelete: () => void;
   onReview: () => void;
+  onPreview: () => void;
+  onRename: () => void;
+  onMove: () => void;
 }) {
   return (
     <tr className="align-top hover:bg-[#f7faff]">
@@ -424,15 +550,7 @@ function LedgerRow({
             <div className="mt-1 text-xs text-[#8b99ae]">
               {fmtSize(document.size_bytes)} · {document.chunk_count} 段
             </div>
-            {document.intake_id && document.original_file_id && (
-              <a
-                href={originalMaterialDownloadUrl(document.intake_id, document.original_file_id)}
-                className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-brand-600 hover:text-brand-700"
-              >
-                <Download size={13} aria-hidden={true} />
-                下载原文件
-              </a>
-            )}
+            {document.meeting_date && <div className="mt-1 text-xs text-[#8b99ae]">会议日期：{document.meeting_date}</div>}
             {document.error_message && (
               <div className="mt-1 text-xs text-[#b83d49]">{document.error_message}</div>
             )}
@@ -452,31 +570,41 @@ function LedgerRow({
       <td className="px-4 py-4 text-[#253655]">
         {document.approved_memory_document_id ? '已形成项目记忆' : '-'}
       </td>
-      {canReview && (
         <td className="px-5 py-4 text-right">
-          <div className="mb-2 flex justify-end">
-            <Button
-              type="button"
-              size="sm"
-              variant="danger"
-              aria-label={`删除资料 ${document.display_name || document.filename}`}
-              title="删除资料"
-              disabled={deleting}
-              onClick={onDelete}
-            >
-              <Trash2 size={15} aria-hidden={true} />
-              {deleting ? '删除中' : '删除'}
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={onPreview}>
+              <Eye size={14} aria-hidden={true} />预览
             </Button>
-          </div>
-          {document.approval_status === 'pending_review' ? (
+            <a href={knowledgeAssetDownloadUrl(document.asset_type, document.asset_id)} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#d7e0ec] bg-white px-3 text-xs font-medium text-[#355170] hover:bg-[#f7f9fc]">
+              <Download size={14} aria-hidden={true} />下载
+            </a>
+            {canManage && (
+              <>
+                <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={onRename}><Pencil size={14} />重命名</Button>
+                <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={onMove}><MoveRight size={14} />迁移</Button>
+              </>
+            )}
+          {canDelete && (
+              <Button
+                type="button"
+                size="sm"
+                variant="danger"
+                aria-label={`删除资料 ${document.display_name || document.filename}`}
+                title="删除资料"
+                disabled={busy}
+                onClick={onDelete}
+              >
+                <Trash2 size={15} aria-hidden={true} />
+                {busy ? '处理中' : '删除'}
+              </Button>
+          )}
+          {canReview && document.approval_status === 'pending_review' ? (
             <Button type="button" size="sm" variant="secondary" onClick={onReview}>
               去审批
             </Button>
-          ) : (
-            <span className="text-xs text-[#8b99ae]">无操作</span>
-          )}
+          ) : null}
+          </div>
         </td>
-      )}
     </tr>
   );
 }

@@ -42,6 +42,22 @@ class _CapturingClickHouse:
         return _EmptyResult()
 
 
+class _MessageResult:
+    def all(self):
+        return []
+
+
+class _CapturingOrm:
+    def __init__(self) -> None:
+        self.sql = ""
+        self.parameters = {}
+
+    def execute(self, statement, parameters=None):
+        self.sql = str(statement)
+        self.parameters = parameters or {}
+        return _MessageResult()
+
+
 class AIUsageTraceQueryTests(unittest.TestCase):
     def setUp(self) -> None:
         self.clickhouse = _CapturingClickHouse()
@@ -181,6 +197,36 @@ class AIUsageTraceQueryTests(unittest.TestCase):
 
         self.assertTrue(route._has_stale_unsynced_trace([chat], [stale_trace]))
         self.assertTrue(route._has_stale_unsynced_trace([], [stale_trace]))
+
+    def test_attach_messages_excludes_shared_session_pseudo_ids_from_uuid_query(self) -> None:
+        orm = _CapturingOrm()
+        started_at = datetime(2026, 8, 17, 4, 0, tzinfo=timezone.utc)
+        common = {
+            "record_type": "chat",
+            "project_id": "00000000-0000-0000-0000-000000000001",
+            "project_name": "Project",
+            "employee_id": "employee-001",
+            "employee_name": "Employee",
+            "source": "cc_switch",
+            "title": "Conversation",
+            "started_at": started_at,
+            "task_id": "unassigned",
+            "status": "ok",
+        }
+        stored_chat = route.UsageRecord(
+            id="00000000-0000-0000-0000-000000000010",
+            **common,
+        )
+        shared_chat = route.UsageRecord(
+            id="shared:9dcf849f-4c1b-4aa3-95e0-dd8d057ed3e1",
+            **common,
+        )
+
+        records = route._attach_messages(orm, [stored_chat, shared_chat])
+
+        self.assertEqual(orm.parameters, {"session_0": stored_chat.id})
+        self.assertNotIn("shared:", " ".join(str(value) for value in orm.parameters.values()))
+        self.assertEqual(records[1].messages, ())
 
 
 if __name__ == "__main__":

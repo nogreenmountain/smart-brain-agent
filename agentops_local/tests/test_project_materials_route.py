@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import os
 import sys
@@ -78,6 +79,229 @@ class _Orm:
 
 
 class ProjectMaterialsRouteTests(unittest.TestCase):
+    def test_direct_upload_session_stages_every_file_without_ai_sensitive_scan(self) -> None:
+        route = _load_route()
+        orm = _Orm(project_department_id="research-direct")
+        project_id = uuid.UUID("00000000-0000-0000-0000-000000000010")
+        user_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        intake_id = uuid.UUID("00000000-0000-0000-0000-000000000040")
+        first_file_id = uuid.UUID("00000000-0000-0000-0000-000000000041")
+        second_file_id = uuid.UUID("00000000-0000-0000-0000-000000000042")
+
+        with (
+            patch.object(route, "current_user_id", return_value=user_id),
+            patch.object(route, "require_member", return_value=None),
+            patch.object(route.uuid, "uuid4", side_effect=[intake_id, first_file_id, second_file_id]),
+            patch.object(route, "preview_materials", side_effect=AssertionError("AI preview must not run")),
+        ):
+            response = route.create_material_upload_session(
+                request=object(),
+                body=route.CreateMaterialUploadSessionRequest(
+                    project_id=project_id,
+                    department_id="research-direct",
+                    client_upload_id=uuid.UUID("00000000-0000-0000-0000-000000000099"),
+                    files=[
+                        route.MaterialUploadManifestFile(filename="需求.docx", size_bytes=1024),
+                        route.MaterialUploadManifestFile(filename="方案.pptx", size_bytes=2048),
+                    ],
+                ),
+                orm=orm,
+            )
+
+        self.assertEqual(response.intake_id, intake_id)
+        self.assertEqual(response.status, "uploading")
+        self.assertEqual([item.filename for item in response.files], ["需求.docx", "方案.pptx"])
+        self.assertEqual([item.received_bytes for item in response.files], [0, 0])
+        inserts = "\n".join(sql for sql, _ in orm.calls)
+        self.assertIn("INSERT INTO public.project_material_intakes", inserts)
+        self.assertEqual(inserts.count("INSERT INTO public.project_material_intake_files"), 2)
+
+    def test_direct_upload_chunk_is_written_with_real_received_byte_progress(self) -> None:
+        route = _load_route()
+        orm = _Orm(project_department_id="research-direct")
+        user_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        project_id = uuid.UUID("00000000-0000-0000-0000-000000000010")
+        intake_id = uuid.UUID("00000000-0000-0000-0000-000000000040")
+        file_id = uuid.UUID("00000000-0000-0000-0000-000000000041")
+
+        original_execute = orm.execute
+
+        def execute(statement, params=None):
+            sql = str(statement)
+            if "FROM public.project_material_intake_files file" in sql:
+                orm.calls.append((sql, params or {}))
+                return _Result(SimpleNamespace(
+                    id=str(file_id),
+                    intake_id=str(intake_id),
+                    project_id=str(project_id),
+                    status="uploading",
+                    created_by_user_id=str(user_id),
+                    filename="方案.pptx",
+                    size_bytes=11,
+                    storage_key=f"{project_id}/{intake_id}/{file_id}.pptx",
+                    uploaded_bytes=0,
+                ))
+            return original_execute(statement, params)
+
+        orm.execute = execute
+
+        class ChunkRequest:
+            state = SimpleNamespace()
+
+            async def body(self):
+                return b"hello"
+
+        with tempfile.TemporaryDirectory() as temp_dir, patch.dict(
+            os.environ, {"MATERIAL_UPLOAD_STORAGE_DIR": temp_dir}
+        ), patch.object(route, "current_user_id", return_value=user_id), patch.object(
+            route, "require_member", return_value=None
+        ):
+            response = asyncio.run(route.upload_material_chunk(
+                request=ChunkRequest(),
+                intake_id=intake_id,
+                file_id=file_id,
+                offset=0,
+                orm=orm,
+            ))
+
+        self.assertEqual(response.received_bytes, 5)
+        self.assertEqual(response.size_bytes, 11)
+        update = next(params for sql, params in orm.calls if "SET uploaded_bytes" in sql)
+        self.assertEqual(update["uploaded_bytes"], 5)
+
+    def test_direct_upload_reads_slow_chunk_before_acquiring_database_connection(self) -> None:
+        route = _load_route()
+        orm = _Orm(project_department_id="research-direct")
+        user_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        project_id = uuid.UUID("00000000-0000-0000-0000-000000000010")
+        intake_id = uuid.UUID("00000000-0000-0000-0000-000000000040")
+        file_id = uuid.UUID("00000000-0000-0000-0000-000000000041")
+
+        original_execute = orm.execute
+
+        def execute(statement, params=None):
+            sql = str(statement)
+            if "FROM public.project_material_intake_files file" in sql:
+                orm.calls.append((sql, params or {}))
+                return _Result(SimpleNamespace(
+                    id=str(file_id),
+                    intake_id=str(intake_id),
+                    project_id=str(project_id),
+                    status="uploading",
+                    created_by_user_id=str(user_id),
+                    filename="slow.md",
+                    size_bytes=5,
+                    storage_key=f"{project_id}/{intake_id}/{file_id}.md",
+                    uploaded_bytes=0,
+                ))
+            return original_execute(statement, params)
+
+        orm.execute = execute
+
+        class SlowChunkRequest:
+            state = SimpleNamespace()
+
+            async def body(self):
+                self.assert_no_database_connection_yet()
+                await asyncio.sleep(0)
+                return b"hello"
+
+            @staticmethod
+            def assert_no_database_connection_yet():
+                if orm.calls:
+                    raise AssertionError("database connection was acquired before chunk receipt")
+
+        with tempfile.TemporaryDirectory() as temp_dir, patch.dict(
+            os.environ, {"MATERIAL_UPLOAD_STORAGE_DIR": temp_dir}
+        ), patch.object(route, "current_user_id", return_value=user_id), patch.object(
+            route, "require_member", return_value=None
+        ):
+            response = asyncio.run(route.upload_material_chunk(
+                request=SlowChunkRequest(),
+                intake_id=intake_id,
+                file_id=file_id,
+                offset=0,
+                orm=orm,
+            ))
+
+        self.assertEqual(response.received_bytes, 5)
+        self.assertTrue(orm.calls)
+
+    def test_complete_direct_upload_submits_all_files_for_review_without_preview_step(self) -> None:
+        route = _load_route()
+        orm = _Orm(project_department_id="research-direct")
+        user_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        project_id = uuid.UUID("00000000-0000-0000-0000-000000000010")
+        intake_id = uuid.UUID("00000000-0000-0000-0000-000000000040")
+        file_id = uuid.UUID("00000000-0000-0000-0000-000000000041")
+        storage_key = f"{project_id}/{intake_id}/{file_id}.md"
+        orm.intake = SimpleNamespace(
+            id=str(intake_id),
+            project_id=str(project_id),
+            department_id="research-direct",
+            status="uploading",
+            created_by_user_id=str(user_id),
+        )
+        orm.files = [SimpleNamespace(
+            id=str(file_id), filename="README.md", format="md", size_bytes=5,
+            content_hash="", raw_content=b"", extracted_text="", recommendation="keep",
+            included=True, reason="direct", storage_key=storage_key, uploaded_bytes=5,
+        )]
+
+        with tempfile.TemporaryDirectory() as temp_dir, patch.dict(
+            os.environ, {"MATERIAL_UPLOAD_STORAGE_DIR": temp_dir}
+        ), patch.object(route, "current_user_id", return_value=user_id), patch.object(
+            route, "require_member", return_value=None
+        ), patch.object(route, "record_audit", return_value=None), patch.object(
+            route, "preview_materials", side_effect=AssertionError("AI preview must not run")
+        ):
+            route.append_chunk(storage_key, offset=0, chunk=b"hello")
+            response = route.complete_material_upload_session(
+                request=object(),
+                intake_id=intake_id,
+                orm=orm,
+            )
+
+        self.assertEqual(response.status, "pending_review")
+        self.assertEqual(response.raw_document_count, 1)
+        self.assertEqual(response.draft_id, uuid.UUID("00000000-0000-0000-0000-000000000050"))
+        self.assertTrue(any("SET content_hash" in sql for sql, _ in orm.calls))
+        self.assertTrue(any("SET status = 'pending_review'" in sql for sql, _ in orm.calls))
+
+    def test_direct_uploaded_material_download_streams_from_persistent_storage(self) -> None:
+        route = _load_route()
+        orm = _Orm()
+        user_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        project_id = uuid.UUID("00000000-0000-0000-0000-000000000010")
+        intake_id = uuid.UUID("00000000-0000-0000-0000-000000000040")
+        file_id = uuid.UUID("00000000-0000-0000-0000-000000000041")
+        storage_key = f"{project_id}/{intake_id}/{file_id}.pdf"
+
+        def execute(statement, params=None):
+            sql = str(statement)
+            orm.calls.append((sql, params or {}))
+            if "JOIN public.project_material_intakes" in sql:
+                return _Result(SimpleNamespace(
+                    filename="规范.pdf", raw_content=b"", storage_key=storage_key,
+                    project_id=str(project_id),
+                ))
+            return _Result()
+
+        orm.execute = execute
+        with tempfile.TemporaryDirectory() as temp_dir, patch.dict(
+            os.environ, {"MATERIAL_UPLOAD_STORAGE_DIR": temp_dir}
+        ), patch.object(route, "current_user_id", return_value=user_id), patch.object(
+            route, "require_member", return_value=None
+        ):
+            stored_path = Path(temp_dir) / storage_key
+            stored_path.parent.mkdir(parents=True, exist_ok=True)
+            stored_path.write_bytes(b"pdf-data")
+            response = route.download_original_material(
+                request=object(), intake_id=intake_id, file_id=file_id, orm=orm
+            )
+
+            self.assertEqual(Path(response.path), stored_path)
+
     def test_preview_rejects_stale_department_snapshot(self) -> None:
         route = _load_route()
         orm = _Orm(project_department_id="education-direct")

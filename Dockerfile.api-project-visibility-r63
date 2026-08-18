@@ -1,0 +1,5 @@
+FROM agentops-api-local:unified-content-r61
+
+COPY agentops_local/api/routes/v4/projects.py /app/agentops/api/routes/v4/projects.py
+COPY agentops_local/api/routes/v4/project_memory.py /app/agentops/api/routes/v4/project_memory.py
+COPY agentops_local/tests /app/agentops/tests

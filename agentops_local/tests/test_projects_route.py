@@ -146,8 +146,10 @@ class _MemberOptionsOrm:
 
 
 class _AddMemberOrm:
-    def __init__(self, *, existing_user: bool = True) -> None:
+    def __init__(self, *, existing_user: bool = True, existing_project_role: str | None = None, owner_count: int = 1) -> None:
         self.existing_user = existing_user
+        self.existing_project_role = existing_project_role
+        self.owner_count = owner_count
         self.created_user_id = "00000000-0000-0000-0000-000000000099"
         self.sql: list[str] = []
         self.params: list[dict] = []
@@ -173,6 +175,14 @@ class _AddMemberOrm:
                     email=params["email"],
                 )
             )
+        if "SELECT role::text AS role" in sql and "FROM public.project_members" in sql:
+            return _FirstResult(
+                SimpleNamespace(role=self.existing_project_role)
+                if self.existing_project_role is not None
+                else None
+            )
+        if "COUNT(*) AS owner_count" in sql:
+            return _FirstResult(SimpleNamespace(owner_count=self.owner_count))
         return _FirstResult(None)
 
     def commit(self):
@@ -180,11 +190,13 @@ class _AddMemberOrm:
 
 
 class _MembersAdminOrm:
-    def __init__(self, *, department_exists: bool = True) -> None:
+    def __init__(self, *, department_exists: bool = True, target_role: str = "business_user", owner_count: int = 1) -> None:
         self.sql: list[str] = []
         self.params: list[dict] = []
         self.commits = 0
         self.department_exists = department_exists
+        self.target_role = target_role
+        self.owner_count = owner_count
 
     def execute(self, statement, params):
         sql = str(statement)
@@ -225,9 +237,11 @@ class _MembersAdminOrm:
                 SimpleNamespace(
                     user_id="00000000-0000-0000-0000-000000000012",
                     email="test1@local.dev",
-                    role="business_user",
+                    role=self.target_role,
                 )
             )
+        if "COUNT(*) AS owner_count" in sql:
+            return _FirstResult(SimpleNamespace(owner_count=self.owner_count))
         return _FirstResult(None)
 
     def commit(self):
@@ -511,7 +525,7 @@ class _ProjectRequestListOrm:
 
 
 class ProjectsRouteTests(unittest.TestCase):
-    def test_project_catalog_excludes_projects_without_any_members(self) -> None:
+    def test_project_catalog_includes_every_project_for_authenticated_users(self) -> None:
         user_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
         orm = _Orm()
 
@@ -524,8 +538,8 @@ class ProjectsRouteTests(unittest.TestCase):
         self.assertIn("pm.user_id = :u", orm.sql)
         self.assertIn("is_system_admin", orm.sql)
         self.assertIn("THEN 'owner'", orm.sql)
-        self.assertIn("EXISTS", orm.sql)
-        self.assertIn("catalog_member.project_id = p.id", orm.sql)
+        self.assertNotIn("EXISTS", orm.sql)
+        self.assertNotIn("catalog_member.project_id = p.id", orm.sql)
         self.assertNotIn("WHERE pm.user_id = :u", orm.sql)
         self.assertIn("CASE WHEN p.completed_at IS NULL THEN 0 ELSE 1 END", orm.sql)
         self.assertEqual(orm.params, {"u": str(user_id)})
@@ -1035,7 +1049,7 @@ class ProjectsRouteTests(unittest.TestCase):
 
         with (
             patch.object(route, "current_user_id", return_value=caller_id),
-            patch.object(route, "require_admin", return_value=None),
+            patch.object(route, "require_owner", return_value=None) as require_owner,
             patch.object(route, "record_audit") as audit,
         ):
             route.delete_project(
@@ -1046,6 +1060,7 @@ class ProjectsRouteTests(unittest.TestCase):
             )
 
         self.assertTrue(any("DELETE FROM public.projects" in sql for sql in orm.sql))
+        require_owner.assert_called_once_with(orm, user_id=caller_id, project_id=project_id)
         audit.assert_called_once()
         self.assertEqual(audit.call_args.kwargs["action"], "delete_project")
 
@@ -1056,7 +1071,7 @@ class ProjectsRouteTests(unittest.TestCase):
 
         with (
             patch.object(route, "current_user_id", return_value=caller_id),
-            patch.object(route, "require_admin", return_value=None),
+            patch.object(route, "require_owner", return_value=None),
         ):
             with self.assertRaises(route.HTTPException) as raised:
                 route.delete_project(
@@ -1083,13 +1098,13 @@ class ProjectsRouteTests(unittest.TestCase):
             member = route.add_member(
                 request=SimpleNamespace(state=SimpleNamespace(), client=None),
                 project_id=project_id,
-                body=route.AddMemberRequest(identifier="test1", role="business_user"),
+                body=route.AddMemberRequest(identifier="test1", role="developer"),
                 orm=orm,
             )
 
         self.assertEqual(str(member.user_id), "00000000-0000-0000-0000-000000000012")
         self.assertEqual(member.email, "test1@local.dev")
-        self.assertEqual(member.role, "business_user")
+        self.assertEqual(member.role, "developer")
         self.assertTrue(any("lower(au.email) = lower(:email)" in sql for sql in orm.sql))
         self.assertTrue(any("is_active" in sql for sql in orm.sql))
         auth_user_params = orm.params[0]
@@ -1097,6 +1112,74 @@ class ProjectsRouteTests(unittest.TestCase):
         self.assertEqual(orm.commits, 1)
         audit.assert_called_once()
         self.assertEqual(audit.call_args.kwargs["action"], "add_member")
+
+    def test_project_leader_cannot_assign_overall_lead_role(self) -> None:
+        caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        project_id = uuid.UUID("00000000-0000-0000-0000-000000000010")
+        orm = _AddMemberOrm()
+
+        with (
+            patch.object(route, "current_user_id", return_value=caller_id),
+            patch.object(route, "require_admin", return_value=None),
+            patch.object(route, "require_owner", side_effect=route.AuthzError(403, "need owner")),
+        ):
+            with self.assertRaises(route.HTTPException) as raised:
+                route.add_member(
+                    request=SimpleNamespace(state=SimpleNamespace(), client=None),
+                    project_id=project_id,
+                    body=route.AddMemberRequest(identifier="test1", role="owner"),
+                    orm=orm,
+                )
+
+        self.assertEqual(raised.exception.status_code, 403)
+        self.assertFalse(any("INSERT INTO public.project_members" in sql for sql in orm.sql))
+
+    def test_project_leader_cannot_downgrade_overall_lead(self) -> None:
+        caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        project_id = uuid.UUID("00000000-0000-0000-0000-000000000010")
+        orm = _AddMemberOrm(existing_project_role="owner", owner_count=2)
+
+        with (
+            patch.object(route, "current_user_id", return_value=caller_id),
+            patch.object(route, "require_admin", return_value=None),
+            patch.object(route, "require_owner", side_effect=route.AuthzError(403, "need owner")),
+        ):
+            with self.assertRaises(route.HTTPException) as raised:
+                route.add_member(
+                    request=SimpleNamespace(state=SimpleNamespace(), client=None),
+                    project_id=project_id,
+                    body=route.AddMemberRequest(identifier="test1", role="developer"),
+                    orm=orm,
+                )
+
+        self.assertEqual(raised.exception.status_code, 403)
+        self.assertFalse(any("INSERT INTO public.project_members" in sql for sql in orm.sql))
+
+    def test_last_overall_lead_cannot_be_downgraded(self) -> None:
+        caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        project_id = uuid.UUID("00000000-0000-0000-0000-000000000010")
+        orm = _AddMemberOrm(existing_project_role="owner", owner_count=1)
+
+        with (
+            patch.object(route, "current_user_id", return_value=caller_id),
+            patch.object(route, "require_admin", return_value=None),
+            patch.object(route, "require_owner", return_value=None),
+        ):
+            with self.assertRaises(route.HTTPException) as raised:
+                route.add_member(
+                    request=SimpleNamespace(state=SimpleNamespace(), client=None),
+                    project_id=project_id,
+                    body=route.AddMemberRequest(identifier="test1", role="admin"),
+                    orm=orm,
+                )
+
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertIn("at least one owner", raised.exception.detail)
+        self.assertFalse(any("INSERT INTO public.project_members" in sql for sql in orm.sql))
+
+    def test_project_member_role_rejects_legacy_business_user(self) -> None:
+        with self.assertRaises(ValueError):
+            route.AddMemberRequest(identifier="test1", role="business_user")
 
     def test_add_member_rejects_identifier_when_team_member_does_not_exist(self) -> None:
         caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -1144,22 +1227,21 @@ class ProjectsRouteTests(unittest.TestCase):
 
         self.assertIn("lower(au.email) NOT LIKE '%@agentops.local'", orm.sql[0])
 
-    def test_non_member_cannot_list_project_members(self) -> None:
+    def test_authenticated_non_member_can_list_project_members_read_only(self) -> None:
         caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
         project_id = uuid.UUID("00000000-0000-0000-0000-000000000010")
         orm = _MembersListOrm(caller_role=None)
 
         with patch.object(route, "current_user_id", return_value=caller_id):
-            with self.assertRaises(route.HTTPException) as raised:
-                route.list_members(
-                    request=object(),
-                    project_id=project_id,
-                    orm=orm,
-                )
+            members = route.list_members(
+                request=object(),
+                project_id=project_id,
+                orm=orm,
+            )
 
-        self.assertEqual(raised.exception.status_code, 403)
-        self.assertEqual(raised.exception.detail, "not a member of this project")
-        self.assertFalse(any("JOIN auth.users" in sql for sql in orm.sql))
+        self.assertEqual([member.username for member in members], ["leader", "member"])
+        self.assertTrue(any("JOIN auth.users" in sql for sql in orm.sql))
+        self.assertFalse(any("SELECT role::text AS role" in sql for sql in orm.sql))
 
     def test_project_member_can_list_project_members(self) -> None:
         caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -1177,8 +1259,8 @@ class ProjectsRouteTests(unittest.TestCase):
         self.assertEqual([member.display_name for member in members], ["研发负责人", "member@local.dev"])
         self.assertEqual([member.role for member in members], ["owner", "developer"])
         self.assertEqual([member.username for member in members], ["leader", "member"])
-        self.assertTrue(any("SELECT COALESCE(is_system_admin" in sql for sql in orm.sql))
-        self.assertTrue(any("SELECT role::text AS role" in sql for sql in orm.sql))
+        self.assertFalse(any("SELECT COALESCE(is_system_admin" in sql for sql in orm.sql))
+        self.assertFalse(any("SELECT role::text AS role" in sql for sql in orm.sql))
         roster_sql = next(sql for sql in orm.sql if "JOIN auth.users" in sql)
         self.assertIn("FROM public.project_members pm", roster_sql)
         self.assertIn("LEFT JOIN public.users", roster_sql)
@@ -1197,7 +1279,7 @@ class ProjectsRouteTests(unittest.TestCase):
             )
 
         self.assertEqual([member.username for member in members], ["leader", "member"])
-        self.assertTrue(any("SELECT COALESCE(is_system_admin" in sql for sql in orm.sql))
+        self.assertFalse(any("SELECT COALESCE(is_system_admin" in sql for sql in orm.sql))
         self.assertFalse(any("SELECT role::text AS role" in sql for sql in orm.sql))
 
     def test_project_admin_can_list_active_team_members_not_yet_in_project(self) -> None:
@@ -1299,6 +1381,55 @@ class ProjectsRouteTests(unittest.TestCase):
                 )
 
         self.assertEqual(raised.exception.status_code, 400)
+        self.assertFalse(any("DELETE FROM public.project_members" in sql for sql in orm.sql))
+        audit.assert_not_called()
+
+    def test_project_lead_cannot_remove_overall_lead(self) -> None:
+        caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        target_id = uuid.UUID("00000000-0000-0000-0000-000000000012")
+        project_id = uuid.UUID("00000000-0000-0000-0000-000000000010")
+        orm = _MembersAdminOrm(target_role="owner", owner_count=2)
+
+        with (
+            patch.object(route, "current_user_id", return_value=caller_id),
+            patch.object(route, "require_admin", return_value=None),
+            patch.object(route, "require_owner", side_effect=route.AuthzError(403, "need owner")),
+            patch.object(route, "record_audit") as audit,
+        ):
+            with self.assertRaises(route.HTTPException) as raised:
+                route.remove_member(
+                    request=SimpleNamespace(state=SimpleNamespace(), client=None),
+                    project_id=project_id,
+                    user_id=target_id,
+                    orm=orm,
+                )
+
+        self.assertEqual(raised.exception.status_code, 403)
+        self.assertFalse(any("DELETE FROM public.project_members" in sql for sql in orm.sql))
+        audit.assert_not_called()
+
+    def test_last_overall_lead_cannot_be_removed(self) -> None:
+        caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        target_id = uuid.UUID("00000000-0000-0000-0000-000000000012")
+        project_id = uuid.UUID("00000000-0000-0000-0000-000000000010")
+        orm = _MembersAdminOrm(target_role="owner", owner_count=1)
+
+        with (
+            patch.object(route, "current_user_id", return_value=caller_id),
+            patch.object(route, "require_admin", return_value=None),
+            patch.object(route, "require_owner", return_value=None),
+            patch.object(route, "record_audit") as audit,
+        ):
+            with self.assertRaises(route.HTTPException) as raised:
+                route.remove_member(
+                    request=SimpleNamespace(state=SimpleNamespace(), client=None),
+                    project_id=project_id,
+                    user_id=target_id,
+                    orm=orm,
+                )
+
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertIn("at least one owner", raised.exception.detail)
         self.assertFalse(any("DELETE FROM public.project_members" in sql for sql in orm.sql))
         audit.assert_not_called()
 

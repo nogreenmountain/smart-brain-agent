@@ -3,6 +3,22 @@
 import { FormEvent, ReactNode, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core';
+import {
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
+import {
   Archive,
   ArrowRightLeft,
   CalendarDays,
@@ -10,11 +26,13 @@ import {
   ExternalLink,
   FileText,
   FolderKanban,
+  GripVertical,
   Plus,
   RefreshCw,
   Save,
   SlidersHorizontal,
   Trash2,
+  Users,
   X,
   XCircle,
 } from 'lucide-react';
@@ -26,6 +44,7 @@ import { Select } from '@/components/Select';
 import {
   createProject,
   createProjectMemoryDepartment,
+  ApiError,
   deleteProjectMemoryDepartment,
   deleteProject,
   Department,
@@ -35,16 +54,28 @@ import {
   listProjectCatalog,
   listProjectMemoryDepartments,
   listProjectMemoryDrafts,
-  listProjects,
+  listProjectMemoryReviewQueue,
   Me,
   Project,
   ProjectDepartmentMigration,
   ProjectMemoryDraft,
+  ProjectMemoryReviewQueueItem,
   reviewProjectMemoryDraft,
+  reorderProjectMemoryDepartments,
   startProjectDepartmentMigration,
   updateProject,
   updateProjectMemoryDepartment,
 } from '@/lib/api';
+import { ProjectMembersPanel } from '@/components/management-workspace/ProjectMembersPanel';
+import { TeamDirectoryPanel } from '@/components/management-workspace/TeamDirectoryPanel';
+import { moveDepartmentWithinSiblings } from '@/lib/department-order';
+
+type ManagementView = 'projects' | 'members';
+
+type ReviewProgress = {
+  projectName: string;
+  title: string;
+};
 
 const statusLabel: Record<ProjectMemoryDraft['status'], string> = {
   pending_review: '待审批',
@@ -58,6 +89,14 @@ const departmentTone: Record<string, string> = {
   business: 'border-[#17a58a]/25 bg-[#17a58a]/12 text-[#137f6d]',
 };
 
+function sortDepartments(departments: Department[]): Department[] {
+  return [...departments].sort((left, right) => (
+    left.sort_order - right.sort_order
+    || left.name.localeCompare(right.name, 'zh-CN')
+    || left.id.localeCompare(right.id)
+  ));
+}
+
 function fmtTime(value?: string | null): string {
   if (!value) return '-';
   return new Date(value).toLocaleString('zh-CN', { hour12: false });
@@ -68,18 +107,13 @@ function fmtDate(value?: string | null): string {
   return new Date(value).toLocaleDateString('zh-CN', { hour12: false });
 }
 
-function roleCanCreate(me: Me | null): boolean {
-  return Boolean(me?.is_system_admin ||
-    me?.memberships.some((membership) => membership.role === 'owner' || membership.role === 'admin'),
-  );
-}
-
 function canManageProject(project: Project | null): boolean {
   return project?.role === 'owner' || project?.role === 'admin';
 }
 
 function projectRoleLabel(role?: Project['role']): string {
-  if (role === 'owner' || role === 'admin') return '项目负责人';
+  if (role === 'owner') return '总负责人';
+  if (role === 'admin') return '项目负责人';
   return '项目成员';
 }
 
@@ -98,12 +132,17 @@ function migrationStepLabel(step: string): string {
 
 export default function AdminPage() {
   const router = useRouter();
+  const [activeView, setActiveView] = useState<ManagementView>(() => {
+    if (typeof window === 'undefined') return 'projects';
+    return new URLSearchParams(window.location.search).get('view') === 'members' ? 'members' : 'projects';
+  });
   const [me, setMe] = useState<Me | null>(null);
   const [departments, setDepartments] = useState<Department[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [departmentId, setDepartmentId] = useState<DepartmentId>('research');
   const [projectId, setProjectId] = useState('');
   const [drafts, setDrafts] = useState<ProjectMemoryDraft[]>([]);
+  const [reviewQueue, setReviewQueue] = useState<ProjectMemoryReviewQueueItem[]>([]);
   const [selectedDraftId, setSelectedDraftId] = useState('');
   const [reviewComment, setReviewComment] = useState('');
   const [newProjectName, setNewProjectName] = useState('');
@@ -115,6 +154,7 @@ export default function AdminPage() {
   const [editCompletedAt, setEditCompletedAt] = useState('');
   const [loading, setLoading] = useState(true);
   const [reviewing, setReviewing] = useState(false);
+  const [reviewProgress, setReviewProgress] = useState<ReviewProgress | null>(null);
   const [creatingProject, setCreatingProject] = useState(false);
   const [updatingProject, setUpdatingProject] = useState(false);
   const [departmentTransferOpen, setDepartmentTransferOpen] = useState(false);
@@ -132,11 +172,30 @@ export default function AdminPage() {
   const [editingCategorySortOrder, setEditingCategorySortOrder] = useState('');
   const [editingCategoryParentId, setEditingCategoryParentId] = useState<DepartmentId>('');
   const [savingCategory, setSavingCategory] = useState(false);
+  const [sortingParentId, setSortingParentId] = useState<DepartmentId | null | undefined>(undefined);
   const [categoryManagementOpen, setCategoryManagementOpen] = useState(false);
   const [toast, setToast] = useState<{ msg: string; kind: 'info' | 'error' } | null>(null);
 
+  useEffect(() => {
+    function restoreView() {
+      setActiveView(new URLSearchParams(window.location.search).get('view') === 'members' ? 'members' : 'projects');
+    }
+    restoreView();
+    window.addEventListener('popstate', restoreView);
+    return () => window.removeEventListener('popstate', restoreView);
+  }, []);
+
+  function selectManagementView(view: ManagementView) {
+    setActiveView(view);
+    const url = new URL(window.location.href);
+    url.pathname = '/admin';
+    if (view === 'members') url.searchParams.set('view', 'members');
+    else url.searchParams.delete('view');
+    window.history.pushState({}, '', `${url.pathname}${url.search}`);
+  }
+
   const projectDepartments = departments.filter((department) => department.allows_projects !== false);
-  const topLevelDepartments = departments.filter((department) => !department.parent_id);
+  const topLevelDepartments = sortDepartments(departments.filter((department) => !department.parent_id));
   const departmentOptions = projectDepartments.map((department) => ({
     value: department.id,
     label: department.parent_name ? `${department.parent_name} / ${department.name}` : department.name,
@@ -157,21 +216,26 @@ export default function AdminPage() {
   const selectedProject = projects.find((project) => project.id === projectId) || null;
   const selectedDepartment = departments.find((department) => department.id === departmentId);
   const selectedTopLevelDepartmentId = selectedDepartment?.parent_id || selectedDepartment?.id || '';
-  const secondLevelDepartments = departments.filter(
+  const secondLevelDepartments = sortDepartments(departments.filter(
     (department) => department.parent_id === selectedTopLevelDepartmentId,
-  );
-  const createSecondLevelDepartments = departments.filter(
+  ));
+  const createSecondLevelDepartments = sortDepartments(departments.filter(
     (department) => department.parent_id === createTopLevelDepartmentId,
-  );
+  ));
   const transferDepartment = departments.find((department) => department.id === transferDepartmentId);
   const transferTopLevelDepartmentId = transferDepartment?.parent_id || transferDepartment?.id || '';
-  const transferSecondLevelDepartments = departments.filter(
+  const transferSecondLevelDepartments = sortDepartments(departments.filter(
     (department) => department.parent_id === transferTopLevelDepartmentId,
+  ));
+  const categorySensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
-  const selectedProjectCanManage = canManageProject(selectedProject);
-  const canManageVisibleProject = filteredProjects.some((project) => canManageProject(project));
-  const canCreateProjects = roleCanCreate(me) && (selectedProjectCanManage || canManageVisibleProject || projects.length === 0);
-  const pendingDraftRows = drafts.filter((draft) => draft.status === 'pending_review');
+  const selectedProjectCanManage = Boolean(me?.is_system_admin) || canManageProject(selectedProject);
+  const selectedProjectCanDelete = Boolean(me?.is_system_admin) || selectedProject?.role === 'owner';
+  const canReviewAnyProject = Boolean(me?.is_system_admin) || projects.some((project) => canManageProject(project));
+  const canCreateProjects = me?.email.trim().toLowerCase() === 'hanshangbo@local.dev';
+  const pendingDraftRows = reviewQueue;
   const selectedDraft = pendingDraftRows.find((draft) => draft.id === selectedDraftId) || pendingDraftRows[0] || null;
   const approvedDrafts = drafts.filter((draft) => draft.status === 'approved').length;
   const pendingDrafts = pendingDraftRows.length;
@@ -189,14 +253,17 @@ export default function AdminPage() {
           router.replace('/profile');
           return;
         }
-        const [departmentRows, projectRows] = await Promise.all([
+        const [departmentRows, projectRows, reviewRows] = await Promise.all([
           listProjectMemoryDepartments(true),
-          meResult.is_system_admin ? listProjectCatalog() : listProjects(),
+          listProjectCatalog(),
+          listProjectMemoryReviewQueue(),
         ]);
         if (!active) return;
         setMe(meResult);
         setDepartments(departmentRows);
         setProjects(projectRows);
+        setReviewQueue(reviewRows);
+        setSelectedDraftId(reviewRows[0]?.id || '');
         const firstDepartment = departmentRows.find((department) => department.allows_projects !== false)?.id || 'research';
         const firstProjectDepartment = departmentRows.find((department) => department.id === firstDepartment);
         const firstTopLevelId = firstProjectDepartment?.parent_id || '';
@@ -249,7 +316,7 @@ export default function AdminPage() {
   }, [selectedProject, selectedProjectCanManage]);
 
   async function refreshProjects(selectId?: string) {
-    const rows = me?.is_system_admin ? await listProjectCatalog() : await listProjects();
+    const rows = await listProjectCatalog();
     setProjects(rows);
     if (selectId) setProjectId(selectId);
   }
@@ -258,6 +325,7 @@ export default function AdminPage() {
     const rows = await listProjectMemoryDepartments(true);
     setDepartments(rows);
     if (selectDepartmentId) setDepartmentId(selectDepartmentId);
+    return rows;
   }
 
   async function createCategory(event: FormEvent) {
@@ -270,8 +338,20 @@ export default function AdminPage() {
         parent_id: categoryParentId || null,
       });
       setCategoryName('');
-      setCategoryParentId('');
-      await refreshDepartments(created.allows_projects ? created.id : undefined);
+      const rows = await refreshDepartments(created.allows_projects ? created.id : undefined);
+      if (created.parent_id) {
+        setCategoryParentId(created.parent_id);
+        setCreateTopLevelDepartmentId(created.parent_id);
+        setCreateDepartmentId(created.id);
+      } else {
+        const directDepartment = rows.find(
+          (department) => department.parent_id === created.id && department.is_direct,
+        );
+        setCategoryParentId(created.id);
+        setCreateTopLevelDepartmentId(created.id);
+        setCreateDepartmentId(directDepartment?.id || '');
+        if (directDepartment) setDepartmentId(directDepartment.id);
+      }
       setToast({ msg: `${created.level === 1 ? '第一分级' : '第二分级'} ${created.name} 已创建`, kind: 'info' });
     } catch (error: unknown) {
       setToast({ msg: error instanceof Error ? error.message : '创建分类失败', kind: 'error' });
@@ -322,6 +402,49 @@ export default function AdminPage() {
     }
   }
 
+  function handleCategorySortEnd(event: DragEndEvent) {
+    const activeId = String(event.active.id);
+    const overId = event.over ? String(event.over.id) : '';
+    if (!overId || activeId === overId || sortingParentId !== undefined) return;
+    const activeDepartment = departments.find((department) => department.id === activeId);
+    const overDepartment = departments.find((department) => department.id === overId);
+    if (!activeDepartment || !overDepartment) return;
+    const parentId = activeDepartment.parent_id || null;
+    if ((overDepartment.parent_id || null) !== parentId) return;
+
+    const siblings = sortDepartments(departments.filter(
+      (department) => (department.parent_id || null) === parentId,
+    ));
+    const nextSiblings = moveDepartmentWithinSiblings(siblings, activeId, overId);
+    if (nextSiblings === siblings) return;
+    const nextOrderById = new Map(nextSiblings.map((department) => [department.id, department.sort_order]));
+    setDepartments((current) => current.map((department) => (
+      nextOrderById.has(department.id)
+        ? { ...department, sort_order: nextOrderById.get(department.id)! }
+        : department
+    )));
+    setSortingParentId(parentId);
+    void (async () => {
+      try {
+        await reorderProjectMemoryDepartments({
+          parent_id: parentId,
+          department_ids: nextSiblings.map((department) => department.id),
+        });
+        await refreshDepartments();
+        setToast({ msg: '分类顺序已保存', kind: 'info' });
+      } catch (error: unknown) {
+        try {
+          await refreshDepartments();
+        } catch {
+          // Keep the optimistic order visible when the authoritative reload is unavailable.
+        }
+        setToast({ msg: error instanceof Error ? error.message : '保存分类顺序失败', kind: 'error' });
+      } finally {
+        setSortingParentId(undefined);
+      }
+    })();
+  }
+
   async function loadProjectMemory(pid: string, includeDrafts = true) {
     try {
       if (!includeDrafts) {
@@ -337,9 +460,21 @@ export default function AdminPage() {
     }
   }
 
+  async function loadReviewQueue() {
+    try {
+      const rows = await listProjectMemoryReviewQueue();
+      setReviewQueue(rows);
+      setSelectedDraftId((current) => (
+        rows.some((draft) => draft.id === current) ? current : (rows[0]?.id || '')
+      ));
+    } catch (error: unknown) {
+      setToast({ msg: error instanceof Error ? error.message : '加载跨项目审批队列失败', kind: 'error' });
+    }
+  }
+
   async function handleCreateProject(event: FormEvent) {
     event.preventDefault();
-    if (!newProjectOrgId || !createDepartmentId || !newProjectName.trim() || creatingProject) return;
+    if (!canCreateProjects || !newProjectOrgId || !createDepartmentId || !newProjectName.trim() || creatingProject) return;
     setCreatingProject(true);
     try {
       const project = await createProject({
@@ -503,9 +638,16 @@ export default function AdminPage() {
   async function submitReview(decision: 'approve' | 'reject') {
     if (!selectedDraft || reviewing) return;
     setReviewing(true);
+    if (decision === 'approve') {
+      setReviewProgress({
+        projectName: selectedDraft.project_name,
+        title: selectedDraft.title,
+      });
+    }
     try {
       const result = await reviewProjectMemoryDraft(selectedDraft.id, decision, reviewComment.trim());
       const nextPending = pendingDraftRows.find((draft) => draft.id !== selectedDraft.id);
+      setReviewQueue((current) => current.filter((draft) => draft.id !== selectedDraft.id));
       setDrafts((current) =>
         current.map((draft) =>
           draft.id === selectedDraft.id
@@ -526,8 +668,14 @@ export default function AdminPage() {
         kind: 'info',
       });
     } catch (error: unknown) {
-      setToast({ msg: error instanceof Error ? error.message : '审批失败', kind: 'error' });
+      if (error instanceof ApiError && error.status === 409) {
+        await loadReviewQueue();
+        setToast({ msg: '该资料已由其他审批人处理，审批列表已刷新', kind: 'info' });
+      } else {
+        setToast({ msg: error instanceof Error ? error.message : '审批失败', kind: 'error' });
+      }
     } finally {
+      if (decision === 'approve') setReviewProgress(null);
       setReviewing(false);
     }
   }
@@ -539,32 +687,65 @@ export default function AdminPage() {
 
   return (
     <div className="flex h-screen min-w-0 flex-col bg-[#eef3f9] text-[#10213e]">
-      <header className="sticky top-0 z-10 border-b border-[#d7e0ec] bg-white/95 px-4 py-4 backdrop-blur md:px-6">
-        <div className="mx-auto flex max-w-[1320px] flex-wrap items-center gap-3">
-          <div>
-            <div className="text-[12px] font-bold tracking-[0.04em] text-brand-600">PROJECT WORKBENCH</div>
-            <h1 className="mt-1 text-[26px] font-semibold leading-tight tracking-normal text-[#10213e]">项目管理</h1>
-            <p className="mt-1 text-sm leading-6 text-[#6e7d97]">
-              {selectedProjectCanManage
-                ? '管理项目分类、结项日期和知识资产一致性迁移。资料与仓库统一在“上传资料”维护。'
-                : '查看项目概览与当前分类。'}
-            </p>
-          </div>
-          <div className="flex-1" />
-          {selectedProject && (
+      <header className="sticky top-0 z-10 shrink-0 border-b border-[#d7e0ec] bg-white/95 px-4 py-3 backdrop-blur md:px-6">
+        <div className="mx-auto max-w-[1440px]">
+          <div className="flex flex-wrap items-start gap-3">
+            <div className="min-w-0 flex-1">
+              <div className="text-[12px] font-bold tracking-[0.08em] text-brand-600">ADMINISTRATION HUB</div>
+              <h1 className="mt-0.5 text-[24px] font-semibold leading-tight tracking-normal text-[#10213e]">管理工作台</h1>
+              <p className="mt-0.5 text-sm leading-5 text-[#6e7d97]">集中完成项目初始化、分类维护、团队账号和项目成员管理。</p>
+            </div>
+            {activeView === 'projects' && selectedProject && (
             <Button type="button" variant="secondary" onClick={openKnowledgeBase}>
               <ExternalLink size={16} aria-hidden={true} />
               访问知识库
             </Button>
-          )}
+            )}
+          </div>
+          <div role="tablist" aria-label="管理工作台视图" className="mt-3 grid grid-cols-2 gap-2">
+            {([
+              { id: 'projects' as const, label: '项目管理', description: '分类、创建、Profile 与知识资产', icon: FolderKanban },
+              { id: 'members' as const, label: '成员管理', description: '团队账号、登录凭据与启停状态', icon: Users },
+            ]).map((view) => {
+              const Icon = view.icon;
+              const selected = activeView === view.id;
+              return (
+                <button
+                  key={view.id}
+                  type="button"
+                  role="tab"
+                  aria-label={view.label}
+                  aria-selected={selected}
+                  onClick={() => selectManagementView(view.id)}
+                  className={`min-w-0 rounded-lg border px-3 py-2 text-left transition ${selected ? 'border-brand-500/35 bg-brand-500/10 text-brand-700 shadow-sm' : 'border-[#d7e0ec] bg-[#f8fafc] text-[#53647d] hover:border-brand-500/25 hover:bg-white'}`}
+                >
+                  <span className="flex items-center gap-2 text-sm font-semibold"><Icon size={17} aria-hidden="true" />{view.label}</span>
+                  <span className="mt-0.5 hidden truncate text-xs text-[#7a889d] sm:block">{view.description}</span>
+                </button>
+              );
+            })}
+          </div>
         </div>
       </header>
 
-      <main className="flex-1 overflow-y-auto px-4 py-6 md:px-6">
-        <div className="mx-auto grid max-w-[1320px] gap-5">
-          <section className="grid grid-cols-1 items-stretch gap-5 xl:grid-cols-[minmax(300px,0.82fr)_minmax(0,1.35fr)]">
-            <div data-project-list-card className="h-full overflow-hidden rounded-lg border border-[#d7e0ec] bg-white shadow-[0_10px_24px_rgba(15,35,66,0.04)]">
-              <div className="border-b border-[#d7e0ec] bg-[#f7faff] p-5">
+      {activeView === 'members' ? (
+        <section role="tabpanel" className="min-h-0 min-w-0 flex-1 overflow-y-auto px-4 py-3 md:px-6">
+          <div className="mx-auto max-w-[1440px]">
+            {me?.is_system_admin ? (
+              <TeamDirectoryPanel currentUser={me} />
+            ) : (
+              <div className="rounded-lg border border-[#d7e0ec] bg-white p-5 shadow-[0_10px_24px_rgba(15,35,66,0.04)]">
+                <EmptyState title="团队账号仅由系统管理员维护" hint="项目成员请在项目管理中查看和维护。" />
+              </div>
+            )}
+          </div>
+        </section>
+      ) : <>
+      <main className="flex-1 overflow-y-auto px-4 py-3 md:px-6">
+        <div className="mx-auto grid max-w-[1440px] gap-3">
+          <section className="grid grid-cols-1 items-stretch gap-3 xl:grid-cols-[minmax(300px,0.82fr)_minmax(0,1.35fr)]">
+              <div data-project-list-card className="h-full overflow-hidden rounded-lg border border-[#d7e0ec] bg-white shadow-[0_10px_24px_rgba(15,35,66,0.04)]">
+              <div className="border-b border-[#d7e0ec] bg-[#f7faff] p-4">
                 <div className="flex items-center gap-3">
                   <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-brand-500/10 text-brand-600">
                     <FolderKanban size={20} aria-hidden={true} />
@@ -579,7 +760,7 @@ export default function AdminPage() {
                     </Button>
                   )}
                 </div>
-                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                <div className="mt-3 grid gap-2 sm:grid-cols-2">
                   <Field label="第一分级" htmlFor="project-first-level">
                     <Select
                       id="project-first-level"
@@ -653,10 +834,10 @@ export default function AdminPage() {
               )}
             </div>
 
-            <div data-testid="project-create-profile-workspace" className="grid gap-5 xl:grid-cols-[minmax(280px,0.72fr)_minmax(440px,1.28fr)] xl:items-stretch">
+            <div data-testid="project-create-profile-workspace" className="grid min-w-0 gap-3 min-[1400px]:grid-cols-[minmax(240px,0.7fr)_minmax(360px,1.3fr)] min-[1400px]:items-stretch">
               {canCreateProjects && (
-                <section className="h-full rounded-lg border border-[#d7e0ec] bg-white p-5 shadow-[0_10px_24px_rgba(15,35,66,0.04)]">
-                  <div className="mb-4 flex items-center gap-3">
+                <section className="h-full rounded-lg border border-[#d7e0ec] bg-white p-4 shadow-[0_10px_24px_rgba(15,35,66,0.04)]">
+                  <div className="mb-3 flex items-center gap-3">
                     <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-brand-500/10 text-brand-600">
                       <Plus size={20} aria-hidden={true} />
                     </div>
@@ -712,7 +893,7 @@ export default function AdminPage() {
               )}
 
               {selectedProject ? (
-                <section data-testid="project-profile-card" className="h-full rounded-lg border border-[#d7e0ec] bg-white p-5 text-[#10213e] shadow-[0_10px_24px_rgba(15,35,66,0.04)]">
+                <section data-testid="project-profile-card" className="h-full rounded-lg border border-[#d7e0ec] bg-white p-4 text-[#10213e] shadow-[0_10px_24px_rgba(15,35,66,0.04)]">
                   <div className="flex flex-wrap items-start gap-3">
                     <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-brand-500/10 text-brand-600">
                       <Archive size={20} aria-hidden={true} />
@@ -777,16 +958,18 @@ export default function AdminPage() {
                             <RefreshCw size={16} aria-hidden={true} />恢复为进行中
                           </Button>
                         )}
-                        <Button className="w-full" type="button" variant="danger" onClick={() => {
-                          setDeleteProjectOpen(true);
-                          setDeleteProjectConfirmation('');
-                        }} disabled={deletingProject}>
-                          <Trash2 size={16} aria-hidden={true} />{deletingProject ? '删除中' : '删除项目'}
-                        </Button>
+                        {selectedProjectCanDelete && (
+                          <Button className="w-full" type="button" variant="danger" onClick={() => {
+                            setDeleteProjectOpen(true);
+                            setDeleteProjectConfirmation('');
+                          }} disabled={deletingProject}>
+                            <Trash2 size={16} aria-hidden={true} />{deletingProject ? '删除中' : '删除项目'}
+                          </Button>
+                        )}
                       </div>
                     </form>
                   )}
-                  {selectedProjectCanManage && deleteProjectOpen && (
+                  {selectedProjectCanDelete && deleteProjectOpen && (
                     <div className="mt-4 rounded-lg border border-[#df5a67]/30 bg-[#fff7f7] p-4">
                       <div className="font-semibold text-[#9f2f3d]">确认删除项目“{selectedProject.name}”</div>
                       <p className="mt-2 text-sm leading-6 text-[#6e4a50]">删除会影响项目成员关系、项目资料、Wiki、会议记录、仓库配置、长期记忆和相关历史数据。此操作不可撤销。</p>
@@ -891,23 +1074,29 @@ export default function AdminPage() {
             </div>
           </section>
 
+          <ProjectMembersPanel
+            project={selectedProject}
+            currentUser={me}
+            canManage={selectedProjectCanManage}
+          />
+
           {selectedProject ? (
             <>
-              {selectedProjectCanManage && (
+              {canReviewAnyProject && (
                 <section className="grid gap-5 xl:grid-cols-[340px_minmax(0,1fr)]">
                 <div className="rounded-lg border border-[#d7e0ec] bg-white shadow-[0_10px_24px_rgba(15,35,66,0.04)]">
                   <div className="flex items-center justify-between gap-2 border-b border-[#d7e0ec] bg-[#f7faff] px-5 py-4">
                     <div className="flex items-center gap-2 text-sm font-semibold text-[#10213e]">
                       <RefreshCw size={18} className="text-brand-600" aria-hidden="true" />
-                      待审批资料
+                       所有项目待审批内容
                     </div>
-                    <Button size="sm" variant="ghost" onClick={() => loadProjectMemory(selectedProject.id)}>
+                    <Button size="sm" variant="ghost" onClick={loadReviewQueue}>
                       刷新
                     </Button>
                   </div>
                   <div className="max-h-[620px] overflow-y-auto p-4">
                     {pendingDraftRows.length === 0 ? (
-                      <EmptyState title="当前没有待审批资料" hint="员工提交通过安全检查的原始文件后，会出现在这里" />
+                       <EmptyState title="当前没有待审批内容" hint="项目原始资料、会议记录和 GitHub 仓库地址提交后会统一出现在这里" />
                     ) : (
                       <div className="space-y-2">
                         {pendingDraftRows.map((draft) => (
@@ -926,7 +1115,15 @@ export default function AdminPage() {
                               <StatusBadge status={draft.status} />
                             </div>
                             <div className="mt-1 text-xs text-[#6e7d97]">
-                              {draft.source_count} 个原始文件 · {fmtTime(draft.created_at)}
+                              <span className="font-medium text-brand-700">{draft.project_name}</span>
+                              {' · '}{draft.department_path}
+                            </div>
+                            <div className="mt-1 text-xs text-[#6e7d97]">
+                               {draft.review_kind === 'meeting_summary'
+                                 ? `会议记录 · ${draft.meeting_date || '未填写日期'}`
+                                 : draft.review_kind === 'project_repository'
+                                   ? `GitHub 仓库 · ${draft.repository_branch || 'main'}`
+                                   : `${draft.source_count} 个原始文件`} · {fmtTime(draft.created_at)}
                             </div>
                           </button>
                         ))}
@@ -942,7 +1139,16 @@ export default function AdminPage() {
                         <div className="min-w-0">
                           <h2 className="break-words text-xl font-semibold leading-tight text-[#10213e]">{selectedDraft.title}</h2>
                           <p className="mt-1 text-sm text-[#6e7d97]">
-                            {selectedDraft.department_name} · {statusLabel[selectedDraft.status]}
+                            {selectedDraft.project_name} · {selectedDraft.department_path} · {statusLabel[selectedDraft.status]}
+                          </p>
+                          <p className="mt-1 text-xs text-[#7a889d]">
+                             上传人：{selectedDraft.uploader.display_name} · 类型：{
+                               selectedDraft.review_kind === 'meeting_summary' ? '会议记录'
+                                 : selectedDraft.review_kind === 'project_repository' ? 'GitHub 仓库地址' : '项目原始资料'
+                             }
+                             {selectedDraft.review_kind === 'project_repository'
+                               ? ` · ${selectedDraft.repository_url || '未提供地址'} · ${selectedDraft.repository_branch || 'main'}`
+                               : ` · 文件：${selectedDraft.file_names.join('、') || '未提供文件名'}`}
                           </p>
                         </div>
                         {selectedDraft.status === 'pending_review' && (
@@ -1033,58 +1239,176 @@ export default function AdminPage() {
                   <Plus size={16} aria-hidden="true" />新增分类
                 </Button>
               </form>
-              <div className="mt-5 grid gap-3">
-                {topLevelDepartments.map((root) => {
-                  const children = departments.filter((department) => department.parent_id === root.id);
-                  return (
-                    <div key={root.id} className="rounded-lg border border-[#d7e0ec] p-3">
-                      {[root, ...children].map((department) => (
-                        <div key={department.id} className={`flex flex-wrap items-center gap-2 py-2 ${department.parent_id ? 'ml-5 border-t border-[#edf1f6]' : ''}`}>
-                          {editingCategoryId === department.id ? (
+              <DndContext
+                sensors={categorySensors}
+                collisionDetection={closestCenter}
+                onDragEnd={handleCategorySortEnd}
+              >
+                <SortableContext items={topLevelDepartments.map((department) => department.id)} strategy={verticalListSortingStrategy}>
+                  <div className="mt-5 grid gap-3">
+                    {topLevelDepartments.map((root) => {
+                      const children = sortDepartments(departments.filter((department) => department.parent_id === root.id));
+                      return (
+                        <SortableCategoryRow key={root.id} department={root} disabled={savingCategory || sortingParentId !== undefined} className="rounded-lg border border-[#d7e0ec] p-3">
+                          {editingCategoryId === root.id ? (
                             <>
-                              <Input aria-label={`分类名称 ${department.name}`} value={editingCategoryName} onChange={(event) => setEditingCategoryName(event.target.value)} className="min-w-44 flex-1" />
-                              <Input aria-label={`分类排序 ${department.name}`} type="number" value={editingCategorySortOrder} onChange={(event) => setEditingCategorySortOrder(event.target.value)} className="w-28" />
-                              {department.parent_id && (
-                                <Select
-                                  aria-label={`上级第一分级 ${department.name}`}
-                                  value={editingCategoryParentId}
-                                  onChange={(value) => setEditingCategoryParentId(value as DepartmentId)}
-                                  options={topLevelDepartments.map((rootDepartment) => ({ value: rootDepartment.id, label: rootDepartment.name }))}
-                                />
-                              )}
+                              <Input aria-label={`分类名称 ${root.name}`} value={editingCategoryName} onChange={(event) => setEditingCategoryName(event.target.value)} className="min-w-44 flex-1" />
                               <Button type="button" onClick={saveCategory} disabled={savingCategory}>保存分类</Button>
                               <Button type="button" variant="secondary" onClick={() => setEditingCategoryId('')}>取消</Button>
                             </>
                           ) : (
                             <>
-                              <span className="min-w-0 flex-1 text-sm font-medium text-[#10213e]">
-                                {department.parent_id ? '└ ' : ''}{department.name}
-                                <span className="ml-2 text-xs font-normal text-[#6e7d97]">排序 {department.sort_order}</span>
-                              </span>
-                              {department.is_direct ? (
-                                <span className="rounded-full border border-brand-500/20 bg-brand-500/10 px-3 py-1.5 text-xs font-medium text-brand-700">
-                                  系统分级 · 自动维护
-                                </span>
-                              ) : (
-                                <>
-                                  <Button type="button" variant="secondary" onClick={() => startEditingCategory(department)}>改名排序</Button>
-                                  <Button type="button" variant="danger" onClick={() => void removeCategory(department)}>删除分类</Button>
-                                </>
-                              )}
+                              <span className="min-w-0 flex-1 text-sm font-medium text-[#10213e]">{root.name}</span>
+                              <Button type="button" variant="secondary" onClick={() => startEditingCategory(root)}>改名</Button>
+                              <Button type="button" variant="danger" onClick={() => void removeCategory(root)}>删除分类</Button>
                             </>
                           )}
-                        </div>
-                      ))}
-                    </div>
-                  );
-                })}
-              </div>
+                          <SortableContext items={children.map((department) => department.id)} strategy={verticalListSortingStrategy}>
+                            <div className="mt-2 w-full">
+                              {children.map((department) => (
+                                <SortableCategoryRow
+                                  key={department.id}
+                                  department={department}
+                                  disabled={savingCategory || sortingParentId !== undefined}
+                                  className="ml-5 border-t border-[#edf1f6] py-2"
+                                >
+                                  {editingCategoryId === department.id ? (
+                                    <>
+                                      <Input aria-label={`分类名称 ${department.name}`} value={editingCategoryName} onChange={(event) => setEditingCategoryName(event.target.value)} className="min-w-44 flex-1" />
+                                      <Select
+                                        aria-label={`上级第一分级 ${department.name}`}
+                                        value={editingCategoryParentId}
+                                        onChange={(value) => setEditingCategoryParentId(value as DepartmentId)}
+                                        options={topLevelDepartments.map((rootDepartment) => ({ value: rootDepartment.id, label: rootDepartment.name }))}
+                                      />
+                                      <Button type="button" onClick={saveCategory} disabled={savingCategory}>保存分类</Button>
+                                      <Button type="button" variant="secondary" onClick={() => setEditingCategoryId('')}>取消</Button>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <span className="min-w-0 flex-1 text-sm font-medium text-[#10213e]">└ {department.name}</span>
+                                      {department.is_direct ? (
+                                        <span className="rounded-full border border-brand-500/20 bg-brand-500/10 px-3 py-1.5 text-xs font-medium text-brand-700">
+                                          系统分级 · 自动维护
+                                        </span>
+                                      ) : (
+                                        <>
+                                          <Button type="button" variant="secondary" onClick={() => startEditingCategory(department)}>改名</Button>
+                                          <Button type="button" variant="danger" onClick={() => void removeCategory(department)}>删除分类</Button>
+                                        </>
+                                      )}
+                                    </>
+                                  )}
+                                </SortableCategoryRow>
+                              ))}
+                            </div>
+                          </SortableContext>
+                        </SortableCategoryRow>
+                      );
+                    })}
+                  </div>
+                </SortableContext>
+              </DndContext>
             </div>
           </section>
         </div>
       )}
+      </>}
 
+      {reviewProgress && <ReviewProgressDialog progress={reviewProgress} />}
       {toast && <Toast message={toast.msg} kind={toast.kind} />}
+    </div>
+  );
+}
+
+function ReviewProgressDialog({ progress }: { progress: ReviewProgress }) {
+  return (
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-[#10213e]/55 p-4 backdrop-blur-[2px]">
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="review-progress-title"
+        aria-describedby="review-progress-description"
+        className="w-full max-w-lg rounded-xl border border-white/70 bg-white p-6 shadow-[0_28px_80px_rgba(15,35,66,0.32)]"
+      >
+        <div className="flex items-start gap-3">
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-brand-500/10 text-brand-600">
+            <Archive size={21} aria-hidden="true" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <h2 id="review-progress-title" className="text-lg font-semibold text-[#10213e]">审批入库处理中</h2>
+            <p id="review-progress-description" className="mt-1 text-sm leading-6 text-[#6e7d97]">
+               服务器正在校验提交内容并写入正式项目数据，请保持页面打开。
+            </p>
+          </div>
+        </div>
+        <div className="mt-4 rounded-lg border border-[#d7e0ec] bg-[#f7f9fc] px-4 py-3 text-sm">
+          <p className="font-medium text-[#253655]">{progress.title}</p>
+          <p className="mt-1 text-xs text-[#6e7d97]">项目归属：{progress.projectName}</p>
+        </div>
+        <div className="mt-5">
+          <div
+            role="progressbar"
+            aria-label="审批入库进度"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuetext="服务器处理中"
+            className="h-3 overflow-hidden rounded-full bg-[#e4ebf4]"
+          >
+            <div className="h-full w-1/2 animate-pulse rounded-full bg-brand-600" />
+          </div>
+          <div className="mt-2 flex items-center justify-between gap-3 text-xs text-[#6e7d97]">
+             <span>校验、处理并持久化</span>
+            <span className="font-semibold text-[#355170]">请稍候</span>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function SortableCategoryRow({
+  department,
+  disabled,
+  className,
+  children,
+}: {
+  department: Department;
+  disabled: boolean;
+  className: string;
+  children: ReactNode;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: department.id, disabled });
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={`flex flex-wrap items-center gap-2 ${className} ${isDragging ? 'relative z-10 bg-[#f7faff] opacity-80 shadow-sm' : ''}`}
+    >
+      <button
+        type="button"
+        aria-label={`拖动排序 ${department.name}`}
+        title="拖动或使用键盘调整同级顺序"
+        disabled={disabled}
+        className="flex h-8 w-8 shrink-0 touch-none items-center justify-center rounded-md text-[#8b99ae] hover:bg-[#eef3f9] hover:text-[#40516e] disabled:cursor-not-allowed disabled:opacity-50"
+        {...attributes}
+        {...listeners}
+      >
+        <GripVertical size={17} aria-hidden={true} />
+      </button>
+      {children}
     </div>
   );
 }

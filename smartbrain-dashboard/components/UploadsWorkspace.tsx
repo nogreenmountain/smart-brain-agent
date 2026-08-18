@@ -1,22 +1,14 @@
 'use client';
 
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  CalendarDays,
-  CheckCircle2,
   ClipboardList,
-  Download,
   FileCheck2,
-  FileText,
   FileUp,
   FolderUp,
   GitBranch,
-  RefreshCw,
-  Search,
   ShieldCheck,
-  Sparkles,
   TriangleAlert,
-  UsersRound,
 } from 'lucide-react';
 
 import { Button } from '@/components/Button';
@@ -26,53 +18,35 @@ import { Input } from '@/components/Input';
 import { PageBody, PageHeader, PageShell } from '@/components/PageLayout';
 import { ProjectHierarchySelector } from '@/components/ProjectHierarchySelector';
 import {
-  cancelMaterialIntake,
-  confirmMaterialIntake,
   createMeetingSummary,
   getProjectRepository,
   listMeetingParticipantOptions,
-  listMeetingSummaries,
   listProjectCatalog,
   listProjectMemoryDepartments,
-  meetingSummaryFileUrl,
-  previewProjectMaterials,
+  uploadProjectMaterialsDirect,
   upsertProjectRepository,
   type Department,
-  type MaterialIntakePreview,
   type MeetingParticipantOption,
-  type MeetingSummary,
   type Project,
+  type UploadProgress,
 } from '@/lib/api';
 
 type UploadTab = 'materials' | 'meetings' | 'repository';
 
 const tabs: { id: UploadTab; label: string; icon: typeof FolderUp; description: string }[] = [
-  { id: 'materials', label: '项目原始资料', icon: FolderUp, description: '先检查敏感信息，再提交安全文件进入知识库审批流程。' },
-  { id: 'meetings', label: '会议记录', icon: ClipboardList, description: '上传会议全文，并查看项目内已有的长期会议记录。' },
+  { id: 'materials', label: '项目原始资料', icon: FolderUp, description: '文件直接可靠上传，完成后自动提交到审批流程。' },
+  { id: 'meetings', label: '会议记录', icon: ClipboardList, description: '上传会议全文并提交管理员审批，已入库内容统一在知识库查看。' },
   { id: 'repository', label: 'GitHub 仓库', icon: GitBranch, description: '维护新成员和 AI 理解项目时使用的代码仓库入口。' },
 ];
 
-const materialRecommendationLabel = {
-  keep: '通过检查',
-  review: '风险待确认',
-  duplicate: '重复资料',
-  sensitive: '包含敏感信息',
-  low_value: '未通过检查',
-} as const;
-
-const materialRecommendationTone = {
-  keep: 'border-[#17a58a]/25 bg-[#17a58a]/12 text-[#137f6d]',
-  review: 'border-[#f0a23a]/25 bg-[#f0a23a]/15 text-[#9a5a0d]',
-  duplicate: 'border-[#a8b4c6]/30 bg-[#eef2f7] text-[#5e6b80]',
-  sensitive: 'border-[#df5a67]/25 bg-[#df5a67]/10 text-[#b83d49]',
-  low_value: 'border-[#a8b4c6]/30 bg-[#eef2f7] text-[#5e6b80]',
-} as const;
-
-const MATERIAL_ACCEPT = '.pdf,.doc,.docx,.ppt,.pptx,.md,.markdown,.html,.htm,.txt,.py,.ts,.tsx,.js,.jsx,.json,.yaml,.yml,.css,.scss,.java,.go,.rs,.cpp,.c,.h,.cs,.sql';
+const MATERIAL_ACCEPT = '.pdf,.docx,.pptx,.xlsx,.md,.markdown,.html,.htm,.txt,.py,.ts,.tsx,.js,.jsx,.json,.yaml,.yml,.css,.scss,.java,.go,.rs,.cpp,.c,.h,.cs,.sql';
 const MEETING_FILE_ACCEPT = '.pdf,.docx,.pptx,.md,.txt,.html,.htm,.csv,.json,.xml,.yaml,.yml';
+const MATERIAL_UPLOAD_LIMIT_MB = 500;
+const MATERIAL_UPLOAD_LIMIT_BYTES = MATERIAL_UPLOAD_LIMIT_MB * 1024 * 1024;
 
 export default function UploadsWorkspace({ initialTab = 'materials' }: { initialTab?: UploadTab }) {
   const materialFileRef = useRef<HTMLInputElement>(null);
+  const materialClientUploadIdRef = useRef<string | null>(null);
   const [activeTab, setActiveTab] = useState<UploadTab>(initialTab);
   const [departments, setDepartments] = useState<Department[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -84,9 +58,8 @@ export default function UploadsWorkspace({ initialTab = 'materials' }: { initial
   const [savingRepo, setSavingRepo] = useState(false);
   const [selectedMaterialFiles, setSelectedMaterialFiles] = useState<File[]>([]);
   const [uploadingMaterials, setUploadingMaterials] = useState(false);
-  const [confirmingMaterials, setConfirmingMaterials] = useState(false);
-  const [materialPreview, setMaterialPreview] = useState<MaterialIntakePreview | null>(null);
-  const [materialScanOpen, setMaterialScanOpen] = useState(false);
+  const [materialUploadProgress, setMaterialUploadProgress] = useState<UploadProgress | null>(null);
+  const [materialUploadError, setMaterialUploadError] = useState('');
   const [toast, setToast] = useState<{ msg: string; kind: 'info' | 'error' } | null>(null);
 
   const selectedProject = useMemo(
@@ -115,8 +88,7 @@ export default function UploadsWorkspace({ initialTab = 'materials' }: { initial
 
   useEffect(() => {
     setSelectedMaterialFiles([]);
-    setMaterialPreview(null);
-    setMaterialScanOpen(false);
+    materialClientUploadIdRef.current = null;
     if (materialFileRef.current) materialFileRef.current.value = '';
   }, [projectId]);
 
@@ -143,58 +115,48 @@ export default function UploadsWorkspace({ initialTab = 'materials' }: { initial
     return () => { active = false; };
   }, [projectId, selectedProjectIsMember]);
 
-  async function inspectMaterials() {
+  async function uploadMaterials() {
     if (!selectedProjectIsMember || !selectedProject?.department_id || selectedMaterialFiles.length === 0 || uploadingMaterials) return;
-    setMaterialScanOpen(true);
-    setMaterialPreview(null);
+    const oversizedFile = selectedMaterialFiles.find((file) => file.size > MATERIAL_UPLOAD_LIMIT_BYTES);
+    if (oversizedFile) {
+      setMaterialUploadError(`单个文件不能超过 ${MATERIAL_UPLOAD_LIMIT_MB} MB：${oversizedFile.name}`);
+      return;
+    }
+    const totalBytes = selectedMaterialFiles.reduce((total, file) => total + file.size, 0);
+    if (totalBytes > MATERIAL_UPLOAD_LIMIT_BYTES) {
+      setMaterialUploadError(`单批文件总大小不能超过 ${MATERIAL_UPLOAD_LIMIT_MB} MB`);
+      return;
+    }
+    setMaterialUploadError('');
+    setMaterialUploadProgress({
+      phase: 'uploading', percent: 0, loadedBytes: 0,
+      totalBytes,
+    });
     setUploadingMaterials(true);
     try {
-      setMaterialPreview(await previewProjectMaterials(
+      if (!materialClientUploadIdRef.current) {
+        materialClientUploadIdRef.current = createClientUploadId();
+      }
+      const result = await uploadProjectMaterialsDirect(
         selectedProject.id,
         selectedProject.department_id,
         selectedMaterialFiles,
-      ));
-    } catch (error: unknown) {
-      setMaterialScanOpen(false);
-      setToast({ msg: error instanceof Error ? error.message : '资料检查失败', kind: 'error' });
-    } finally {
-      setUploadingMaterials(false);
-    }
-  }
-
-  async function confirmMaterials() {
-    if (!materialPreview || confirmingMaterials) return;
-    const safeFileIds = materialPreview.items
-      .filter((item) => item.recommendation === 'keep' && item.included)
-      .map((item) => item.id);
-    if (safeFileIds.length === 0) return;
-    setConfirmingMaterials(true);
-    try {
-      const result = await confirmMaterialIntake(materialPreview.id, safeFileIds);
+        materialClientUploadIdRef.current,
+        setMaterialUploadProgress,
+      );
       clearMaterialSelection();
       setToast({ msg: `已提交 ${result.raw_document_count} 份原始资料，等待管理员审批后入库`, kind: 'info' });
     } catch (error: unknown) {
-      setToast({ msg: error instanceof Error ? error.message : '提交资料失败', kind: 'error' });
+      setMaterialUploadError(error instanceof Error ? error.message : '资料上传失败');
     } finally {
-      setConfirmingMaterials(false);
-    }
-  }
-
-  async function cancelMaterials() {
-    if (uploadingMaterials || confirmingMaterials) return;
-    try {
-      if (materialPreview) await cancelMaterialIntake(materialPreview.id);
-      clearMaterialSelection();
-      setToast({ msg: '本批文件已全部取消，不会上传', kind: 'info' });
-    } catch (error: unknown) {
-      setToast({ msg: error instanceof Error ? error.message : '取消上传失败', kind: 'error' });
+      setMaterialUploadProgress(null);
+      setUploadingMaterials(false);
     }
   }
 
   function clearMaterialSelection() {
     setSelectedMaterialFiles([]);
-    setMaterialPreview(null);
-    setMaterialScanOpen(false);
+    materialClientUploadIdRef.current = null;
     if (materialFileRef.current) materialFileRef.current.value = '';
   }
 
@@ -207,7 +169,7 @@ export default function UploadsWorkspace({ initialTab = 'materials' }: { initial
         git_url: repoUrl.trim(),
         git_branch: repoBranch.trim() || 'main',
       });
-      setToast({ msg: '仓库地址已保存', kind: 'info' });
+      setToast({ msg: '仓库地址已提交审批，管理员批准后生效', kind: 'info' });
     } catch (error: unknown) {
       setToast({ msg: error instanceof Error ? error.message : '保存仓库失败', kind: 'error' });
     } finally {
@@ -277,7 +239,7 @@ export default function UploadsWorkspace({ initialTab = 'materials' }: { initial
               </div>
               <div>
                 <h2 className="text-xl font-semibold text-[#10213e]">项目原始资料</h2>
-                <p className="mt-1 text-sm leading-6 text-[#6e7d97]">文件会先进行凭据、Token、个人信息和敏感链接检查，通过后才可提交。</p>
+                <p className="mt-1 text-sm leading-6 text-[#6e7d97]">文件会直接分块上传并提交审批；网络中断后可保留当前选择并继续重试。</p>
               </div>
             </div>
             <label className="mt-5 block text-sm font-medium text-[#253655]">
@@ -291,12 +253,14 @@ export default function UploadsWorkspace({ initialTab = 'materials' }: { initial
                 disabled={!selectedProjectIsMember}
                 onChange={(event) => {
                   setSelectedMaterialFiles(Array.from(event.target.files || []));
-                  setMaterialPreview(null);
-                  setMaterialScanOpen(false);
+                  materialClientUploadIdRef.current = null;
                 }}
                 className="mt-1.5"
               />
             </label>
+            <p className="mt-2 text-xs leading-5 text-[#6e7d97]">
+              单个文件和单批总大小均不超过 {MATERIAL_UPLOAD_LIMIT_MB} MB；超限文件不会发起上传请求。
+            </p>
             {!selectedProjectIsMember && (
               <p className="mt-3 rounded-lg border border-[#f0a23a]/25 bg-[#fff8ec] px-3 py-2 text-sm text-[#8a5a18]">
                 原始资料和仓库配置仅对项目成员开放。
@@ -311,9 +275,9 @@ export default function UploadsWorkspace({ initialTab = 'materials' }: { initial
                 type="button"
                 className="w-full sm:w-auto"
                 disabled={!selectedProjectIsMember || selectedMaterialFiles.length === 0 || uploadingMaterials}
-                onClick={inspectMaterials}
+                onClick={uploadMaterials}
               >
-                {uploadingMaterials ? <LoadingDots /> : <><Sparkles size={16} aria-hidden="true" />检查并预览</>}
+                {uploadingMaterials ? <LoadingDots /> : <><FileUp size={16} aria-hidden="true" />上传并提交审批</>}
               </Button>
             </div>
           </Card>
@@ -323,7 +287,7 @@ export default function UploadsWorkspace({ initialTab = 'materials' }: { initial
           <Card className="overflow-hidden">
             <div className="border-b border-[#d7e0ec] bg-[#f7faff] px-5 py-4">
               <h2 className="text-xl font-semibold text-[#10213e]">会议记录</h2>
-              <p className="mt-1 text-sm text-[#6e7d97]">会议上传仍保留跨项目搜索能力；历史查看和下载继续按项目成员权限控制。</p>
+              <p className="mt-1 text-sm text-[#6e7d97]">此页面只负责上传；审批通过后的会议记录统一在知识库中查看和管理。</p>
             </div>
             <div className="p-4 md:p-5">
               <MeetingPanel
@@ -344,7 +308,7 @@ export default function UploadsWorkspace({ initialTab = 'materials' }: { initial
               </div>
               <div>
                 <h2 className="text-xl font-semibold text-[#10213e]">GitHub 仓库</h2>
-                <p className="mt-1 text-sm leading-6 text-[#6e7d97]">为当前项目维护仓库地址和默认分支。</p>
+                <p className="mt-1 text-sm leading-6 text-[#6e7d97]">提交仓库地址和默认分支供管理员审批；批准前当前已生效配置保持不变。</p>
               </div>
             </div>
             <form onSubmit={saveRepository} className="mt-5 grid min-w-0 gap-4 md:grid-cols-[minmax(0,1fr)_minmax(160px,0.32fr)]">
@@ -372,7 +336,7 @@ export default function UploadsWorkspace({ initialTab = 'materials' }: { initial
               </label>
               <div className="md:col-span-2 flex justify-end">
                 <Button type="submit" className="w-full sm:w-auto" disabled={!selectedProjectIsMember || !repoUrl.trim() || repoLoading || savingRepo}>
-                  {savingRepo ? <LoadingDots /> : '保存仓库'}
+                  {savingRepo ? <LoadingDots /> : '提交仓库审批'}
                 </Button>
               </div>
             </form>
@@ -385,61 +349,13 @@ export default function UploadsWorkspace({ initialTab = 'materials' }: { initial
         )}
       </PageBody>
 
-      {materialScanOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#10213e]/55 p-3 backdrop-blur-[2px] sm:p-6">
-          <section
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="material-security-dialog-title"
-            className="max-h-[calc(100vh-1.5rem)] w-full max-w-3xl overflow-y-auto rounded-xl border border-white/70 bg-white shadow-[0_28px_80px_rgba(15,35,66,0.32)] sm:max-h-[calc(100vh-3rem)]"
-          >
-            <div className="border-b border-[#d7e0ec] px-5 py-4 sm:px-6">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <h2 id="material-security-dialog-title" className="text-xl font-semibold text-[#10213e]">文件安全检查</h2>
-                  <p className="mt-1 text-sm leading-6 text-[#6e7d97]">确认检查结果后，只会提交明确通过检测的文件。</p>
-                </div>
-                <ShieldCheck size={22} className="shrink-0 text-[#137f6d]" aria-hidden="true" />
-              </div>
-            </div>
-            <div className="px-5 py-5 sm:px-6">
-              {uploadingMaterials && !materialPreview ? (
-                <div className="flex min-h-48 flex-col items-center justify-center gap-3 text-sm text-[#6e7d97]"><LoadingDots />正在逐个读取文件并检查敏感信息…</div>
-              ) : materialPreview ? (
-                <>
-                  <p className="text-sm leading-6 text-[#50627b]">{materialPreview.summary}</p>
-                  <div className="mt-4 divide-y divide-[#e3e9f1] border-y border-[#e3e9f1]">
-                    {materialPreview.items.map((item) => (
-                      <div key={item.id} className="flex items-start gap-3 py-3">
-                        <span className="min-w-0 flex-1">
-                          <span className="flex flex-wrap items-center gap-2">
-                            <span className="break-all text-sm font-medium text-[#10213e]">{item.filename}</span>
-                            <span className={`rounded border px-2 py-0.5 text-xs font-medium ${materialRecommendationTone[item.recommendation]}`}>
-                              {materialRecommendationLabel[item.recommendation]}
-                            </span>
-                          </span>
-                          <span className="mt-1 block text-sm leading-6 text-[#6e7d97]">{item.reason}</span>
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </>
-              ) : null}
-            </div>
-            <div className="flex flex-col-reverse gap-2 border-t border-[#d7e0ec] bg-[#f7faff] px-5 py-4 sm:flex-row sm:justify-end sm:px-6">
-              <Button type="button" variant="secondary" disabled={uploadingMaterials || confirmingMaterials || !materialPreview} onClick={cancelMaterials}>
-                全部不上传
-              </Button>
-              <Button
-                type="button"
-                disabled={uploadingMaterials || confirmingMaterials || !materialPreview?.items.some((item) => item.recommendation === 'keep' && item.included)}
-                onClick={confirmMaterials}
-              >
-                {confirmingMaterials ? <LoadingDots /> : <><CheckCircle2 size={16} aria-hidden="true" />上传通过检测的文件</>}
-              </Button>
-            </div>
-          </section>
-        </div>
+      {materialUploadProgress && <UploadProgressDialog title="项目原始资料" progress={materialUploadProgress} />}
+      {materialUploadError && (
+        <UploadErrorDialog
+          title="项目原始资料"
+          message={materialUploadError}
+          onClose={() => setMaterialUploadError('')}
+        />
       )}
 
       {toast && <Toast message={toast.msg} kind={toast.kind} />}
@@ -461,25 +377,19 @@ function MeetingPanel({
   const [members, setMembers] = useState<MeetingParticipantOption[]>([]);
   const [selectedParticipantIds, setSelectedParticipantIds] = useState<string[]>([]);
   const [memberQuery, setMemberQuery] = useState('');
-  const [items, setItems] = useState<MeetingSummary[]>([]);
-  const [selectedId, setSelectedId] = useState('');
   const [projectQuery, setProjectQuery] = useState('');
-  const [query, setQuery] = useState('');
   const [title, setTitle] = useState('');
   const [meetingDate, setMeetingDate] = useState(localDate());
   const [file, setFile] = useState<File | null>(null);
   const [fileInputKey, setFileInputKey] = useState(0);
-  const [loading, setLoading] = useState(false);
   const [membersLoading, setMembersLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
+  const [uploadError, setUploadError] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
 
   const selectedProject = projects.find((project) => project.id === projectId);
-  const selected = useMemo(
-    () => items.find((item) => item.id === selectedId) ?? items[0] ?? null,
-    [items, selectedId],
-  );
   const departmentPaths = useMemo(() => new Map(departments.map((department) => {
     const parent = department.parent_id
       ? departments.find((candidate) => candidate.id === department.parent_id)
@@ -505,26 +415,6 @@ function MeetingPanel({
     ));
   }, [memberQuery, members]);
 
-  const loadSummaries = useCallback(async (targetProjectId: string, searchQuery?: string) => {
-    if (!targetProjectId) return;
-    setLoading(true);
-    setError('');
-    try {
-      const data = await listMeetingSummaries({
-        projectId: targetProjectId,
-        query: searchQuery?.trim() || undefined,
-        limit: 100,
-      });
-      setItems(data.items);
-      setSelectedId(data.items[0]?.id ?? '');
-    } catch (requestError) {
-      setItems([]);
-      setError(requestError instanceof Error ? requestError.message : '会议记录加载失败');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
   useEffect(() => {
     let active = true;
     setMembersLoading(true);
@@ -545,19 +435,8 @@ function MeetingPanel({
     setSelectedParticipantIds([]);
     setMemberQuery('');
     setNotice('');
-    if (!projectId) {
-      setItems([]);
-      setSelectedId('');
-      return;
-    }
-    if (selectedProject?.role) void loadSummaries(projectId);
-    else {
-      setItems([]);
-      setSelectedId('');
-      setLoading(false);
-      setError('');
-    }
-  }, [loadSummaries, projectId, selectedProject?.role]);
+    setError('');
+  }, [projectId]);
 
   function selectProject(targetProjectId: string) {
     onProjectChange(targetProjectId);
@@ -581,6 +460,8 @@ function MeetingPanel({
     setSaving(true);
     setError('');
     setNotice('');
+    setUploadError('');
+    setUploadProgress({ phase: 'uploading', percent: 0, loadedBytes: 0, totalBytes: file.size });
     try {
       await createMeetingSummary({
         projectId,
@@ -588,17 +469,17 @@ function MeetingPanel({
         meetingDate,
         participantUserIds: selectedParticipantIds,
         file,
-      });
+      }, setUploadProgress);
       setTitle('');
       setSelectedParticipantIds([]);
       setMemberQuery('');
       setFile(null);
       setFileInputKey((current) => current + 1);
-      setNotice('会议记录已保存，会议全文现在可以通过智慧大脑 MCP 检索和读取。');
-      if (selectedProject?.role) await loadSummaries(projectId, query);
+      setNotice('会议记录已提交审批，管理员批准后会进入知识库的“会议记录”分类。');
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : '会议记录上传失败');
+      setUploadError(requestError instanceof Error ? requestError.message : '会议记录上传失败');
     } finally {
+      setUploadProgress(null);
       setSaving(false);
     }
   }
@@ -607,11 +488,10 @@ function MeetingPanel({
     <div className="space-y-4">
       <div className="flex items-start gap-3 rounded-lg border border-[#bee2cf] bg-[#f2fbf6] p-4 text-sm leading-6 text-[#50627b]">
         <ShieldCheck size={19} className="mt-0.5 shrink-0 text-[#2c7a59]" aria-hidden="true" />
-        <p>所有已启用的智慧大脑用户都可以搜索任意项目并上传会议记录；会议查看和下载仍按项目成员权限控制。</p>
+        <p>所有已启用的智慧大脑用户都可以搜索项目并提交会议记录；管理员审批通过后，项目成员可在知识库查看、预览和下载。</p>
       </div>
 
-      <div className="grid min-w-0 gap-4 xl:grid-cols-[420px_minmax(0,1fr)]">
-        <div className="min-w-0 space-y-4">
+      <div className="mx-auto grid min-w-0 max-w-3xl gap-4">
           <Card className="p-4">
             <label className="block text-xs font-medium text-[#50627b]">
               搜索项目
@@ -667,50 +547,103 @@ function MeetingPanel({
               </form>
             </Card>
           )}
-        </div>
-
-        <div className="min-w-0 space-y-4">
-          <form onSubmit={(event) => { event.preventDefault(); if (selectedProject?.role) void loadSummaries(projectId, query); }} className="grid gap-3 rounded-lg border border-[#d7e0ec] bg-white p-4 sm:grid-cols-[minmax(0,1fr)_auto]">
-            <label className="text-xs font-medium text-[#50627b]">搜索会议内容<input value={query} onChange={(event) => setQuery(event.target.value)} className="mt-1 h-10 w-full rounded-md border border-[#cbd8e8] px-3 text-sm" placeholder="会议内容、参会人或会议名称…" /></label>
-            <button type="submit" disabled={!projectId || !selectedProject?.role || loading} className="inline-flex h-10 items-center justify-center gap-2 self-end rounded-md border border-[#cbd8e8] bg-white px-4 text-sm font-semibold text-[#355170] hover:bg-[#f7f9fc] disabled:opacity-50"><Search size={16} />检索</button>
-          </form>
-          {selectedProject?.role && (
-            <button type="button" onClick={() => void loadSummaries(projectId, query)} disabled={loading} className="inline-flex h-9 items-center gap-2 rounded-md border border-[#cbd8e8] bg-white px-3 text-xs font-medium text-[#355170] hover:bg-[#f7f9fc] disabled:opacity-50"><RefreshCw size={14} className={loading ? 'animate-spin' : ''} />刷新会议记录</button>
-          )}
           {error && <div className="rounded-lg border border-[#efc9c9] bg-[#fff7f7] px-4 py-3 text-sm text-[#a33a3a]"><TriangleAlert size={16} className="mr-2 inline" />{error}</div>}
           {notice && <div className="rounded-lg border border-[#bee2cf] bg-[#f2fbf6] px-4 py-3 text-sm text-[#28714f]">{notice}</div>}
-          {items.length > 0 ? (
-            <div className="grid min-w-0 gap-4 lg:grid-cols-[280px_minmax(0,1fr)]">
-              <Card className="max-h-[calc(100vh-300px)] overflow-y-auto">
-                <div className="divide-y divide-[#edf1f6]">{items.map((item) => (
-                  <button key={item.id} type="button" onClick={() => setSelectedId(item.id)} className={`w-full px-4 py-3 text-left ${selected?.id === item.id ? 'bg-[#edf4ff]' : 'hover:bg-[#f8fafc]'}`}>
-                    <div className="truncate text-sm font-semibold text-[#172844]">{item.title}</div>
-                    <div className="mt-1 flex items-center gap-1 text-xs text-[#6e7d97]"><CalendarDays size={13} />{item.meeting_date}</div>
-                  </button>
-                ))}</div>
-              </Card>
-              {selected && (
-                <Card className="min-w-0 overflow-hidden">
-                  <header className="border-b border-[#e5ebf3] px-5 py-4">
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div><h3 className="text-lg font-semibold text-[#172844]">{selected.title}</h3><div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-[#6e7d97]"><span className="inline-flex items-center gap-1"><CalendarDays size={14} />{selected.meeting_date}</span><span className="inline-flex items-center gap-1"><UsersRound size={14} />{selected.participants.join('、') || '未填写参会人'}</span><span>上传人：{selected.created_by_name}</span></div></div>
-                      {selected.source_filename && selected.source_format && <a href={meetingSummaryFileUrl(selected.id)} className="inline-flex h-9 items-center gap-2 rounded-md border border-[#cbd8e8] px-3 text-xs font-medium text-[#355170] hover:bg-[#f7f9fc]"><Download size={14} />下载原文件</a>}
-                    </div>
-                    {selected.source_filename && <div className="mt-3 flex items-center gap-2 text-xs text-[#6e7d97]"><FileText size={14} />{selected.source_filename}{selected.source_size_bytes ? ` · ${formatFileSize(selected.source_size_bytes)}` : ''}</div>}
-                  </header>
-                  <pre className="max-h-[calc(100vh-380px)] min-h-72 overflow-auto whitespace-pre-wrap break-words bg-[#fbfcfe] px-5 py-5 font-sans text-sm leading-7 text-[#243a57]">{selected.summary_markdown}</pre>
-                </Card>
-              )}
-            </div>
-          ) : !loading && projectId && selectedProject?.role ? (
-            <Card className="flex min-h-64 flex-col items-center justify-center px-6 text-center"><ClipboardList size={30} className="text-[#8aa0ba]" /><p className="mt-3 text-base font-semibold text-[#253655]">暂无会议记录</p></Card>
-          ) : !loading && projectId ? (
-            <Card className="flex min-h-64 flex-col items-center justify-center px-6 text-center"><ShieldCheck size={30} className="text-[#8aa0ba]" /><p className="mt-3 text-base font-semibold text-[#253655]">可上传到此项目</p><p className="mt-1 text-sm text-[#6e7d97]">你不是该项目成员，因此不展示已有会议内容。</p></Card>
-          ) : <Card className="flex min-h-64 items-center justify-center text-sm text-[#6e7d97]">正在加载会议记录…</Card>}
-        </div>
       </div>
+      {uploadProgress && <UploadProgressDialog title="会议记录" progress={uploadProgress} />}
+      {uploadError && (
+        <UploadErrorDialog title="会议记录" message={uploadError} onClose={() => setUploadError('')} />
+      )}
     </div>
   );
+}
+
+function UploadProgressDialog({ title, progress }: { title: string; progress: UploadProgress }) {
+  const isUploading = progress.phase === 'uploading';
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-[#10213e]/55 p-4 backdrop-blur-[2px]">
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={`${title}-upload-progress-title`}
+        className="w-full max-w-lg rounded-xl border border-white/70 bg-white p-6 shadow-[0_28px_80px_rgba(15,35,66,0.32)]"
+      >
+        <div className="flex items-start gap-3">
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-brand-500/10 text-brand-600">
+            <FileUp size={21} aria-hidden="true" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <h2 id={`${title}-upload-progress-title`} className="text-lg font-semibold text-[#10213e]">{title}上传中</h2>
+            <p className="mt-1 text-sm leading-6 text-[#6e7d97]">
+              {isUploading ? '正在上传文件，请保持页面打开。' : '文件已传输完成，服务器正在解析并写入数据库，请耐心等待。'}
+            </p>
+          </div>
+        </div>
+        <div className="mt-5">
+          <div
+            role="progressbar"
+            aria-label={`${title}上传进度`}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            {...(progress.percent === null ? {} : { 'aria-valuenow': progress.percent })}
+            className="h-3 overflow-hidden rounded-full bg-[#e4ebf4]"
+          >
+            <div
+              className={`h-full rounded-full bg-brand-600 transition-[width] duration-200 ${progress.percent === null ? 'w-1/2 animate-pulse' : ''}`}
+              style={progress.percent === null ? undefined : { width: `${progress.percent}%` }}
+            />
+          </div>
+          <div className="mt-2 flex items-center justify-between gap-3 text-xs text-[#6e7d97]">
+            <span>{isUploading ? formatUploadBytes(progress.loadedBytes, progress.totalBytes) : '服务器处理中'}</span>
+            <span className="font-semibold text-[#355170]">{progress.percent === null ? '请稍候' : `${progress.percent}%`}</span>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function UploadErrorDialog({ title, message, onClose }: { title: string; message: string; onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-[#10213e]/55 p-4 backdrop-blur-[2px]">
+      <section
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby={`${title}-upload-error-title`}
+        aria-describedby={`${title}-upload-error-message`}
+        className="w-full max-w-lg rounded-xl border border-[#efc9c9] bg-white p-6 shadow-[0_28px_80px_rgba(15,35,66,0.32)]"
+      >
+        <div className="flex items-start gap-3">
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-[#df5a67]/10 text-[#b83d49]">
+            <TriangleAlert size={21} aria-hidden="true" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <h2 id={`${title}-upload-error-title`} className="text-lg font-semibold text-[#9f3440]">{title}上传失败</h2>
+            <p id={`${title}-upload-error-message`} className="mt-2 break-words text-sm leading-6 text-[#6e4a50]">{message}</p>
+            <p className="mt-2 text-xs leading-5 text-[#6e7d97]">已选择的文件和表单内容会保留，关闭后可以直接重试。</p>
+          </div>
+        </div>
+        <div className="mt-5 flex justify-end">
+          <Button type="button" onClick={onClose}>关闭错误信息</Button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function formatUploadBytes(loaded: number, total: number): string {
+  if (total <= 0) return `${formatFileSize(loaded)} 已上传`;
+  return `${formatFileSize(loaded)} / ${formatFileSize(total)}`;
+}
+
+function createClientUploadId(): string {
+  if (typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (value) => value.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
 function localDate(): string {

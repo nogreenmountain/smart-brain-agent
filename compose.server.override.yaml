@@ -95,6 +95,9 @@ services:
       PROJECT_WIKI_MAX_TOKENS: ${PROJECT_WIKI_MAX_TOKENS:-8000}
       PROJECT_WIKI_SOURCE_LIMIT_PER_TYPE: ${PROJECT_WIKI_SOURCE_LIMIT_PER_TYPE:-10}
       PROJECT_WIKI_INCLUDE_AI_CHAT_SOURCES: ${PROJECT_WIKI_INCLUDE_AI_CHAT_SOURCES:-false}
+      MATERIAL_UPLOAD_STORAGE_DIR: /var/lib/agentops/material-uploads
+    volumes:
+      - material_uploads:/var/lib/agentops/material-uploads
 
   project-wiki-worker:
     image: agentops-api-local:smartbrain-portable-2026-08-13
@@ -247,7 +250,18 @@ services:
       - api
     ports:
       - "3002:3000"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 256
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777
+      - /app/.next/cache:rw,nosuid,nodev,size=128m,uid=1000,gid=1000,mode=0750
 
 volumes:
   rag_model_cache:
     name: "agentops-rag-model-cache"
+  material_uploads:
+    name: "agentops-material-uploads"

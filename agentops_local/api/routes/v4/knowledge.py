@@ -14,13 +14,16 @@ gate by org membership.
 from __future__ import annotations
 
 import logging
+import json
+import re
 import shutil
 import tempfile
 import uuid
 from pathlib import Path
 from typing import List, Literal, Optional
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -35,11 +38,14 @@ from agentops.rag.authz import (
     current_user_id,
     is_system_admin,
     require_admin,
+    require_owner,
     require_writer,
     require_member,
 )
 from agentops.rag.audit import record_audit
 from agentops.project_memory.parsers import SUPPORTED_FORMATS, extract_text
+from agentops.project_memory.ingest import ingest_markdown_memory
+from agentops.project_memory.storage import resolve_storage_key
 from agentops.project_memory.templates import (
     TEMPLATE_VERSION,
     SourceText,
@@ -103,6 +109,8 @@ class KnowledgeLedgerProject(BaseModel):
 
 class KnowledgeLedgerPermissions(BaseModel):
     can_review: bool
+    can_manage: bool
+    can_delete: bool
 
 
 class KnowledgeLedgerSummary(BaseModel):
@@ -116,7 +124,9 @@ class KnowledgeLedgerSummary(BaseModel):
 
 
 class KnowledgeLedgerDocument(BaseModel):
-    document_id: uuid.UUID
+    asset_id: uuid.UUID
+    asset_type: Literal["project_material", "project_wiki", "meeting_record"]
+    document_id: uuid.UUID | None = None
     filename: str
     display_name: str
     format: str
@@ -134,16 +144,44 @@ class KnowledgeLedgerDocument(BaseModel):
     approved_memory_document_id: uuid.UUID | None = None
     intake_id: uuid.UUID | None = None
     original_file_id: uuid.UUID | None = None
+    meeting_date: str | None = None
 
 
 class KnowledgeLedgerResponse(BaseModel):
-    category: Literal["project_material", "project_wiki_source"]
+    category: Literal["project_material", "project_wiki_source", "meeting_record"]
     project: KnowledgeLedgerProject
     permissions: KnowledgeLedgerPermissions
     leaders: list[KnowledgeLedgerUser]
     uploaders: list[KnowledgeLedgerUser]
     summary: KnowledgeLedgerSummary
     documents: list[KnowledgeLedgerDocument]
+
+
+KnowledgeAssetType = Literal["project_material", "project_wiki", "meeting_record"]
+
+
+class KnowledgeAssetRenameRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+
+
+class KnowledgeAssetMoveRequest(BaseModel):
+    target_project_id: uuid.UUID
+
+
+class KnowledgeAssetMutationResponse(BaseModel):
+    asset_id: uuid.UUID
+    asset_type: KnowledgeAssetType
+    project_id: uuid.UUID
+    name: str
+
+
+class KnowledgeAssetPreviewResponse(BaseModel):
+    asset_id: uuid.UUID
+    asset_type: KnowledgeAssetType
+    project_id: uuid.UUID
+    name: str
+    format: str
+    content: str
 
 
 def _safe_upload_name(file: UploadFile) -> tuple[str, str]:
@@ -172,11 +210,96 @@ def _approval_status(value: str | None) -> Literal["raw_uploaded", "pending_revi
     return "raw_uploaded"
 
 
+def _asset_user(request: Request) -> uuid.UUID:
+    try:
+        return current_user_id(request)
+    except AuthzError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+
+
+def _asset_authorize(check, orm: Session, *, user_id: uuid.UUID, project_id: uuid.UUID) -> None:
+    try:
+        check(orm, user_id=user_id, project_id=project_id)
+    except AuthzError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+
+
+def _load_asset(orm: Session, *, asset_type: KnowledgeAssetType, asset_id: uuid.UUID):
+    if asset_type == "project_material":
+        return orm.execute(
+            text("""
+                SELECT d.id::text AS asset_id, d.project_id::text AS project_id,
+                       d.display_name AS name, d.filename, d.format,
+                       d.id::text AS document_id,
+                       file.id::text AS original_file_id, file.filename AS original_filename,
+                       CASE d.format
+                           WHEN 'pdf' THEN 'application/pdf'
+                           WHEN 'md' THEN 'text/markdown; charset=utf-8'
+                           WHEN 'txt' THEN 'text/plain; charset=utf-8'
+                           WHEN 'csv' THEN 'text/csv; charset=utf-8'
+                           WHEN 'docx' THEN 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+                           WHEN 'xlsx' THEN 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                           WHEN 'pptx' THEN 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+                           ELSE 'application/octet-stream'
+                       END AS mime_type,
+                       file.raw_content, file.storage_key
+                FROM public.documents d
+                LEFT JOIN public.project_material_documents material
+                       ON material.document_id = d.id
+                LEFT JOIN public.project_material_intake_files file
+                       ON file.id = material.original_file_id
+                WHERE d.id = :asset_id
+                  AND COALESCE(d.memory_type, 'raw_project_material') = 'raw_project_material'
+            """),
+            {"asset_id": str(asset_id)},
+        ).first()
+    if asset_type == "project_wiki":
+        return orm.execute(
+            text("""
+                SELECT page.id::text AS asset_id, page.project_id::text AS project_id,
+                       page.title AS name, page.page_key, page.markdown_content,
+                       page.document_id::text AS document_id
+                FROM public.project_wiki_pages page
+                WHERE page.id = :asset_id OR page.document_id = :asset_id
+            """),
+            {"asset_id": str(asset_id)},
+        ).first()
+    return orm.execute(
+        text("""
+            SELECT meeting.id::text AS asset_id, meeting.project_id::text AS project_id,
+                   meeting.title AS name, meeting.summary_markdown,
+                   file.filename AS original_filename, file.format, file.mime_type,
+                   file.raw_content
+            FROM public.meeting_summaries meeting
+            LEFT JOIN public.meeting_summary_files file
+                   ON file.meeting_summary_id = meeting.id
+            WHERE meeting.id = :asset_id
+        """),
+        {"asset_id": str(asset_id)},
+    ).first()
+
+
+def _require_asset(orm: Session, *, asset_type: KnowledgeAssetType, asset_id: uuid.UUID):
+    row = _load_asset(orm, asset_type=asset_type, asset_id=asset_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="knowledge asset not found")
+    return row
+
+
+def _embed_asset(value: str) -> list[float] | None:
+    try:
+        from agentops.rag.model_clients import EmbeddingServiceClient
+
+        return EmbeddingServiceClient().embed_documents([value])[0]
+    except Exception:
+        return None
+
+
 @router.get("/knowledge/ledger", response_model=KnowledgeLedgerResponse)
 def get_knowledge_ledger(
     request: Request,
     project_id: uuid.UUID,
-    category: Literal["project_material", "project_wiki_source"] = "project_material",
+    category: Literal["project_material", "project_wiki_source", "meeting_record"] = "project_material",
     uploader_user_id: uuid.UUID | None = None,
     approval_status: Literal["raw_uploaded", "pending_review", "approved", "rejected"] | None = None,
     uploaded_from: str | None = None,
@@ -188,6 +311,7 @@ def get_knowledge_ledger(
     """Return a read-only project material ledger for any authenticated user."""
     try:
         user_id = current_user_id(request)
+        require_member(orm, user_id=user_id, project_id=project_id)
     except AuthzError as e:
         raise HTTPException(status_code=e.status_code, detail=e.detail)
 
@@ -213,9 +337,12 @@ def get_knowledge_ledger(
         """),
         {"project_id": str(project_id), "user_id": str(user_id)},
     ).first()
-    can_review = is_system_admin(orm, user_id=user_id) or bool(
+    system_admin = is_system_admin(orm, user_id=user_id)
+    can_review = system_admin or bool(
         role_row and role_row.role in {"owner", "admin"}
     )
+    can_manage = can_review
+    can_delete = system_admin or bool(role_row and role_row.role == "owner")
 
     member_rows = orm.execute(
         text("""
@@ -242,6 +369,119 @@ def get_knowledge_ledger(
         for row in member_rows
         if row.role in {"owner", "admin"}
     ]
+
+    if category == "meeting_record":
+        meeting_filters = ["meeting.project_id = :project_id"]
+        meeting_params: dict[str, str] = {"project_id": str(project_id)}
+        if uploader_user_id is not None:
+            meeting_filters.append("meeting.created_by = :uploader_user_id")
+            meeting_params["uploader_user_id"] = str(uploader_user_id)
+        if approval_status == "pending_review":
+            meeting_filters.append("draft.status = 'pending_review'")
+        elif approval_status == "rejected":
+            meeting_filters.append("draft.status = 'rejected'")
+        elif approval_status in {"approved", "raw_uploaded"}:
+            meeting_filters.append("(draft.status = 'approved' OR meeting.approval_draft_id IS NULL)")
+        if uploaded_from:
+            meeting_filters.append("meeting.created_at >= CAST(:uploaded_from AS timestamptz)")
+            meeting_params["uploaded_from"] = uploaded_from
+        if uploaded_to:
+            meeting_filters.append("meeting.created_at <= CAST(:uploaded_to AS timestamptz)")
+            meeting_params["uploaded_to"] = uploaded_to
+        if reviewed_from:
+            meeting_filters.append("draft.reviewed_at >= CAST(:reviewed_from AS timestamptz)")
+            meeting_params["reviewed_from"] = reviewed_from
+        if reviewed_to:
+            meeting_filters.append("draft.reviewed_at <= CAST(:reviewed_to AS timestamptz)")
+            meeting_params["reviewed_to"] = reviewed_to
+        meeting_rows = orm.execute(
+            text(f"""
+                SELECT meeting.id::text AS asset_id,
+                       meeting.title, meeting.meeting_date::text AS meeting_date,
+                       meeting.source_filename,
+                       file.format, file.size_bytes,
+                       meeting.created_at::text AS uploaded_at,
+                       meeting.created_by::text AS uploaded_by_user_id,
+                       uploader.email AS uploaded_by_email,
+                       draft.id::text AS draft_id,
+                       draft.status AS draft_status,
+                       draft.reviewed_by_user_id::text AS reviewed_by_user_id,
+                       reviewer.email AS reviewed_by_email,
+                       draft.reviewed_at::text AS reviewed_at,
+                       draft.review_comment
+                FROM public.meeting_summaries meeting
+                LEFT JOIN public.meeting_summary_files file
+                       ON file.meeting_summary_id = meeting.id
+                LEFT JOIN public.project_memory_drafts draft
+                       ON draft.id = meeting.approval_draft_id
+                LEFT JOIN auth.users uploader ON uploader.id = meeting.created_by
+                LEFT JOIN auth.users reviewer ON reviewer.id = draft.reviewed_by_user_id
+                WHERE {" AND ".join(meeting_filters)}
+                ORDER BY meeting.meeting_date DESC, meeting.created_at DESC
+            """),
+            meeting_params,
+        ).all()
+        uploader_rows = orm.execute(
+            text("""
+                SELECT DISTINCT meeting.created_by::text AS user_id, au.email
+                FROM public.meeting_summaries meeting
+                JOIN auth.users au ON au.id = meeting.created_by
+                WHERE meeting.project_id = :project_id
+                ORDER BY au.email
+            """),
+            {"project_id": str(project_id)},
+        ).all()
+        documents: list[KnowledgeLedgerDocument] = []
+        summary = KnowledgeLedgerSummary()
+        for row in meeting_rows:
+            status = "approved" if not row.draft_id else _approval_status(row.draft_status)
+            summary.approved_count += int(status == "approved")
+            summary.pending_count += int(status == "pending_review")
+            summary.rejected_count += int(status == "rejected")
+            if row.uploaded_at and (
+                summary.latest_uploaded_at is None or str(row.uploaded_at) > summary.latest_uploaded_at
+            ):
+                summary.latest_uploaded_at = str(row.uploaded_at)
+            documents.append(KnowledgeLedgerDocument(
+                asset_id=uuid.UUID(str(row.asset_id)),
+                asset_type="meeting_record",
+                filename=str(row.source_filename or f"{row.title}.md"),
+                display_name=str(row.title),
+                format=str(row.format or "md"),
+                size_bytes=int(row.size_bytes or 0),
+                status="ready",
+                chunk_count=1,
+                uploaded_by=_ledger_user(row.uploaded_by_user_id, row.uploaded_by_email),
+                uploaded_at=str(row.uploaded_at),
+                approval_status=status,
+                reviewed_by=_ledger_user(row.reviewed_by_user_id, row.reviewed_by_email),
+                reviewed_at=str(row.reviewed_at) if row.reviewed_at else None,
+                review_comment=row.review_comment,
+                draft_id=uuid.UUID(str(row.draft_id)) if row.draft_id else None,
+                meeting_date=str(row.meeting_date),
+            ))
+        summary.raw_document_count = len(documents)
+        return KnowledgeLedgerResponse(
+            category=category,
+            project=KnowledgeLedgerProject(
+                id=uuid.UUID(str(project_row.id)),
+                name=project_row.name,
+                environment=project_row.environment,
+                department_id=project_row.department_id,
+                created_at=str(project_row.created_at) if project_row.created_at else None,
+                completed_at=str(project_row.completed_at) if project_row.completed_at else None,
+            ),
+            permissions=KnowledgeLedgerPermissions(
+                can_review=can_review, can_manage=can_manage, can_delete=can_delete,
+            ),
+            leaders=leaders,
+            uploaders=[
+                KnowledgeLedgerUser(user_id=uuid.UUID(str(item.user_id)), email=item.email)
+                for item in uploader_rows if item.user_id and item.email
+            ],
+            summary=summary,
+            documents=documents,
+        )
 
     category_filter = (
         "COALESCE(d.memory_type, 'raw_project_material') = 'raw_project_material'"
@@ -278,7 +518,8 @@ def get_knowledge_ledger(
 
     document_rows = orm.execute(
         text(f"""
-            SELECT d.id::text AS document_id, d.filename, d.display_name, d.format,
+            SELECT d.id::text AS document_id, page.id::text AS wiki_page_id,
+                   d.filename, d.display_name, d.format,
                    d.size_bytes, d.status, d.chunk_count, d.error_message,
                    d.created_at::text AS uploaded_at,
                    d.created_by_user_id::text AS uploaded_by_user_id,
@@ -295,6 +536,7 @@ def get_knowledge_ledger(
             FROM public.documents d
             LEFT JOIN public.project_material_documents pmd
                    ON pmd.document_id = d.id
+            LEFT JOIN public.project_wiki_pages page ON page.document_id = d.id
             LEFT JOIN public.project_memory_drafts draft
                    ON draft.id = COALESCE(pmd.draft_id, d.memory_draft_id)
             LEFT JOIN auth.users uploader
@@ -347,6 +589,8 @@ def get_knowledge_ledger(
             summary.latest_reviewed_at = str(row.reviewed_at)
         documents.append(
             KnowledgeLedgerDocument(
+                asset_id=uuid.UUID(str(getattr(row, "wiki_page_id", None) or row.document_id)),
+                asset_type=("project_wiki" if category == "project_wiki_source" else "project_material"),
                 document_id=uuid.UUID(str(row.document_id)),
                 filename=row.filename,
                 display_name=row.display_name,
@@ -391,12 +635,356 @@ def get_knowledge_ledger(
             created_at=str(project_row.created_at) if project_row.created_at else None,
             completed_at=str(project_row.completed_at) if project_row.completed_at else None,
         ),
-        permissions=KnowledgeLedgerPermissions(can_review=can_review),
+        permissions=KnowledgeLedgerPermissions(
+            can_review=can_review,
+            can_manage=can_manage,
+            can_delete=can_delete,
+        ),
         leaders=leaders,
         uploaders=uploaders,
         summary=summary,
         documents=documents,
     )
+
+
+@router.patch(
+    "/knowledge/assets/{asset_type}/{asset_id}",
+    response_model=KnowledgeAssetMutationResponse,
+)
+def rename_knowledge_asset(
+    request: Request,
+    asset_type: KnowledgeAssetType,
+    asset_id: uuid.UUID,
+    body: KnowledgeAssetRenameRequest,
+    orm: Session = Depends(get_orm_session),
+) -> KnowledgeAssetMutationResponse:
+    user_id = _asset_user(request)
+    row = _require_asset(orm, asset_type=asset_type, asset_id=asset_id)
+    project_id = uuid.UUID(str(row.project_id))
+    _asset_authorize(require_admin, orm, user_id=user_id, project_id=project_id)
+    name = body.name.strip()
+    if asset_type == "project_material":
+        orm.execute(
+            text("UPDATE public.documents SET display_name = :name WHERE id = :asset_id"),
+            {"asset_id": str(row.asset_id), "name": name},
+        )
+    elif asset_type == "project_wiki":
+        markdown = re.sub(
+            r"^# .*?$", f"# {name}", str(row.markdown_content),
+            count=1, flags=re.MULTILINE,
+        )
+        ingested = ingest_markdown_memory(
+            markdown=markdown,
+            project_id=project_id,
+            display_name=f"{name}.md",
+            created_by_user_id=user_id,
+        )
+        if ingested.error:
+            raise HTTPException(status_code=500, detail=f"Wiki rename ingest failed: {ingested.error}")
+        orm.execute(
+            text("""
+                UPDATE public.project_wiki_pages
+                SET title = :name, markdown_content = :markdown,
+                    current_version = current_version + 1,
+                    document_id = :new_document_id, updated_at = now()
+                WHERE id = :asset_id
+            """),
+            {
+                "asset_id": str(row.asset_id), "name": name,
+                "markdown": markdown, "new_document_id": str(ingested.document_id),
+            },
+        )
+        orm.execute(
+            text("""
+                INSERT INTO public.project_wiki_page_versions (
+                    page_id, version, markdown_content, summary, source_ids,
+                    change_reason, created_by_user_id
+                )
+                SELECT id, current_version, markdown_content, summary, '[]'::jsonb,
+                       'knowledge_asset_rename', :user_id
+                FROM public.project_wiki_pages
+                WHERE id = :asset_id
+                ON CONFLICT (page_id, version) DO NOTHING
+            """),
+            {"asset_id": str(row.asset_id), "user_id": str(user_id)},
+        )
+        if row.document_id and str(row.document_id) != str(ingested.document_id):
+            orm.execute(
+                text("DELETE FROM public.documents WHERE id = :document_id"),
+                {"document_id": str(row.document_id)},
+            )
+    else:
+        markdown = re.sub(r"^# .*?$", f"# {name}", str(row.summary_markdown), count=1, flags=re.MULTILINE)
+        embedding = _embed_asset(markdown)
+        orm.execute(
+            text("""
+                UPDATE public.meeting_summaries
+                SET title = :name, summary_markdown = :markdown,
+                    embedding = CAST(:embedding AS vector(1024)),
+                    embedding_model = :embedding_model,
+                    embedding_version = :embedding_version,
+                    updated_at = now()
+                WHERE id = :asset_id
+            """),
+            {
+                "asset_id": str(row.asset_id),
+                "name": name,
+                "markdown": markdown,
+                "embedding": json.dumps(embedding) if embedding is not None else None,
+                "embedding_model": "BAAI/bge-m3" if embedding is not None else None,
+                "embedding_version": "2026-07-21-bge-m3" if embedding is not None else None,
+            },
+        )
+    orm.commit()
+    record_audit(
+        orm, user_id=user_id, action="update_project", resource_type="knowledge_asset",
+        resource_id=str(row.asset_id),
+        metadata={"operation": "rename", "asset_type": asset_type, "project_id": str(project_id)},
+        request=request,
+    )
+    return KnowledgeAssetMutationResponse(
+        asset_id=uuid.UUID(str(row.asset_id)), asset_type=asset_type,
+        project_id=project_id, name=name,
+    )
+
+
+@router.post(
+    "/knowledge/assets/{asset_type}/{asset_id}/move",
+    response_model=KnowledgeAssetMutationResponse,
+)
+def move_knowledge_asset(
+    request: Request,
+    asset_type: KnowledgeAssetType,
+    asset_id: uuid.UUID,
+    body: KnowledgeAssetMoveRequest,
+    orm: Session = Depends(get_orm_session),
+) -> KnowledgeAssetMutationResponse:
+    user_id = _asset_user(request)
+    row = _require_asset(orm, asset_type=asset_type, asset_id=asset_id)
+    source_project_id = uuid.UUID(str(row.project_id))
+    _asset_authorize(require_admin, orm, user_id=user_id, project_id=source_project_id)
+    _asset_authorize(require_admin, orm, user_id=user_id, project_id=body.target_project_id)
+    target = orm.execute(
+        text("SELECT department_id FROM public.projects WHERE id = :project_id"),
+        {"project_id": str(body.target_project_id)},
+    ).first()
+    if target is None:
+        raise HTTPException(status_code=404, detail="target project not found")
+    if asset_type == "project_material":
+        document_id = str(row.document_id)
+        orm.execute(
+            text("""
+                UPDATE public.documents
+                SET project_id = :project_id, department_id = :department_id
+                WHERE id = :document_id
+            """),
+            {
+                "project_id": str(body.target_project_id),
+                "department_id": str(target.department_id),
+                "document_id": document_id,
+            },
+        )
+        orm.execute(
+            text("UPDATE public.document_chunks SET project_id = :project_id WHERE document_id = :document_id"),
+            {"project_id": str(body.target_project_id), "document_id": document_id},
+        )
+        orm.execute(
+            text("UPDATE public.document_chunks_v2 SET project_id = :project_id WHERE document_id = :document_id"),
+            {"project_id": str(body.target_project_id), "document_id": document_id},
+        )
+        orm.execute(
+            text("UPDATE public.project_material_documents SET project_id = :project_id WHERE document_id = :document_id"),
+            {"project_id": str(body.target_project_id), "document_id": document_id},
+        )
+    elif asset_type == "project_wiki":
+        conflict = orm.execute(
+            text("""
+                SELECT id FROM public.project_wiki_pages
+                WHERE project_id = :project_id AND page_key = :page_key AND id <> :asset_id
+            """),
+            {
+                "project_id": str(body.target_project_id),
+                "page_key": str(row.page_key),
+                "asset_id": str(row.asset_id),
+            },
+        ).first()
+        if conflict is not None:
+            raise HTTPException(status_code=409, detail="target project already has a Wiki page with this key")
+        orm.execute(
+            text("UPDATE public.project_wiki_pages SET project_id = :project_id, updated_at = now() WHERE id = :asset_id"),
+            {"project_id": str(body.target_project_id), "asset_id": str(row.asset_id)},
+        )
+        if row.document_id:
+            document_id = str(row.document_id)
+            orm.execute(
+                text("""
+                    UPDATE public.documents
+                    SET project_id = :project_id, department_id = :department_id
+                    WHERE id = :document_id
+                """),
+                {
+                    "project_id": str(body.target_project_id),
+                    "department_id": str(target.department_id),
+                    "document_id": document_id,
+                },
+            )
+            orm.execute(
+                text("UPDATE public.document_chunks SET project_id = :project_id WHERE document_id = :document_id"),
+                {"project_id": str(body.target_project_id), "document_id": document_id},
+            )
+            orm.execute(
+                text("UPDATE public.document_chunks_v2 SET project_id = :project_id WHERE document_id = :document_id"),
+                {"project_id": str(body.target_project_id), "document_id": document_id},
+            )
+    else:
+        orm.execute(
+            text("UPDATE public.meeting_summaries SET project_id = :project_id, updated_at = now() WHERE id = :asset_id"),
+            {"project_id": str(body.target_project_id), "asset_id": str(row.asset_id)},
+        )
+    orm.commit()
+    record_audit(
+        orm, user_id=user_id, action="update_project", resource_type="knowledge_asset",
+        resource_id=str(row.asset_id),
+        metadata={
+            "operation": "move", "asset_type": asset_type,
+            "source_project_id": str(source_project_id),
+            "target_project_id": str(body.target_project_id),
+        },
+        request=request,
+    )
+    return KnowledgeAssetMutationResponse(
+        asset_id=uuid.UUID(str(row.asset_id)), asset_type=asset_type,
+        project_id=body.target_project_id, name=str(row.name),
+    )
+
+
+@router.get(
+    "/knowledge/assets/{asset_type}/{asset_id}/preview",
+    response_model=KnowledgeAssetPreviewResponse,
+)
+def preview_knowledge_asset(
+    request: Request,
+    asset_type: KnowledgeAssetType,
+    asset_id: uuid.UUID,
+    orm: Session = Depends(get_orm_session),
+) -> KnowledgeAssetPreviewResponse:
+    user_id = _asset_user(request)
+    row = _require_asset(orm, asset_type=asset_type, asset_id=asset_id)
+    project_id = uuid.UUID(str(row.project_id))
+    _asset_authorize(require_member, orm, user_id=user_id, project_id=project_id)
+    if asset_type == "project_material":
+        preview = orm.execute(
+            text("""
+                SELECT COALESCE(
+                    (SELECT string_agg(content, E'\n\n' ORDER BY chunk_index)
+                     FROM (SELECT content, chunk_index FROM public.document_chunks_v2
+                           WHERE document_id = :document_id ORDER BY chunk_index LIMIT 12) chunks),
+                    (SELECT string_agg(content, E'\n\n' ORDER BY chunk_index)
+                     FROM (SELECT content, chunk_index FROM public.document_chunks
+                           WHERE document_id = :document_id ORDER BY chunk_index LIMIT 12) chunks),
+                    ''
+                ) AS content
+            """),
+            {"document_id": str(row.document_id)},
+        ).first()
+        content = str(preview.content if preview else "")
+        fmt = str(row.format or "txt")
+    elif asset_type == "project_wiki":
+        content = str(row.markdown_content)
+        fmt = "md"
+    else:
+        content = str(row.summary_markdown)
+        fmt = str(row.format or "md")
+    return KnowledgeAssetPreviewResponse(
+        asset_id=uuid.UUID(str(row.asset_id)), asset_type=asset_type,
+        project_id=project_id, name=str(row.name), format=fmt,
+        content=content[:200_000],
+    )
+
+
+@router.get("/knowledge/assets/{asset_type}/{asset_id}/download")
+def download_knowledge_asset(
+    request: Request,
+    asset_type: KnowledgeAssetType,
+    asset_id: uuid.UUID,
+    orm: Session = Depends(get_orm_session),
+) -> Response:
+    user_id = _asset_user(request)
+    row = _require_asset(orm, asset_type=asset_type, asset_id=asset_id)
+    project_id = uuid.UUID(str(row.project_id))
+    _asset_authorize(require_member, orm, user_id=user_id, project_id=project_id)
+    if asset_type == "project_material":
+        raw = bytes(row.raw_content or b"")
+        if row.storage_key:
+            stored_path = resolve_storage_key(str(row.storage_key))
+            if stored_path.exists():
+                raw = stored_path.read_bytes()
+        if not raw:
+            raise HTTPException(status_code=404, detail="original material file not found")
+        suffix = Path(str(row.original_filename or row.filename)).suffix
+        filename = str(row.name or row.filename)
+        if suffix and not filename.lower().endswith(suffix.lower()):
+            filename += suffix
+        media_type = str(row.mime_type or "application/octet-stream")
+    elif asset_type == "project_wiki":
+        raw = str(row.markdown_content).encode("utf-8")
+        filename = f"{row.name}.md"
+        media_type = "text/markdown; charset=utf-8"
+    else:
+        raw = bytes(row.raw_content or b"")
+        if not raw:
+            raise HTTPException(status_code=404, detail="meeting original file not found")
+        filename = str(row.original_filename or f"{row.name}.{row.format or 'md'}")
+        media_type = str(row.mime_type or "application/octet-stream")
+    return Response(
+        content=raw,
+        media_type=media_type,
+        headers={"Content-Disposition": f"attachment; filename=download; filename*=UTF-8''{quote(filename)}"},
+    )
+
+
+@router.delete("/knowledge/assets/{asset_type}/{asset_id}", status_code=204)
+def delete_knowledge_asset(
+    request: Request,
+    asset_type: KnowledgeAssetType,
+    asset_id: uuid.UUID,
+    orm: Session = Depends(get_orm_session),
+):
+    user_id = _asset_user(request)
+    row = _require_asset(orm, asset_type=asset_type, asset_id=asset_id)
+    project_id = uuid.UUID(str(row.project_id))
+    _asset_authorize(require_owner, orm, user_id=user_id, project_id=project_id)
+    storage_path = None
+    if asset_type == "project_material":
+        if row.storage_key:
+            storage_path = resolve_storage_key(str(row.storage_key))
+        if row.original_file_id:
+            orm.execute(
+                text("""
+                    UPDATE public.project_material_intake_files
+                    SET raw_content = ''::bytea, extracted_text = '', storage_key = NULL,
+                        included = false, document_id = NULL
+                    WHERE id = :file_id
+                """),
+                {"file_id": str(row.original_file_id)},
+            )
+        orm.execute(text("DELETE FROM public.documents WHERE id = :asset_id"), {"asset_id": str(row.asset_id)})
+    elif asset_type == "project_wiki":
+        orm.execute(text("DELETE FROM public.project_wiki_pages WHERE id = :asset_id"), {"asset_id": str(row.asset_id)})
+        if row.document_id:
+            orm.execute(text("DELETE FROM public.documents WHERE id = :document_id"), {"document_id": str(row.document_id)})
+    else:
+        orm.execute(text("DELETE FROM public.meeting_summaries WHERE id = :asset_id"), {"asset_id": str(row.asset_id)})
+    orm.commit()
+    if storage_path is not None:
+        storage_path.unlink(missing_ok=True)
+    record_audit(
+        orm, user_id=user_id, action="delete_document", resource_type="knowledge_asset",
+        resource_id=str(row.asset_id),
+        metadata={"asset_type": asset_type, "project_id": str(project_id), "name": str(row.name)},
+        request=request,
+    )
+    return None
 
 
 @router.delete("/knowledge/documents/{document_id}", status_code=204)
@@ -405,7 +993,7 @@ def delete_knowledge_document(
     document_id: uuid.UUID,
     orm: Session = Depends(get_orm_session),
 ):
-    """Delete a saved knowledge document. Only project admins/leads may delete."""
+    """Delete a saved knowledge document. Only the overall project lead may delete."""
     try:
         user_id = current_user_id(request)
     except AuthzError as e:
@@ -425,7 +1013,7 @@ def delete_knowledge_document(
 
     project_id = uuid.UUID(str(row.project_id))
     try:
-        require_admin(orm, user_id=user_id, project_id=project_id)
+        require_owner(orm, user_id=user_id, project_id=project_id)
     except AuthzError as e:
         raise HTTPException(status_code=e.status_code, detail=e.detail)
 

@@ -51,7 +51,13 @@ describe('MeetingNotesPage', () => {
       created_by_name: '张三', created_at: '2026-08-05T01:00:00+00:00',
       updated_at: '2026-08-05T01:00:00+00:00', lexical_score: 0, vector_score: null,
     }] });
-    mocks.createSummary.mockResolvedValue({ id: 'meeting-2' });
+    mocks.createSummary.mockResolvedValue({
+      id: 'submission-1',
+      draft_id: 'draft-1',
+      project_id: 'project-1',
+      title: '新周会',
+      status: 'pending_review',
+    });
     mocks.getProjectRepository.mockResolvedValue(null);
   });
 
@@ -71,8 +77,13 @@ describe('MeetingNotesPage', () => {
     expect(screen.queryByText('关键决策')).not.toBeInTheDocument();
     expect(screen.queryByText('行动项')).not.toBeInTheDocument();
     expect(screen.queryByText('标签')).not.toBeInTheDocument();
-    expect((await screen.findAllByText('产品周会')).length).toBeGreaterThan(0);
-    expect(screen.getByText(/确认 MCP 访问/)).toBeInTheDocument();
+    expect(screen.getByText(/此页面只负责上传/)).toBeInTheDocument();
+    expect(screen.getAllByText(/知识库/).length).toBeGreaterThan(0);
+    expect(screen.queryByLabelText('搜索会议内容')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '刷新会议记录' })).not.toBeInTheDocument();
+    expect(screen.queryByText('产品周会')).not.toBeInTheDocument();
+    expect(screen.queryByText(/确认 MCP 访问/)).not.toBeInTheDocument();
+    expect(mocks.listSummaries).not.toHaveBeenCalled();
   });
 
   it('shows the complete first-level project hierarchy', async () => {
@@ -95,7 +106,7 @@ describe('MeetingNotesPage', () => {
     render(<MeetingNotesPage />);
 
     expect(await screen.findByRole('button', { name: '上传会议记录' })).toBeInTheDocument();
-    expect(screen.getByText(/所有已启用的智慧大脑用户都可以搜索任意项目并上传/)).toBeInTheDocument();
+    expect(screen.getByText(/所有已启用的智慧大脑用户都可以搜索项目并提交会议记录/)).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('搜索项目'), { target: { value: '化' } });
     expect(await screen.findByRole('button', { name: /化工研发平台/ })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^智慧大脑/ })).not.toBeInTheDocument();
@@ -109,15 +120,17 @@ describe('MeetingNotesPage', () => {
 
     await screen.findByRole('checkbox', { name: /张三/ });
     fireEvent.change(screen.getByLabelText('搜索参会人'), { target: { value: '王' } });
-    expect(screen.getByRole('checkbox', { name: /王五/ })).toBeInTheDocument();
-    expect(screen.queryByRole('checkbox', { name: /张三/ })).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByRole('checkbox', { name: /王五/ })).toBeInTheDocument();
+      expect(screen.queryByRole('checkbox', { name: /张三/ })).not.toBeInTheDocument();
+    });
     fireEvent.click(screen.getByRole('checkbox', { name: /王五/ }));
     expect(screen.getByText('已选择 1 人')).toBeInTheDocument();
   });
 
   it('submits selected project members and the meeting content file', async () => {
     render(<MeetingNotesPage />);
-    await screen.findAllByText('产品周会');
+    await screen.findByLabelText('会议标题');
     fireEvent.change(screen.getByLabelText('会议标题'), { target: { value: '新周会' } });
     fireEvent.change(screen.getByLabelText('会议日期'), { target: { value: '2026-08-05' } });
     fireEvent.click(await screen.findByRole('checkbox', { name: /张三/ }));
@@ -127,6 +140,8 @@ describe('MeetingNotesPage', () => {
 
     await waitFor(() => expect(mocks.createSummary).toHaveBeenCalledWith(expect.objectContaining({
       projectId: 'project-1', title: '新周会', participantUserIds: ['user-1'], file,
-    })));
+    }), expect.any(Function)));
+    expect(await screen.findByText(/会议记录已提交审批/)).toBeInTheDocument();
+    expect(mocks.listSummaries).not.toHaveBeenCalled();
   });
 });

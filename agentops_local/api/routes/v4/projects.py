@@ -36,6 +36,7 @@ from agentops.rag.authz import (
     is_system_admin,
     require_admin,
     require_member,
+    require_owner,
 )
 
 
@@ -134,7 +135,7 @@ class ProjectSchema(BaseModel):
 class AddMemberRequest(BaseModel):
     user_id: Optional[uuid.UUID] = None
     identifier: Optional[str] = Field(None, min_length=1, max_length=320)
-    role: str = Field("developer", pattern="^(business_user|developer|admin|owner)$")
+    role: str = Field("developer", pattern="^(developer|admin|owner)$")
 
 
 class MemberSchema(BaseModel):
@@ -484,6 +485,36 @@ def _get_project_member(orm: Session, *, project_id: uuid.UUID, user_id: uuid.UU
     if row is None:
         raise HTTPException(status_code=404, detail="project member not found")
     return row
+
+
+def _owner_count(orm: Session, *, project_id: uuid.UUID) -> int:
+    row = orm.execute(
+        text("""
+            SELECT COUNT(*) AS owner_count
+            FROM public.project_members
+            WHERE project_id = :project_id
+              AND role::text = 'owner'
+        """),
+        {"project_id": str(project_id)},
+    ).first()
+    return int(row.owner_count if row is not None else 0)
+
+
+def _protect_overall_lead(
+    orm: Session,
+    *,
+    caller_id: uuid.UUID,
+    project_id: uuid.UUID,
+) -> None:
+    try:
+        require_owner(orm, user_id=caller_id, project_id=project_id)
+    except AuthzError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    if _owner_count(orm, project_id=project_id) <= 1:
+        raise HTTPException(
+            status_code=409,
+            detail="project must retain at least one owner",
+        )
 
 
 def _record_member_audit(
@@ -1133,11 +1164,6 @@ def list_project_catalog(
             LEFT JOIN public.project_members pm
               ON pm.project_id = p.id
              AND pm.user_id = :u
-            WHERE EXISTS (
-                SELECT 1
-                FROM public.project_members catalog_member
-                WHERE catalog_member.project_id = p.id
-            )
             ORDER BY
                 CASE WHEN p.completed_at IS NULL THEN 0 ELSE 1 END,
                 p.name,
@@ -1379,10 +1405,10 @@ def delete_project(
     confirm_name: str = Query(..., min_length=1, max_length=200),
     orm: Session = Depends(get_orm_session),
 ):
-    """Delete a project and its dependent project data. Caller must be admin+."""
+    """Delete a project and its dependent project data. Caller must be the owner."""
     try:
         caller_id = current_user_id(request)
-        require_admin(orm, user_id=caller_id, project_id=project_id)
+        require_owner(orm, user_id=caller_id, project_id=project_id)
     except AuthzError as e:
         raise HTTPException(status_code=e.status_code, detail=e.detail)
 
@@ -1466,11 +1492,28 @@ def add_member(
     try:
         user_id = current_user_id(request)
         require_admin(orm, user_id=user_id, project_id=project_id)
+        if body.role == "owner":
+            require_owner(orm, user_id=user_id, project_id=project_id)
     except AuthzError as e:
         raise HTTPException(status_code=e.status_code, detail=e.detail)
 
     target = _resolve_target_user(orm, body)
     target_user_id = uuid.UUID(str(target.id))
+    existing_role = orm.execute(
+        text("""
+            SELECT role::text AS role
+            FROM public.project_members
+            WHERE project_id = :project_id
+              AND user_id = :user_id
+        """),
+        {"project_id": str(project_id), "user_id": str(target_user_id)},
+    ).first()
+    if existing_role is not None and existing_role.role == "owner" and body.role != "owner":
+        _protect_overall_lead(
+            orm,
+            caller_id=user_id,
+            project_id=project_id,
+        )
 
     orm.execute(
         text("""
@@ -1522,6 +1565,12 @@ def remove_member(
         raise HTTPException(status_code=400, detail="cannot remove yourself from the project")
 
     target = _get_project_member(orm, project_id=project_id, user_id=user_id)
+    if target.role == "owner":
+        _protect_overall_lead(
+            orm,
+            caller_id=caller_id,
+            project_id=project_id,
+        )
     orm.execute(
         text("DELETE FROM public.project_members WHERE project_id=:p AND user_id=:u"),
         {"p": str(project_id), "u": str(user_id)},
@@ -1686,10 +1735,9 @@ def list_members(
     project_id: uuid.UUID,
     orm: Session = Depends(get_orm_session),
 ) -> List[MemberSchema]:
-    """List members for project members or a SmartBrain system administrator."""
+    """List a project's members for any authenticated SmartBrain user."""
     try:
-        caller_id = current_user_id(request)
-        require_member(orm, user_id=caller_id, project_id=project_id)
+        current_user_id(request)
     except AuthzError as e:
         raise HTTPException(status_code=e.status_code, detail=e.detail)
 

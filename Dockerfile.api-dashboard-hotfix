@@ -1,6 +1,5 @@
-FROM agentops-api-local:patched-2026-07-17
+FROM agentops-api-local:members-category-r52
 
-COPY api/agentops/app.py /app/agentops/app.py
-COPY agentops_local/api/app.py /app/agentops/api/app.py
-COPY agentops_local/api/routes/v4/projects.py /app/agentops/api/routes/v4/projects.py
-COPY agentops_local/auth/views.py /app/agentops/auth/views.py
+COPY agentops_local/api/routes/v4/ai_usage.py /app/agentops/api/routes/v4/ai_usage.py
+
+RUN /app/.venv/bin/python -c "from pathlib import Path; path = Path('/app/agentops/api/routes/v4/project_memory.py'); source = path.read_text(); old = 'ORDER BY department.sort_order, department.name, department.id\\n            FOR UPDATE'; new = 'ORDER BY department.sort_order, department.name, department.id\\n            FOR UPDATE OF department'; assert source.count(old) == 1, 'expected reorder lock query once'; path.write_text(source.replace(old, new))"

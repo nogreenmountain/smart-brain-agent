@@ -45,12 +45,20 @@ class _Orm:
     def execute(self, statement, params=None):
         sql = str(statement)
         self.calls.append((sql, params or {}))
+        if "INSERT INTO public.project_memory_submissions" in sql:
+            return _Result(types.SimpleNamespace(id="00000000-0000-0000-0000-000000000011"))
+        if "INSERT INTO public.project_memory_drafts" in sql:
+            return _Result(types.SimpleNamespace(id="00000000-0000-0000-0000-000000000012"))
         if "INSERT INTO public.meeting_summaries" in sql:
             return _Result(types.SimpleNamespace(id="00000000-0000-0000-0000-000000000010"))
         if "FROM auth.users au" in sql:
             return _Result(rows=self.member_rows)
         if "FROM public.projects" in sql:
-            return _Result(types.SimpleNamespace(name="智慧大脑") if self.project_exists else None)
+            return _Result(types.SimpleNamespace(
+                id="00000000-0000-0000-0000-000000000020",
+                name="智慧大脑",
+                department_id="research-direct",
+            ) if self.project_exists else None)
         return _Result()
 
     def commit(self):
@@ -132,7 +140,7 @@ class MeetingSummaryRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.items, [])
         require_member.assert_called_once_with(orm, user_id=user_id, project_id=project_id)
 
-    async def test_any_authenticated_user_can_upload_to_an_existing_project(self) -> None:
+    async def test_any_authenticated_user_submits_meeting_for_review_without_publishing(self) -> None:
         route = _load_route()
         project_id = uuid.UUID("00000000-0000-0000-0000-000000000020")
         user_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -152,21 +160,12 @@ class MeetingSummaryRouteTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch.object(route, "current_user_id", return_value=user_id),
             patch.object(route, "require_member", return_value=None) as require_member,
-            patch.object(route, "get_meeting_summary") as get_item,
             patch.object(route, "record_audit", return_value=None),
-            patch.object(route, "_embed_markdown", return_value=None),
+            patch.object(route.uuid, "uuid4", side_effect=[
+                uuid.UUID("00000000-0000-0000-0000-000000000011"),
+                uuid.UUID("00000000-0000-0000-0000-000000000012"),
+            ]),
         ):
-            get_item.return_value = types.SimpleNamespace(**{
-                "id": uuid.UUID("00000000-0000-0000-0000-000000000010"),
-                "project_id": project_id, "project_name": "智慧大脑", "title": "周会",
-                "meeting_date": "2026-08-05", "participant_user_ids": [participant_id],
-                "participants": ["张三"], "tags": [],
-                "summary_markdown": "# 周会", "decisions": [], "action_items": [],
-                "source_filename": "meeting.docx", "source_format": "docx", "source_size_bytes": len(raw),
-                "created_by": user_id, "created_by_name": "张三",
-                "created_at": "2026-08-05T01:00:00+00:00", "updated_at": "2026-08-05T01:00:00+00:00",
-                "lexical_score": 0.0, "vector_score": None,
-            })
             response = await route.create_meeting_summary(
                 request=types.SimpleNamespace(client=None),
                 project_id=project_id,
@@ -180,14 +179,19 @@ class MeetingSummaryRouteTests(unittest.IsolatedAsyncioTestCase):
         require_member.assert_not_called()
         self.assertTrue(any("FROM public.projects" in sql for sql, _ in orm.calls))
         self.assertEqual(response.title, "周会")
-        insert = next(params for sql, params in orm.calls if "INSERT INTO public.meeting_summaries" in sql)
-        self.assertEqual(insert["participant_user_ids"], [str(participant_id)])
-        self.assertEqual(insert["participants"], ["张三"])
-        self.assertIn("会议内容正文", insert["summary_markdown"])
-        file_insert = next(params for sql, params in orm.calls if "INSERT INTO public.meeting_summary_files" in sql)
-        self.assertEqual(file_insert["filename"], "meeting.docx")
-        self.assertEqual(file_insert["format"], "docx")
-        self.assertEqual(file_insert["raw_content"], raw)
+        self.assertEqual(response.status, "pending_review")
+        self.assertEqual(response.draft_id, uuid.UUID("00000000-0000-0000-0000-000000000012"))
+        self.assertFalse(any("INSERT INTO public.meeting_summaries" in sql for sql, _ in orm.calls))
+        submission = next(
+            params for sql, params in orm.calls
+            if "INSERT INTO public.project_memory_submissions" in sql
+        )
+        self.assertEqual(submission["submission_type"], "meeting_summary")
+        self.assertEqual(submission["participant_user_ids"], [str(participant_id)])
+        self.assertEqual(submission["participants"], ["张三"])
+        self.assertEqual(submission["filename"], "meeting.docx")
+        self.assertEqual(submission["format"], "docx")
+        self.assertEqual(submission["raw_content"], raw)
 
     async def test_rejects_unsupported_upload_extension(self) -> None:
         route = _load_route()

@@ -70,13 +70,15 @@ sudo nginx -t
 sudo systemctl reload nginx
 ```
 
-Let’s Encrypt IP 证书有效期为 160 小时。云服务器使用 Certbot 5.7 和 `snap.certbot.renew.timer` 自动续期，续期配置必须保留 `preferred_profile = shortlived`、`authenticator = webroot`，成功续期后自动检查并 reload Nginx。任何私钥都不得复制到仓库。
+Let’s Encrypt IP 证书有效期为 160 小时。云服务器使用 Certbot 5.7 和 `snap.certbot.renew.timer` 自动续期，续期配置必须保留 `preferred_profile = shortlived`、`preferred_chain = ISRG Root X2`、`authenticator = webroot`，避免默认长链携带已过期的 `ISRG Root X2 → ISRG Root X1` 交叉证书；成功续期后自动检查并 reload Nginx。任何私钥都不得复制到仓库。
 
 续期验证：
 
 ```bash
 sudo certbot renew --cert-name 39.105.79.0 --dry-run --run-deploy-hooks --no-random-sleep-on-renew
 ```
+
+真实公网验收不得使用 `curl -k` 或跳过证书校验；临时 Token Monitor 的嵌入式 Python 必须能够直接完成 `/v4/ai-usage/temporary-monitor-probes/device-confirm` HTTPS 回调。
 
 ## 应用环境
 

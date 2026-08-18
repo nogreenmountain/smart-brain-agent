@@ -10,9 +10,10 @@ Roles (org_roles enum):
   owner > admin > developer > business_user
 
 For each RAG action we map to a minimum required project role:
-  - upload / delete document: developer+  (can write)
+  - upload document:          developer+  (can write)
   - search / answer:          any member  (can read)
-  - manage project / members: admin+      (admin in project)
+  - manage members / review:  admin+      (project leader)
+  - permanently delete:       owner        (overall project lead)
 """
 from __future__ import annotations
 
@@ -117,6 +118,18 @@ def require_admin(
         raise AuthzError(403, "not a member of this project")
     if ROLE_RANK.get(pr.role, -1) < ROLE_RANK["admin"]:
         raise AuthzError(403, f"role '{pr.role}' cannot manage; need admin+")
+    return pr
+
+
+def require_owner(
+    orm: Session, *, user_id: uuid.UUID, project_id: uuid.UUID
+) -> ProjectRole:
+    """Caller must be the project owner (overall lead) or a system administrator."""
+    pr = user_project_role(orm, user_id=user_id, project_id=project_id)
+    if pr.role is None:
+        raise AuthzError(403, "not a member of this project")
+    if pr.role != "owner":
+        raise AuthzError(403, f"role '{pr.role}' cannot permanently delete; need owner")
     return pr
 
 

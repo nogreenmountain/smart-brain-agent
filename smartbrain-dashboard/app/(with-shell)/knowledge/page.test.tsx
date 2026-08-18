@@ -5,7 +5,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import KnowledgePage from './page';
 
 const mocks = vi.hoisted(() => ({
-  deleteKnowledgeDocument: vi.fn(),
+  deleteKnowledgeAsset: vi.fn(),
+  moveKnowledgeAsset: vi.fn(),
+  previewKnowledgeAsset: vi.fn(),
+  renameKnowledgeAsset: vi.fn(),
   listKnowledgeLedger: vi.fn(),
   listProjectMemoryDepartments: vi.fn(),
   listProjectCatalog: vi.fn(),
@@ -22,7 +25,10 @@ vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>();
   return {
     ...actual,
-    deleteKnowledgeDocument: mocks.deleteKnowledgeDocument,
+    deleteKnowledgeAsset: mocks.deleteKnowledgeAsset,
+    moveKnowledgeAsset: mocks.moveKnowledgeAsset,
+    previewKnowledgeAsset: mocks.previewKnowledgeAsset,
+    renameKnowledgeAsset: mocks.renameKnowledgeAsset,
     listKnowledgeLedger: mocks.listKnowledgeLedger,
     listProjectMemoryDepartments: mocks.listProjectMemoryDepartments,
     listProjectCatalog: mocks.listProjectCatalog,
@@ -31,12 +37,21 @@ vi.mock('@/lib/api', async (importOriginal) => {
 
 describe('KnowledgePage', () => {
   beforeEach(() => {
-    mocks.deleteKnowledgeDocument.mockReset();
+    mocks.deleteKnowledgeAsset.mockReset();
+    mocks.moveKnowledgeAsset.mockReset();
+    mocks.previewKnowledgeAsset.mockReset();
+    mocks.renameKnowledgeAsset.mockReset();
     mocks.listKnowledgeLedger.mockReset();
     mocks.listProjectMemoryDepartments.mockReset();
     mocks.listProjectCatalog.mockReset();
     mocks.push.mockReset();
-    mocks.deleteKnowledgeDocument.mockResolvedValue(undefined);
+    mocks.deleteKnowledgeAsset.mockResolvedValue(undefined);
+    mocks.moveKnowledgeAsset.mockResolvedValue(undefined);
+    mocks.renameKnowledgeAsset.mockResolvedValue(undefined);
+    mocks.previewKnowledgeAsset.mockResolvedValue({
+      asset_id: 'doc-2', asset_type: 'project_material', project_id: 'project-1',
+      name: 'README.md', format: 'md', content: '# README',
+    });
     mocks.listProjectMemoryDepartments.mockResolvedValue([
       { id: 'research', name: '研发', sort_order: 1 },
       { id: 'marketing', name: '市场', sort_order: 2 },
@@ -70,7 +85,7 @@ describe('KnowledgePage', () => {
         created_at: '2026-07-28T01:00:00Z',
         completed_at: null,
       },
-      permissions: { can_review: false },
+      permissions: { can_review: false, can_manage: false, can_delete: false },
       leaders: [
         { user_id: 'leader-1', email: 'hanshangbo@local.dev', role: 'owner' },
       ],
@@ -89,6 +104,8 @@ describe('KnowledgePage', () => {
       },
       documents: [
         {
+          asset_id: 'doc-2',
+          asset_type: 'project_material',
           document_id: 'doc-2',
           filename: 'README.md',
           display_name: 'README.md',
@@ -107,6 +124,8 @@ describe('KnowledgePage', () => {
           approved_memory_document_id: 'memory-doc-1',
         },
         {
+          asset_id: 'doc-3',
+          asset_type: 'project_material',
           document_id: 'doc-3',
           filename: '方案.pptx',
           display_name: '方案.pptx',
@@ -209,9 +228,10 @@ describe('KnowledgePage', () => {
     });
     expect(screen.getByRole('option', { name: '项目原始资料' })).toBeInTheDocument();
     expect(screen.getByRole('option', { name: '项目 Wiki 原始资料' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: '会议记录' })).toBeInTheDocument();
   });
 
-  it('lets reviewers delete saved documents after confirmation and refreshes the ledger', async () => {
+  it('lets overall leads delete saved documents after confirmation and refreshes the ledger', async () => {
     const user = userEvent.setup();
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
     mocks.listKnowledgeLedger.mockResolvedValueOnce({
@@ -224,7 +244,7 @@ describe('KnowledgePage', () => {
         created_at: '2026-07-28T01:00:00Z',
         completed_at: null,
       },
-      permissions: { can_review: true },
+      permissions: { can_review: true, can_manage: true, can_delete: true },
       leaders: [
         { user_id: 'leader-1', email: 'hanshangbo@local.dev', role: 'owner' },
       ],
@@ -242,6 +262,8 @@ describe('KnowledgePage', () => {
       },
       documents: [
         {
+          asset_id: 'doc-2',
+          asset_type: 'project_material',
           document_id: 'doc-2',
           filename: 'README.md',
           display_name: 'README.md',
@@ -267,11 +289,55 @@ describe('KnowledgePage', () => {
     await user.click(await screen.findByLabelText(/README.md/));
 
     expect(confirmSpy).toHaveBeenCalled();
-    expect(mocks.deleteKnowledgeDocument).toHaveBeenCalledWith('doc-2');
+    expect(mocks.deleteKnowledgeAsset).toHaveBeenCalledWith('project_material', 'doc-2');
     await waitFor(() => {
       expect(mocks.listKnowledgeLedger).toHaveBeenCalledTimes(2);
     });
 
     confirmSpy.mockRestore();
+  });
+
+  it('lets project leads review pending materials without showing delete actions', async () => {
+    mocks.listKnowledgeLedger.mockResolvedValueOnce({
+      ...(await mocks.listKnowledgeLedger()),
+      permissions: { can_review: true, can_manage: true, can_delete: false },
+    });
+
+    render(<KnowledgePage />);
+
+    expect((await screen.findAllByRole('button', { name: '去审批' })).length).toBeGreaterThan(0);
+    expect(screen.queryByLabelText(/删除资料/)).not.toBeInTheDocument();
+  });
+
+  it('lets project leads preview rename and move knowledge assets while keeping delete owner-only', async () => {
+    const user = userEvent.setup();
+    const current = await mocks.listKnowledgeLedger();
+    mocks.listKnowledgeLedger.mockResolvedValue({
+      ...current,
+      permissions: { can_review: true, can_manage: true, can_delete: false },
+    });
+
+    render(<KnowledgePage />);
+
+    await user.click((await screen.findAllByRole('button', { name: '预览' }))[0]);
+    expect(await screen.findByRole('dialog', { name: 'README.md' })).toHaveTextContent('# README');
+    await user.click(screen.getByRole('button', { name: '关闭资料预览' }));
+
+    await user.click(screen.getAllByRole('button', { name: '重命名' })[0]);
+    const renameInput = screen.getByLabelText('新名称');
+    await user.clear(renameInput);
+    await user.type(renameInput, '项目说明');
+    await user.click(screen.getByRole('button', { name: '确认' }));
+    await waitFor(() => expect(mocks.renameKnowledgeAsset).toHaveBeenCalledWith(
+      'project_material', 'doc-2', '项目说明',
+    ));
+
+    await user.click(screen.getAllByRole('button', { name: '迁移' })[0]);
+    await user.selectOptions(screen.getByLabelText('目标项目'), 'project-2');
+    await user.click(screen.getByRole('button', { name: '确认' }));
+    await waitFor(() => expect(mocks.moveKnowledgeAsset).toHaveBeenCalledWith(
+      'project_material', 'doc-2', 'project-2',
+    ));
+    expect(screen.queryByLabelText(/删除资料/)).not.toBeInTheDocument();
   });
 });

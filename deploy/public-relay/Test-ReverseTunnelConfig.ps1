@@ -35,6 +35,20 @@ foreach ($requiredSnippet in @(
     }
 }
 
+$v4Location = [regex]::Match(
+    $nginxConfig,
+    '(?s)location \^~ /v4/ \{.*?\n    \}'
+)
+if (-not $v4Location.Success) {
+    throw "Unable to inspect the public /v4/ relay location"
+}
+if (-not $v4Location.Value.Contains("client_max_body_size 512m;")) {
+    throw "Public /v4/ uploads must allow the 500 MB material batch limit plus multipart overhead"
+}
+if ([regex]::Matches($nginxConfig, 'client_max_body_size 512m;').Count -lt 2) {
+    throw "Both standard HTTPS /v4/ and the direct API relay must use the 512 MB request limit"
+}
+
 $rendered = docker compose -f $composePath config --format json | ConvertFrom-Json
 if ($LASTEXITCODE -ne 0) {
     throw "docker compose config failed"

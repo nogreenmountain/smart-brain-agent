@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import os
 import sys
 import tempfile
 import unittest
 import uuid
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -69,6 +71,44 @@ class ProjectMemoryTemplateTests(unittest.TestCase):
 
 
 class ProjectMemoryParserTests(unittest.TestCase):
+    def test_extract_text_supports_xlsx_cells(self) -> None:
+        parsers = _load_module("project_memory_parsers", "project_memory/parsers.py")
+
+        workbook = io.BytesIO()
+        with zipfile.ZipFile(workbook, "w") as archive:
+            archive.writestr(
+                "xl/sharedStrings.xml",
+                """<?xml version="1.0" encoding="UTF-8"?>
+                <sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+                  <si><t>FORMAT_TEST_EXCEL_R55</t></si>
+                  <si><r><t>Project </t></r><r><t>Budget</t></r></si>
+                </sst>""",
+            )
+            archive.writestr(
+                "xl/worksheets/sheet1.xml",
+                """<?xml version="1.0" encoding="UTF-8"?>
+                <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+                  <sheetData>
+                    <row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c></row>
+                    <row r="2"><c r="A2"><v>42</v></c><c r="B2" t="inlineStr"><is><t>Approved</t></is></c></row>
+                  </sheetData>
+                </worksheet>""",
+            )
+
+        with tempfile.NamedTemporaryFile("wb", suffix=".xlsx", delete=False) as tmp:
+            tmp.write(workbook.getvalue())
+            path = tmp.name
+        try:
+            result = parsers.extract_text(Path(path))
+        finally:
+            Path(path).unlink(missing_ok=True)
+
+        self.assertEqual(result.format, "xlsx")
+        self.assertIn("FORMAT_TEST_EXCEL_R55", result.text)
+        self.assertIn("Project Budget", result.text)
+        self.assertIn("42", result.text)
+        self.assertIn("Approved", result.text)
+
     def test_extract_text_supports_html_and_strips_scripts(self) -> None:
         parsers = _load_module("project_memory_parsers", "project_memory/parsers.py")
 
@@ -133,6 +173,8 @@ class _Orm:
                     title="测试项目长期记忆",
                 )
             )
+        if "SELECT name, department_id FROM public.projects" in sql:
+            return _Result(SimpleNamespace(name="测试项目", department_id="research-direct"))
         return _Result()
 
     def commit(self):
@@ -217,6 +259,135 @@ class _HierarchyDepartmentOrm:
 
 
 class ProjectMemoryRouteTests(unittest.TestCase):
+    def test_only_hanshangbo_has_global_project_review_scope(self) -> None:
+        route = _load_module("project_memory_global_reviewer_route", "api/routes/v4/project_memory.py")
+        user_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+
+        class ReviewerOrm:
+            def __init__(self, email: str):
+                self.email = email
+
+            def execute(self, statement, params=None):
+                return _Result(SimpleNamespace(email=self.email))
+
+        self.assertTrue(route._is_global_project_reviewer(ReviewerOrm("hanshangbo@local.dev"), user_id))
+        self.assertTrue(route._is_global_project_reviewer(ReviewerOrm("HANSHANGBO@LOCAL.DEV"), user_id))
+        self.assertFalse(route._is_global_project_reviewer(ReviewerOrm("sysadmin@local.dev"), user_id))
+
+    def test_project_leader_can_review_only_their_project(self) -> None:
+        route = _load_module("project_memory_project_reviewer_route", "api/routes/v4/project_memory.py")
+        user_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        project_id = uuid.UUID("00000000-0000-0000-0000-000000000010")
+
+        class ReviewerOrm:
+            def __init__(self, role: str):
+                self.role = role
+
+            def execute(self, statement, params=None):
+                sql = str(statement)
+                if "FROM auth.users" in sql:
+                    return _Result(SimpleNamespace(email="project-leader@local.dev"))
+                if "FROM public.project_members" in sql:
+                    return _Result(SimpleNamespace(role=self.role))
+                return _Result()
+
+        route._require_project_reviewer(
+            ReviewerOrm("admin"), user_id=user_id, project_id=project_id,
+        )
+        with self.assertRaises(route.HTTPException) as raised:
+            route._require_project_reviewer(
+                ReviewerOrm("developer"), user_id=user_id, project_id=project_id,
+            )
+        self.assertEqual(raised.exception.status_code, 403)
+
+    def test_review_queue_returns_all_authorized_projects_with_project_attribution(self) -> None:
+        route = _load_module("project_memory_review_queue_route", "api/routes/v4/project_memory.py")
+        user_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+
+        class QueueOrm:
+            def __init__(self):
+                self.executed = []
+                self.params = []
+
+            def execute(self, statement, params=None):
+                sql = str(statement)
+                self.executed.append(sql)
+                self.params.append(params or {})
+                return _Result(rows=[
+                    SimpleNamespace(
+                        id="00000000-0000-0000-0000-000000000020",
+                        project_id="00000000-0000-0000-0000-000000000010",
+                        project_name="智慧大脑",
+                        department_id="research-direct",
+                        department_name="直属分级",
+                        department_path="研发支撑 / 直属分级",
+                        title="智慧大脑 原始项目资料审批",
+                        status="pending_review",
+                        markdown_content="# 待审批",
+                        source_count=2,
+                        uploader_user_id="00000000-0000-0000-0000-000000000002",
+                        uploader_username="member",
+                        uploader_nickname="普通成员",
+                        uploader_display_name="普通成员",
+                        file_names=["需求.docx", "方案.pptx"],
+                        total_size_bytes=4096,
+                        created_at="2026-08-18 09:00:00+00",
+                        updated_at="2026-08-18 09:00:00+00",
+                    )
+                ])
+
+        orm = QueueOrm()
+        with (
+            patch.object(route, "current_user_id", return_value=user_id),
+            patch.object(route, "_is_global_project_reviewer", return_value=False),
+        ):
+            rows = route.list_project_memory_review_queue(
+                request=SimpleNamespace(state=SimpleNamespace()),
+                orm=orm,
+            )
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].project_name, "智慧大脑")
+        self.assertEqual(rows[0].department_path, "研发支撑 / 直属分级")
+        self.assertEqual(rows[0].uploader.display_name, "普通成员")
+        self.assertEqual(rows[0].file_names, ["需求.docx", "方案.pptx"])
+        self.assertEqual(rows[0].total_size_bytes, 4096)
+        sql = "\n".join(orm.executed)
+        self.assertIn("pm.role::text IN ('owner', 'admin')", sql)
+        self.assertIn("draft.status = 'pending_review'", sql)
+        self.assertEqual(orm.params[-1]["user_id"], str(user_id))
+        self.assertFalse(orm.params[-1]["global_reviewer"])
+
+    def test_review_queue_identifies_meeting_and_repository_submissions(self) -> None:
+        route = _load_module("project_memory_submission_queue_route", "api/routes/v4/project_memory.py")
+
+        class QueueOrm:
+            def execute(self, statement, params=None):
+                return _Result(rows=[SimpleNamespace(
+                    id="00000000-0000-0000-0000-000000000020",
+                    project_id="00000000-0000-0000-0000-000000000010",
+                    project_name="智慧大脑", department_id="research-direct",
+                    department_name="直属分级", department_path="研发 / 直属分级",
+                    title="周会审批", status="pending_review", markdown_content="# 周会",
+                    source_count=1, review_kind="meeting_summary",
+                    submission_payload={"meeting_date": "2026-08-18"},
+                    uploader_user_id=None, uploader_username=None, uploader_nickname=None,
+                    uploader_display_name="成员", file_names=["周会.docx"], total_size_bytes=1024,
+                    created_at="2026-08-18", updated_at="2026-08-18",
+                )])
+
+        with (
+            patch.object(route, "current_user_id", return_value=uuid.uuid4()),
+            patch.object(route, "_is_global_project_reviewer", return_value=True),
+        ):
+            rows = route.list_project_memory_review_queue(
+                request=SimpleNamespace(state=SimpleNamespace()), orm=QueueOrm(),
+            )
+
+        self.assertEqual(rows[0].review_kind, "meeting_summary")
+        self.assertEqual(rows[0].meeting_date, "2026-08-18")
+        self.assertEqual(rows[0].file_names, ["周会.docx"])
+
     def test_departments_can_include_hierarchy_groups(self) -> None:
         route = _load_module("project_memory_hierarchy_route", "api/routes/v4/project_memory.py")
         orm = _HierarchyDepartmentOrm()
@@ -655,7 +826,7 @@ class ProjectMemoryRouteTests(unittest.TestCase):
         self.assertEqual(insert_params["department_id"], "dept-1234567890abcdef1234567890abcdef")
         self.assertNotIn("created_by_user_id", insert_sql)
 
-    def test_upsert_repository_accepts_project_member(self) -> None:
+    def test_repository_change_is_submitted_for_review_without_replacing_active_repository(self) -> None:
         route = _load_module("project_memory_route", "api/routes/v4/project_memory.py")
         orm = _Orm()
         user_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -679,7 +850,10 @@ class ProjectMemoryRouteTests(unittest.TestCase):
 
         require_member.assert_called_once()
         self.assertEqual(response.git_url, "https://github.com/example/repo.git")
-        self.assertTrue(any("INSERT INTO public.project_repositories" in sql for sql in orm.executed))
+        self.assertEqual(response.status, "pending_review")
+        self.assertFalse(any("INSERT INTO public.project_repositories" in sql for sql in orm.executed))
+        self.assertTrue(any("INSERT INTO public.project_memory_submissions" in sql for sql in orm.executed))
+        self.assertTrue(any("INSERT INTO public.project_memory_drafts" in sql for sql in orm.executed))
 
     def test_approve_draft_ingests_markdown_and_marks_approved(self) -> None:
         route = _load_module("project_memory_route", "api/routes/v4/project_memory.py")
@@ -690,7 +864,7 @@ class ProjectMemoryRouteTests(unittest.TestCase):
 
         with (
             patch.object(route, "current_user_id", return_value=user_id),
-            patch.object(route, "require_admin", return_value=None),
+            patch.object(route, "_require_project_reviewer", return_value=None),
             patch.object(
                 route,
                 "ingest_markdown_memory",
@@ -716,12 +890,120 @@ class ProjectMemoryRouteTests(unittest.TestCase):
         self.assertTrue(any("status = 'approved'" in sql for sql in orm.executed))
         self.assertGreaterEqual(orm.commits, 1)
 
+    def test_repeated_approve_returns_existing_result_without_duplicate_ingest(self) -> None:
+        route = _load_module("project_memory_idempotent_review_route", "api/routes/v4/project_memory.py")
+        user_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        draft_id = uuid.UUID("00000000-0000-0000-0000-000000000020")
+        document_id = uuid.UUID("00000000-0000-0000-0000-000000000030")
+
+        class ApprovedOrm(_Orm):
+            def execute(self, statement, params=None):
+                sql = str(statement)
+                self.executed.append(sql)
+                self.params.append(params or {})
+                if "FROM public.project_memory_drafts" in sql and "FOR UPDATE" in sql:
+                    return _Result(SimpleNamespace(
+                        id=str(draft_id),
+                        project_id="00000000-0000-0000-0000-000000000010",
+                        department_id="research-direct",
+                        status="approved",
+                        markdown_content="# 已入库",
+                        title="已审批资料",
+                        template_version="project-material-original-v1",
+                        intake_id=None,
+                        skill_candidates=[],
+                        created_by_user_id=str(user_id),
+                        submission_id=None,
+                        submission_type=None,
+                        approved_document_id=str(document_id),
+                        approved_resource_id=None,
+                    ))
+                return _Result()
+
+        orm = ApprovedOrm()
+        with (
+            patch.object(route, "current_user_id", return_value=user_id),
+            patch.object(route, "_require_project_reviewer", return_value=None),
+            patch.object(route, "ingest_markdown_memory") as ingest,
+            patch.object(route, "ingest_file") as ingest_file,
+            patch.object(route, "record_audit") as audit,
+        ):
+            response = route.approve_project_memory_draft(
+                request=SimpleNamespace(state=SimpleNamespace()),
+                draft_id=draft_id,
+                body=route.ReviewDraftRequest(decision="approve"),
+                orm=orm,
+            )
+
+        self.assertEqual(response.status, "approved")
+        self.assertEqual(response.document_id, document_id)
+        ingest.assert_not_called()
+        ingest_file.assert_not_called()
+        audit.assert_not_called()
+        self.assertFalse(any("INSERT INTO public.project_memory_reviews" in sql for sql in orm.executed))
+
+    def test_repeated_repository_approve_refreshes_resource_after_waiting_for_draft_lock(self) -> None:
+        route = _load_module(
+            "project_memory_repository_idempotent_review_route",
+            "api/routes/v4/project_memory.py",
+        )
+        user_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        project_id = uuid.UUID("00000000-0000-0000-0000-000000000010")
+        draft_id = uuid.UUID("00000000-0000-0000-0000-000000000020")
+        submission_id = uuid.UUID("00000000-0000-0000-0000-000000000030")
+
+        class StaleJoinOrm(_Orm):
+            def execute(self, statement, params=None):
+                sql = str(statement)
+                self.executed.append(sql)
+                self.params.append(params or {})
+                if "FROM public.project_memory_drafts draft" in sql and "FOR UPDATE" in sql:
+                    return _Result(SimpleNamespace(
+                        id=str(draft_id),
+                        project_id=str(project_id),
+                        department_id="research-direct",
+                        status="approved",
+                        markdown_content="# 已入库仓库",
+                        title="已审批仓库",
+                        template_version="project-repository-submission-v1",
+                        intake_id=None,
+                        skill_candidates=[],
+                        created_by_user_id=str(user_id),
+                        submission_id=str(submission_id),
+                        submission_type="project_repository",
+                        approved_document_id=None,
+                        approved_resource_id=None,
+                    ))
+                if "SELECT approved_resource_id::text" in sql:
+                    return _Result(SimpleNamespace(approved_resource_id=str(project_id)))
+                return _Result()
+
+        orm = StaleJoinOrm()
+        with (
+            patch.object(route, "current_user_id", return_value=user_id),
+            patch.object(route, "_require_project_reviewer", return_value=None),
+            patch.object(route, "record_audit") as audit,
+        ):
+            response = route.approve_project_memory_draft(
+                request=SimpleNamespace(state=SimpleNamespace()),
+                draft_id=draft_id,
+                body=route.ReviewDraftRequest(decision="approve"),
+                orm=orm,
+            )
+
+        self.assertEqual(response.status, "approved")
+        self.assertEqual(response.resource_id, project_id)
+        self.assertTrue(any("SELECT approved_resource_id::text" in sql for sql in orm.executed))
+        audit.assert_not_called()
+        self.assertFalse(any("INSERT INTO public.project_memory_reviews" in sql for sql in orm.executed))
+
     def test_approve_material_intake_ingests_original_files_only_after_review(self) -> None:
         route = _load_module("project_memory_route_v2", "api/routes/v4/project_memory.py")
         orm = _Orm()
         user_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
         draft_id = uuid.UUID("00000000-0000-0000-0000-000000000020")
         raw_document_id = uuid.UUID("00000000-0000-0000-0000-000000000030")
+        storage_key = "00000000-0000-0000-0000-000000000010/00000000-0000-0000-0000-000000000040/00000000-0000-0000-0000-000000000041.md"
 
         def execute(statement, params=None):
             sql = str(statement)
@@ -751,7 +1033,8 @@ class ProjectMemoryRouteTests(unittest.TestCase):
                             format="md",
                             size_bytes=32,
                             content_hash="hash-1",
-                            raw_content=b"# Project\n\nRun Docker",
+                            raw_content=b"",
+                            storage_key=storage_key,
                             recommendation="keep",
                             included=True,
                         )
@@ -760,29 +1043,37 @@ class ProjectMemoryRouteTests(unittest.TestCase):
             return _Result()
 
         orm.execute = execute
-        with (
-            patch.object(route, "current_user_id", return_value=user_id),
-            patch.object(route, "require_admin", return_value=None),
-            patch.object(route, "ingest_markdown_memory") as ingest,
-            patch.object(
-                route,
-                "ingest_file",
-                return_value=SimpleNamespace(
-                    document_id=raw_document_id,
-                    chunk_count=2,
-                    status="ready",
-                    error=None,
-                ),
-            ) as ingest_original,
-            patch.object(route, "publish_approved_candidates") as publish,
-            patch.object(route, "record_audit", return_value=None),
-        ):
-            response = route.approve_project_memory_draft(
-                request=SimpleNamespace(state=SimpleNamespace()),
-                draft_id=draft_id,
-                body=route.ReviewDraftRequest(decision="approve"),
-                orm=orm,
-            )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            stored_path = Path(temp_dir) / storage_key
+            stored_path.parent.mkdir(parents=True, exist_ok=True)
+            stored_path.write_bytes(b"# Project\n\nRun Docker")
+            with (
+                patch.dict(os.environ, {"MATERIAL_UPLOAD_STORAGE_DIR": temp_dir}),
+                patch.object(route, "current_user_id", return_value=user_id),
+                patch.object(route, "_require_project_reviewer", return_value=None),
+                patch.object(route, "ingest_markdown_memory") as ingest,
+                patch.object(
+                    route,
+                    "ingest_file",
+                    return_value=SimpleNamespace(
+                        document_id=raw_document_id,
+                        chunk_count=2,
+                        status="ready",
+                        error=None,
+                    ),
+                ) as ingest_original,
+                patch.object(route, "publish_approved_candidates") as publish,
+                patch.object(route, "record_audit", return_value=None),
+            ):
+                response = route.approve_project_memory_draft(
+                    request=SimpleNamespace(state=SimpleNamespace()),
+                    draft_id=draft_id,
+                    body=route.ReviewDraftRequest(decision="approve"),
+                    orm=orm,
+                )
+                ingested_path = Path(ingest_original.call_args.args[0])
+                self.assertEqual(ingested_path, stored_path)
+                self.assertEqual(ingested_path.read_bytes(), b"# Project\n\nRun Docker")
 
         ingest.assert_not_called()
         ingest_original.assert_called_once()
@@ -792,6 +1083,92 @@ class ProjectMemoryRouteTests(unittest.TestCase):
         self.assertEqual(response.wiki_page_count, 0)
         self.assertTrue(any("project_material_intakes" in sql for sql in orm.executed))
         self.assertTrue(any("project_material_documents" in sql for sql in orm.executed))
+
+    def test_approve_meeting_submission_publishes_only_during_review(self) -> None:
+        route = _load_module("project_memory_meeting_review_route", "api/routes/v4/project_memory.py")
+        orm = _Orm()
+        draft_id = uuid.UUID("00000000-0000-0000-0000-000000000020")
+        meeting_id = uuid.UUID("00000000-0000-0000-0000-000000000099")
+        user_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+
+        def execute(statement, params=None):
+            sql = str(statement)
+            orm.executed.append(sql)
+            orm.params.append(params or {})
+            if "FROM public.project_memory_drafts draft" in sql and "FOR UPDATE" in sql:
+                return _Result(SimpleNamespace(
+                    id=str(draft_id), project_id="00000000-0000-0000-0000-000000000010",
+                    department_id="research-direct", status="pending_review",
+                    markdown_content="# 周会", title="周会审批", template_version="meeting-summary-submission-v1",
+                    intake_id=None, skill_candidates=[], created_by_user_id=str(user_id),
+                    submission_id="00000000-0000-0000-0000-000000000030",
+                    submission_type="meeting_summary", submission_payload={},
+                ))
+            return _Result()
+        orm.execute = execute
+
+        with (
+            patch.object(route, "current_user_id", return_value=user_id),
+            patch.object(route, "_require_project_reviewer", return_value=None),
+            patch.object(route, "_publish_meeting_submission", return_value=meeting_id) as publish,
+            patch.object(route, "record_audit", return_value=None),
+        ):
+            response = route.approve_project_memory_draft(
+                request=SimpleNamespace(state=SimpleNamespace()), draft_id=draft_id,
+                body=route.ReviewDraftRequest(decision="approve"), orm=orm,
+            )
+
+        publish.assert_called_once()
+        self.assertEqual(response.resource_id, meeting_id)
+        self.assertIsNone(response.document_id)
+        self.assertTrue(any("project_memory_submissions" in sql and "status = 'approved'" in sql for sql in orm.executed))
+        draft_update_params = next(
+            params for sql, params in zip(orm.executed, orm.params)
+            if "approved_document_id = :document_id" in sql
+        )
+        self.assertIsNone(draft_update_params["document_id"])
+
+    def test_approve_repository_submission_replaces_active_repository_only_during_review(self) -> None:
+        route = _load_module("project_memory_repository_review_route", "api/routes/v4/project_memory.py")
+        orm = _Orm()
+        draft_id = uuid.UUID("00000000-0000-0000-0000-000000000020")
+        user_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+
+        def execute(statement, params=None):
+            sql = str(statement)
+            orm.executed.append(sql)
+            orm.params.append(params or {})
+            if "FROM public.project_memory_drafts draft" in sql and "FOR UPDATE" in sql:
+                return _Result(SimpleNamespace(
+                    id=str(draft_id), project_id="00000000-0000-0000-0000-000000000010",
+                    department_id="research-direct", status="pending_review",
+                    markdown_content="# 仓库", title="仓库审批", template_version="project-repository-submission-v1",
+                    intake_id=None, skill_candidates=[], created_by_user_id=str(user_id),
+                    submission_id="00000000-0000-0000-0000-000000000030",
+                    submission_type="project_repository",
+                    submission_payload={"git_url": "https://github.com/example/repo.git", "git_branch": "main"},
+                ))
+            return _Result()
+        orm.execute = execute
+
+        with (
+            patch.object(route, "current_user_id", return_value=user_id),
+            patch.object(route, "_require_project_reviewer", return_value=None),
+            patch.object(route, "record_audit", return_value=None),
+        ):
+            response = route.approve_project_memory_draft(
+                request=SimpleNamespace(state=SimpleNamespace()), draft_id=draft_id,
+                body=route.ReviewDraftRequest(decision="approve"), orm=orm,
+            )
+
+        self.assertEqual(response.resource_id, uuid.UUID("00000000-0000-0000-0000-000000000010"))
+        self.assertTrue(any("INSERT INTO public.project_repositories" in sql for sql in orm.executed))
+        self.assertTrue(any("project_memory_submissions" in sql and "status = 'approved'" in sql for sql in orm.executed))
+        draft_update_params = next(
+            params for sql, params in zip(orm.executed, orm.params)
+            if "approved_document_id = :document_id" in sql
+        )
+        self.assertIsNone(draft_update_params["document_id"])
 
 
 class KnowledgeMaterialBatchRouteTests(unittest.TestCase):
@@ -958,7 +1335,7 @@ class KnowledgeMaterialBatchRouteTests(unittest.TestCase):
 
         with (
             patch.object(route, "current_user_id", return_value=user_id),
-            patch.object(route, "require_member", side_effect=AssertionError("membership should not be required")),
+            patch.object(route, "require_member", return_value=None) as require_member,
         ):
             ledger = route.get_knowledge_ledger(
                 request=object(),
@@ -972,6 +1349,7 @@ class KnowledgeMaterialBatchRouteTests(unittest.TestCase):
                 orm=orm,
             )
 
+        require_member.assert_called_once_with(orm, user_id=user_id, project_id=project_id)
         self.assertFalse(ledger.permissions.can_review)
         self.assertEqual(ledger.project.name, "智慧大脑")
         self.assertEqual(ledger.leaders[0].email, "leader@local.dev")
@@ -982,7 +1360,7 @@ class KnowledgeMaterialBatchRouteTests(unittest.TestCase):
         self.assertEqual(ledger.documents[0].approval_status, "approved")
         self.assertIn("COALESCE(d.memory_type, 'raw_project_material')", "\n".join(orm.executed))
 
-    def test_delete_knowledge_document_requires_project_admin_and_removes_document(self) -> None:
+    def test_delete_knowledge_document_requires_project_owner_and_removes_document(self) -> None:
         route = _load_module("knowledge_route", "api/routes/v4/knowledge.py")
         orm = _Orm()
         user_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -1009,7 +1387,7 @@ class KnowledgeMaterialBatchRouteTests(unittest.TestCase):
 
         with (
             patch.object(route, "current_user_id", return_value=user_id),
-            patch.object(route, "require_admin", return_value=None) as require_admin,
+            patch.object(route, "require_owner", return_value=None) as require_owner,
             patch.object(route, "record_audit") as record_audit,
         ):
             route.delete_knowledge_document(
@@ -1018,7 +1396,7 @@ class KnowledgeMaterialBatchRouteTests(unittest.TestCase):
                 orm=orm,
             )
 
-        require_admin.assert_called_once_with(orm, user_id=user_id, project_id=project_id)
+        require_owner.assert_called_once_with(orm, user_id=user_id, project_id=project_id)
         self.assertTrue(any("DELETE FROM public.documents" in sql for sql in orm.executed))
         self.assertGreaterEqual(orm.commits, 1)
         record_audit.assert_called_once()

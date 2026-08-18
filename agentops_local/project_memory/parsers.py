@@ -37,7 +37,7 @@ TEXT_CODE_FORMATS = {
     "yaml",
     "yml",
 }
-SUPPORTED_FORMATS = {"pdf", "md", "txt", "html", "htm", "docx", "pptx", *TEXT_CODE_FORMATS}
+SUPPORTED_FORMATS = {"pdf", "md", "txt", "html", "htm", "docx", "pptx", "xlsx", *TEXT_CODE_FORMATS}
 
 
 @dataclass(frozen=True)
@@ -126,6 +126,75 @@ def _extract_pptx(path: Path) -> str:
     return _normalize_text("\n\n".join(texts))
 
 
+def _extract_xlsx(path: Path) -> str:
+    shared_strings: list[str] = []
+    sheets: list[str] = []
+    with zipfile.ZipFile(path) as archive:
+        if "xl/sharedStrings.xml" in archive.namelist():
+            root = ElementTree.fromstring(archive.read("xl/sharedStrings.xml"))
+            for item in root.iter():
+                if not item.tag.endswith("}si"):
+                    continue
+                shared_strings.append(
+                    "".join(
+                        node.text or ""
+                        for node in item.iter()
+                        if node.tag.endswith("}t")
+                    )
+                )
+
+        sheet_names = sorted(
+            name
+            for name in archive.namelist()
+            if name.startswith("xl/worksheets/sheet") and name.endswith(".xml")
+        )
+        for name in sheet_names:
+            root = ElementTree.fromstring(archive.read(name))
+            rows: list[str] = []
+            for row in root.iter():
+                if not row.tag.endswith("}row"):
+                    continue
+                values: list[str] = []
+                for cell in row:
+                    if not cell.tag.endswith("}c"):
+                        continue
+                    cell_type = cell.attrib.get("t", "")
+                    value_node = next(
+                        (node for node in cell if node.tag.endswith("}v")),
+                        None,
+                    )
+                    value = ""
+                    if cell_type == "s" and value_node is not None and value_node.text:
+                        try:
+                            value = shared_strings[int(value_node.text)]
+                        except (IndexError, ValueError):
+                            value = value_node.text
+                    elif cell_type == "inlineStr":
+                        value = "".join(
+                            node.text or ""
+                            for node in cell.iter()
+                            if node.tag.endswith("}t")
+                        )
+                    elif cell_type == "b" and value_node is not None:
+                        value = "TRUE" if value_node.text == "1" else "FALSE"
+                    elif value_node is not None and value_node.text:
+                        value = value_node.text
+                    else:
+                        formula_node = next(
+                            (node for node in cell if node.tag.endswith("}f")),
+                            None,
+                        )
+                        if formula_node is not None and formula_node.text:
+                            value = formula_node.text
+                    if value:
+                        values.append(value)
+                if values:
+                    rows.append("\t".join(values))
+            if rows:
+                sheets.append("\n".join(rows))
+    return _normalize_text("\n\n".join(sheets))
+
+
 def _extract_pdf(path: Path) -> str:
     from pypdf import PdfReader
 
@@ -149,6 +218,8 @@ def extract_text(path: Path) -> ExtractedText:
         text = _extract_docx(path)
     elif fmt == "pptx":
         text = _extract_pptx(path)
+    elif fmt == "xlsx":
+        text = _extract_xlsx(path)
     else:
         text = path.read_text(encoding="utf-8", errors="replace")
         text = _normalize_text(text)

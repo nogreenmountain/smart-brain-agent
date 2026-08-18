@@ -103,8 +103,8 @@ describe('ProfilePage', () => {
       { id: 'research-direct', name: '直属项目', sort_order: 0, parent_id: 'research', parent_name: '研发支撑', allows_projects: true, level: 2 },
     ]);
     mocks.listProjects.mockResolvedValue([
-      { id: 'p1', org_id: 'o1', name: '项目一', environment: 'development', department_id: 'research-direct', role: 'developer', created_at: '2026-01-01T00:00:00Z', completed_at: null },
-      { id: 'p2', org_id: 'o1', name: '项目二', environment: 'development', department_id: 'research-direct', role: 'business_user', created_at: '2026-02-01T00:00:00Z', completed_at: '2026-08-01T00:00:00Z' },
+      { id: 'p1', org_id: 'o1', name: '项目一', environment: 'development', department_id: 'research-direct', role: 'owner', created_at: '2026-01-01T00:00:00Z', completed_at: null },
+      { id: 'p2', org_id: 'o1', name: '项目二', environment: 'development', department_id: 'research-direct', role: 'admin', created_at: '2026-02-01T00:00:00Z', completed_at: '2026-08-01T00:00:00Z' },
       { id: 'p3', org_id: 'o1', name: '项目三', environment: 'development', department_id: 'research-direct', role: 'developer', created_at: '2026-03-01T00:00:00Z', completed_at: null },
       { id: 'p4', org_id: 'o1', name: '项目四', environment: 'development', department_id: 'research-direct', role: 'developer', created_at: '2026-04-01T00:00:00Z', completed_at: null },
     ]);
@@ -119,10 +119,15 @@ describe('ProfilePage', () => {
     expect(screen.queryByRole('button', { name: /项目四/ })).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'PROJECT PROFILE' })).toBeInTheDocument();
     expect(screen.getAllByText('研发支撑 / 直属项目').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('项目成员').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('总负责人').length).toBeGreaterThan(0);
     expect(screen.getAllByText('进行中').length).toBeGreaterThan(0);
     expect(screen.queryByText('申请新增项目')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /编辑|上传|移交|删除/ })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /项目二/ }));
+    expect(screen.getAllByText('项目负责人').length).toBeGreaterThan(0);
+    await user.click(screen.getByRole('button', { name: /项目三/ }));
+    expect(screen.getAllByText('项目成员').length).toBeGreaterThan(0);
 
     await user.click(screen.getByRole('button', { name: '下一组项目' }));
     expect(await screen.findByRole('button', { name: /项目四/ })).toBeInTheDocument();

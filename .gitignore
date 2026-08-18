@@ -186,6 +186,7 @@ rag-model-cache/
 *.bak-*
 *.tsbuildinfo
 .next/
+smartbrain-dashboard/.next*/
 .npm-cache/
 .tmp/
 production-backups/

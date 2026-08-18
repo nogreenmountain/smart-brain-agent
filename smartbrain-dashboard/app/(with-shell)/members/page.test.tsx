@@ -4,6 +4,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import MembersPage from './page';
 
+vi.mock('@/components/management-workspace/TeamDirectoryPanel', () => ({
+  TeamDirectoryPanel: () => <div>团队账号维护</div>,
+}));
+
 const mocks = vi.hoisted(() => ({
   addProjectMember: vi.fn(),
   getMe: vi.fn(),
@@ -157,6 +161,7 @@ describe('MembersPage', () => {
     render(<MembersPage />);
 
     expect(await screen.findByRole('heading', { name: '成员管理' })).toBeInTheDocument();
+    expect(screen.getByText('团队账号维护')).toBeInTheDocument();
     expect(await screen.findByRole('option', { name: '研发' })).toBeInTheDocument();
     expect(await screen.findByRole('option', { name: '智慧大脑 (development)' })).toBeInTheDocument();
     expect(screen.queryByRole('option', { name: '市场素材库 (development)' })).not.toBeInTheDocument();
@@ -168,6 +173,7 @@ describe('MembersPage', () => {
     const roleSelect = screen.getByLabelText('成员角色');
     expect(within(roleSelect).getByRole('option', { name: '项目成员' })).toBeInTheDocument();
     expect(within(roleSelect).getByRole('option', { name: '项目负责人' })).toBeInTheDocument();
+    expect(within(roleSelect).getByRole('option', { name: '总负责人' })).toBeInTheDocument();
     expect(within(roleSelect).queryByRole('option', { name: '普通成员' })).not.toBeInTheDocument();
     expect(within(roleSelect).queryByRole('option', { name: '研发成员' })).not.toBeInTheDocument();
     expect(within(roleSelect).queryByRole('option', { name: '项目管理员' })).not.toBeInTheDocument();
@@ -308,7 +314,7 @@ describe('MembersPage', () => {
       is_system_admin: false,
       memberships: [{ org_id: 'org-1', org_name: '研发部', role: 'business_user' }],
     });
-    mocks.listProjects.mockResolvedValue([
+    mocks.listProjectCatalog.mockResolvedValue([
       {
         id: 'project-1',
         org_id: 'org-1',
@@ -316,6 +322,14 @@ describe('MembersPage', () => {
         environment: 'development',
         department_id: 'research',
         role: 'developer',
+      },
+      {
+        id: 'project-2',
+        org_id: 'org-1',
+        name: '市场素材库',
+        environment: 'development',
+        department_id: 'marketing',
+        role: undefined,
       },
     ]);
     currentMembers = [
@@ -330,18 +344,24 @@ describe('MembersPage', () => {
     await waitFor(() => {
       expect(screen.getAllByText('test2').length).toBeGreaterThan(0);
     });
-    expect(screen.getAllByText('项目负责人').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('总负责人').length).toBeGreaterThan(0);
     expect(screen.getAllByText('项目成员').length).toBeGreaterThan(0);
     expect(screen.queryByRole('heading', { name: '添加成员' })).not.toBeInTheDocument();
     expect(screen.queryByLabelText('用户名或邮箱')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '添加成员' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '移出项目 test2' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '修改 test2 密码' })).not.toBeInTheDocument();
-    expect(mocks.listProjects).toHaveBeenCalledTimes(1);
-    expect(mocks.listProjectCatalog).not.toHaveBeenCalled();
+    expect(mocks.listProjectCatalog).toHaveBeenCalledTimes(1);
+    expect(mocks.listProjects).not.toHaveBeenCalled();
+
+    const user = userEvent.setup();
+    await user.selectOptions(screen.getByLabelText('第一分级'), 'marketing');
+    expect(await screen.findByRole('option', { name: '市场素材库 (development)' })).toBeInTheDocument();
+    await waitFor(() => expect(mocks.listProjectMembers).toHaveBeenLastCalledWith('project-2'));
+    expect(screen.queryByRole('button', { name: '添加成员' })).not.toBeInTheDocument();
   });
 
-  it('does not request or expose the global project catalog for a non-system administrator', async () => {
+  it('shows the full catalog to a project administrator but only manages their own project', async () => {
     mocks.getMe.mockResolvedValue({
       user_id: 'project-admin-1',
       email: 'project-admin@local.dev',
@@ -349,21 +369,19 @@ describe('MembersPage', () => {
       is_system_admin: false,
       memberships: [{ org_id: 'org-1', org_name: '研发部', role: 'admin' }],
     });
-    mocks.listProjects.mockResolvedValue([
+    mocks.listProjectCatalog.mockResolvedValue([
       {
         id: 'project-1',
         org_id: 'org-1',
-        name: '可访问项目',
+        name: '负责项目',
         environment: 'development',
         department_id: 'research',
         role: 'admin',
       },
-    ]);
-    mocks.listProjectCatalog.mockResolvedValue([
       {
         id: 'project-secret',
         org_id: 'org-secret',
-        name: '未参与项目',
+        name: '其他项目',
         environment: 'production',
         department_id: 'marketing',
         role: undefined,
@@ -372,10 +390,16 @@ describe('MembersPage', () => {
 
     render(<MembersPage />);
 
-    expect(await screen.findByRole('option', { name: '可访问项目 (development)' })).toBeInTheDocument();
-    expect(screen.queryByRole('option', { name: '未参与项目 (production)' })).not.toBeInTheDocument();
-    expect(mocks.listProjects).toHaveBeenCalledTimes(1);
-    expect(mocks.listProjectCatalog).not.toHaveBeenCalled();
+    expect(await screen.findByRole('option', { name: '负责项目 (development)' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '添加成员' })).toBeInTheDocument();
+    expect(mocks.listProjectCatalog).toHaveBeenCalledTimes(1);
+    expect(mocks.listProjects).not.toHaveBeenCalled();
+
+    const user = userEvent.setup();
+    await user.selectOptions(screen.getByLabelText('第一分级'), 'marketing');
+    expect(await screen.findByRole('option', { name: '其他项目 (production)' })).toBeInTheDocument();
+    await waitFor(() => expect(mocks.listProjectMembers).toHaveBeenLastCalledWith('project-secret'));
+    expect(screen.queryByRole('button', { name: '添加成员' })).not.toBeInTheDocument();
   });
 
   it('keeps the global project catalog available to system administrators', async () => {

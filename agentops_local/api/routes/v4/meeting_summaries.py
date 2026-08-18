@@ -58,6 +58,14 @@ class MeetingSummaryListResponse(BaseModel):
     items: list[MeetingSummaryResponse]
 
 
+class MeetingSubmissionResponse(BaseModel):
+    id: uuid.UUID
+    draft_id: uuid.UUID
+    project_id: uuid.UUID
+    title: str
+    status: str = "pending_review"
+
+
 class MeetingParticipantOption(BaseModel):
     user_id: uuid.UUID
     email: str
@@ -72,7 +80,6 @@ class MeetingFile:
     format: str
     mime_type: str | None
     raw_content: bytes
-    extracted_text: str
     content_hash: str
 
 
@@ -125,13 +132,14 @@ def _participant_ids(value: str) -> list[uuid.UUID]:
     return result
 
 
-def _require_existing_project(orm: Session, *, project_id: uuid.UUID) -> None:
+def _require_existing_project(orm: Session, *, project_id: uuid.UUID):
     row = orm.execute(
-        text("SELECT id FROM public.projects WHERE id = :project_id"),
+        text("SELECT id, name, department_id FROM public.projects WHERE id = :project_id"),
         {"project_id": str(project_id)},
     ).first()
     if row is None:
         raise HTTPException(status_code=404, detail="project not found")
+    return row
 
 
 def _active_team_participants(
@@ -183,23 +191,11 @@ async def _meeting_file(upload: UploadFile | None) -> MeetingFile:
     if len(raw) > MAX_FILE_BYTES:
         raise HTTPException(status_code=413, detail="meeting content file must not exceed 20 MB")
 
-    temp_suffix = ".htm" if suffix == "htm" else f".{fmt}"
-    with tempfile.NamedTemporaryFile(delete=False, suffix=temp_suffix) as handle:
-        handle.write(raw)
-        temp_path = Path(handle.name)
-    try:
-        extracted = extract_text(temp_path)
-    except Exception as error:
-        raise HTTPException(status_code=422, detail=f"meeting content could not be read: {filename}") from error
-    finally:
-        temp_path.unlink(missing_ok=True)
-
     return MeetingFile(
         filename=filename[:255],
-        format=extracted.format,
+        format=fmt,
         mime_type=(upload.content_type or "").strip()[:255] or None,
         raw_content=raw,
-        extracted_text=extracted.text,
         content_hash=hashlib.sha256(raw).hexdigest(),
     )
 
@@ -352,7 +348,7 @@ def download_meeting_file(
     )
 
 
-@router.post("/meeting-summaries", response_model=MeetingSummaryResponse)
+@router.post("/meeting-summaries", response_model=MeetingSubmissionResponse)
 async def create_meeting_summary(
     request: Request,
     project_id: uuid.UUID = Form(...),
@@ -361,9 +357,9 @@ async def create_meeting_summary(
     participant_user_ids: str = Form(...),
     file: UploadFile | None = File(...),
     orm: Session = Depends(get_orm_session),
-) -> MeetingSummaryResponse:
+) -> MeetingSubmissionResponse:
     user_id = _user(request)
-    _require_existing_project(orm, project_id=project_id)
+    project = _require_existing_project(orm, project_id=project_id)
     if isinstance(meeting_date, str):
         try:
             meeting_date = date.fromisoformat(meeting_date)
@@ -376,81 +372,85 @@ async def create_meeting_summary(
         participant_ids=selected_ids,
     )
     meeting_file = await _meeting_file(file)
-    markdown = build_meeting_markdown(
-        title=title,
-        meeting_date=meeting_date,
-        participants=participant_names,
-        tags=[],
-        summary=meeting_file.extracted_text,
-        decisions=[],
-        action_items=[],
-    )
-    embedding = _embed_markdown(markdown)
-    inserted = orm.execute(
-        text("""
-            INSERT INTO public.meeting_summaries (
-                project_id, title, meeting_date, participant_user_ids,
-                participants, tags, summary_markdown, decisions, action_items,
-                source_filename, created_by, embedding, embedding_model, embedding_version
-            ) VALUES (
-                :project_id, :title, :meeting_date,
-                CAST(:participant_user_ids AS uuid[]), CAST(:participants AS text[]),
-                ARRAY[]::text[], :summary_markdown, ARRAY[]::text[], ARRAY[]::text[],
-                :source_filename, :created_by, CAST(:embedding AS vector(1024)),
-                :embedding_model, :embedding_version
-            ) RETURNING id::text
-        """),
-        {
-            "project_id": str(project_id),
-            "title": title.strip(),
-            "meeting_date": meeting_date,
-            "participant_user_ids": [str(item) for item in selected_ids],
-            "participants": participant_names,
-            "summary_markdown": markdown,
-            "source_filename": meeting_file.filename,
-            "created_by": str(user_id),
-            "embedding": json.dumps(embedding) if embedding is not None else None,
-            "embedding_model": "BAAI/bge-m3" if embedding is not None else None,
-            "embedding_version": "2026-07-21-bge-m3" if embedding is not None else None,
-        },
-    ).first()
-    if inserted is None:
-        raise HTTPException(status_code=503, detail="failed to save meeting record")
-    summary_id = uuid.UUID(str(inserted.id))
+    normalized_title = title.strip()
+    submission_id = uuid.uuid4()
+    draft_id = uuid.uuid4()
+    payload = {
+        "title": normalized_title,
+        "meeting_date": meeting_date.isoformat(),
+        "participant_user_ids": [str(item) for item in selected_ids],
+        "participants": participant_names,
+    }
     orm.execute(
         text("""
-            INSERT INTO public.meeting_summary_files (
-                meeting_summary_id, filename, format, mime_type, size_bytes,
-                content_hash, raw_content, extracted_text
+            INSERT INTO public.project_memory_submissions (
+                id, project_id, submission_type, payload, filename, format,
+                mime_type, size_bytes, content_hash, raw_content,
+                status, created_by_user_id
             ) VALUES (
-                :meeting_summary_id, :filename, :format, :mime_type, :size_bytes,
-                :content_hash, :raw_content, :extracted_text
+                :submission_id, :project_id, :submission_type,
+                CAST(:payload AS jsonb), :filename, :format, :mime_type,
+                :size_bytes, :content_hash, :raw_content,
+                'pending_review', :created_by
             )
         """),
         {
-            "meeting_summary_id": str(summary_id),
+            "submission_id": str(submission_id),
+            "project_id": str(project_id),
+            "submission_type": "meeting_summary",
+            "payload": json.dumps(payload, ensure_ascii=False),
             "filename": meeting_file.filename,
             "format": meeting_file.format,
             "mime_type": meeting_file.mime_type,
             "size_bytes": len(meeting_file.raw_content),
             "content_hash": meeting_file.content_hash,
             "raw_content": meeting_file.raw_content,
-            "extracted_text": meeting_file.extracted_text,
+            "created_by": str(user_id),
+            "participant_user_ids": [str(item) for item in selected_ids],
+            "participants": participant_names,
+        },
+    )
+    orm.execute(
+        text("""
+            INSERT INTO public.project_memory_drafts (
+                id, project_id, department_id, title, status, template_version,
+                markdown_content, source_count, created_by_user_id, submission_id
+            ) VALUES (
+                :draft_id, :project_id, :department_id, :title, 'pending_review',
+                'meeting-summary-submission-v1', :markdown_content, 1,
+                :created_by, :submission_id
+            )
+        """),
+        {
+            "draft_id": str(draft_id),
+            "project_id": str(project_id),
+            "department_id": str(project.department_id),
+            "title": f"{normalized_title} 会议记录审批",
+            "markdown_content": (
+                f"# 会议记录审批：{normalized_title}\n\n"
+                f"- 项目：{project.name}\n- 会议日期：{meeting_date.isoformat()}\n"
+                f"- 参会人：{'、'.join(participant_names)}\n- 原文件：{meeting_file.filename}\n"
+            ),
+            "created_by": str(user_id),
+            "submission_id": str(submission_id),
         },
     )
     orm.commit()
-    item = get_meeting_summary(orm, summary_id=summary_id, project_ids=[project_id])
-    if item is None:
-        raise HTTPException(status_code=500, detail="meeting record was saved but could not be read")
     record_audit(
         orm, user_id=user_id, action="meeting_summary_create",
-        resource_type="meeting_summary", resource_id=str(summary_id),
+        resource_type="project_memory_draft", resource_id=str(draft_id),
         metadata={
             "project_id": str(project_id),
+            "submission_id": str(submission_id),
             "participant_count": len(selected_ids),
             "source_format": meeting_file.format,
             "source_size_bytes": len(meeting_file.raw_content),
         },
         request=request,
     )
-    return _response(item)
+    return MeetingSubmissionResponse(
+        id=submission_id,
+        draft_id=draft_id,
+        project_id=project_id,
+        title=normalized_title,
+    )

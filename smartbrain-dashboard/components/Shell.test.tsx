@@ -53,7 +53,7 @@ describe('Shell AI record navigation', () => {
     expect(screen.queryByRole('button', { name: '成员 Wiki' })).not.toBeInTheDocument();
     const uploadsLink = screen.getByRole('button', { name: '上传资料' });
     expect(screen.getByRole('button', { name: '成员信息' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: '项目管理' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '管理工作台' })).not.toBeInTheDocument();
 
     await user.click(link);
     expect(mocks.push).toHaveBeenCalledWith('/workday');
@@ -81,10 +81,11 @@ describe('Shell AI record navigation', () => {
       </Shell>,
     );
 
-    expect(screen.getByRole('button', { name: '项目管理' })).toBeInTheDocument();
-    const link = screen.getByRole('button', { name: '成员管理' });
+    const link = screen.getByRole('button', { name: '管理工作台' });
     await user.click(link);
-    expect(mocks.push).toHaveBeenCalledWith('/members');
+    expect(mocks.push).toHaveBeenCalledWith('/admin');
+    expect(screen.queryByRole('button', { name: '成员管理' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '项目管理' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '团队管理' })).not.toBeInTheDocument();
   });
 
@@ -105,9 +106,12 @@ describe('Shell AI record navigation', () => {
       </Shell>,
     );
 
-    const link = screen.getByRole('button', { name: '团队管理' });
+    const link = screen.getByRole('button', { name: '管理工作台' });
     await user.click(link);
-    expect(mocks.push).toHaveBeenCalledWith('/team');
+    expect(mocks.push).toHaveBeenCalledWith('/admin');
+    expect(screen.queryByRole('button', { name: '团队管理' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '成员管理' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '项目管理' })).not.toBeInTheDocument();
   });
 
   it('opens the personal center and shows the configured nickname', async () => {
