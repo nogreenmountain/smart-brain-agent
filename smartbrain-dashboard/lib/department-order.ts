@@ -1,6 +1,36 @@
+import type { KeyboardCoordinateGetter } from '@dnd-kit/core';
+
 export interface SortableDepartment {
   id: string;
   sort_order: number;
+}
+
+export function sameSortableContainerKeyboardCoordinates(
+  baseGetter: KeyboardCoordinateGetter,
+): KeyboardCoordinateGetter {
+  return (event, args) => {
+    const containers = args.context.droppableContainers;
+    const activeContainer = containers.get(args.active);
+    const sortableContainerId = activeContainer?.data.current?.sortable?.containerId;
+    if (!sortableContainerId) return baseGetter(event, args);
+
+    const siblings = containers.getEnabled().filter(
+      (container) => container.data.current?.sortable?.containerId === sortableContainerId,
+    );
+    const siblingContainers = Object.create(containers) as typeof containers;
+    Object.defineProperties(siblingContainers, {
+      get: { value: containers.get.bind(containers) },
+      getEnabled: { value: () => siblings },
+    });
+
+    return baseGetter(event, {
+      ...args,
+      context: {
+        ...args.context,
+        droppableContainers: siblingContainers,
+      },
+    });
+  };
 }
 
 export function moveDepartmentWithinSiblings<T extends SortableDepartment>(

@@ -457,6 +457,11 @@ def update_member_wikis(
     empty_members: set[str] = set()
     experience_count = 0
     failure_count = 0
+    consecutive_failure_count = 0
+    max_consecutive_failures = max(
+        int(os.getenv("MEMBER_WIKI_MAX_CONSECUTIVE_FAILURES", "3")),
+        1,
+    )
     embedder = embed_text or _default_embed_text
 
     try:
@@ -474,12 +479,20 @@ def update_member_wikis(
                 )
             except Exception:
                 failure_count += 1
+                consecutive_failure_count += 1
                 logger.exception(
                     "member Wiki session compilation failed; leaving session for retry: session_id=%s employee_id=%s",
                     conversation.session_id,
                     conversation.employee_id,
                 )
+                if consecutive_failure_count >= max_consecutive_failures:
+                    logger.error(
+                        "member Wiki run stopped after %s consecutive model failures; remaining sessions stay queued",
+                        consecutive_failure_count,
+                    )
+                    break
                 continue
+            consecutive_failure_count = 0
             for experience in experiences:
                 _upsert_experience(
                     orm,

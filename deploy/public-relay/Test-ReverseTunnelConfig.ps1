@@ -17,6 +17,8 @@ foreach ($path in @($composePath, $dockerfilePath, $entrypointPath, $nginxPath))
 
 $nginxConfig = Get-Content -Raw -LiteralPath $nginxPath
 foreach ($requiredSnippet in @(
+    "listen 443 ssl http2 default_server;",
+    "listen [::]:443 ssl http2 default_server;",
     "location ^~ /.well-known/acme-challenge/",
     "root /var/www/letsencrypt",
     "ssl_certificate /etc/letsencrypt/live/39.105.79.0/fullchain.pem",

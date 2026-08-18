@@ -8,6 +8,7 @@ import unittest
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 
 class _Result:
@@ -99,6 +100,22 @@ def _two_session_rows():
         )
         second.append(types.SimpleNamespace(**values))
     return [*rows, *second]
+
+
+def _many_session_rows(count: int):
+    rows = []
+    for index in range(count):
+        session_id = f"00000000-0000-0000-0000-{index + 1:012d}"
+        for row in _session_rows():
+            values = vars(row).copy()
+            values.update(
+                session_id=session_id,
+                task_id=f"task-{index + 1}",
+                trace_id=f"trace-{index + 1}",
+                started_at=datetime(2026, 8, 4, 12, index, tzinfo=timezone.utc),
+            )
+            rows.append(types.SimpleNamespace(**values))
+    return rows
 
 
 class MemberWikiServiceTests(unittest.TestCase):
@@ -245,6 +262,34 @@ class MemberWikiServiceTests(unittest.TestCase):
         self.assertEqual(final_run["failure_count"], 1)
         self.assertEqual(orm.commits, 1)
         self.assertEqual(orm.rollbacks, 0)
+
+    def test_consecutive_model_failures_stop_the_run_before_hammering_gateway(self) -> None:
+        service = _load_service()
+        orm = _FakeOrm(_many_session_rows(5))
+        calls = 0
+
+        def generate(prompt: str) -> str:
+            nonlocal calls
+            calls += 1
+            raise TimeoutError("gateway timeout")
+
+        with patch.dict(
+            service.os.environ,
+            {"MEMBER_WIKI_MAX_CONSECUTIVE_FAILURES": "2"},
+            clear=False,
+        ):
+            result = service.update_member_wikis(
+                orm,
+                cutoff=datetime(2026, 8, 4, 13, 0, tzinfo=timezone.utc),
+                generate_text=generate,
+            )
+
+        self.assertEqual(calls, 2)
+        self.assertEqual(result.failure_count, 2)
+        self.assertFalse(any(
+            "INSERT INTO public.member_wiki_processed_sessions" in statement
+            for statement, _ in orm.calls
+        ))
 
 
 if __name__ == "__main__":

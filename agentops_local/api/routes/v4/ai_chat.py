@@ -123,8 +123,29 @@ class AIChatSessionListResponse(BaseModel):
     sessions: list[AIChatSession]
 
 
+def _sanitize_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    return value.replace("\x00", "\ufffd")
+
+
+def _sanitize_json(value: Any) -> Any:
+    if isinstance(value, str):
+        return _sanitize_text(value)
+    if isinstance(value, dict):
+        return {
+            str(_sanitize_text(str(key))): _sanitize_json(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_sanitize_json(item) for item in value]
+    if isinstance(value, tuple):
+        return [_sanitize_json(item) for item in value]
+    return value
+
+
 def _json_dumps(value: dict[str, Any]) -> str:
-    return json.dumps(value or {}, default=str, ensure_ascii=False)
+    return json.dumps(_sanitize_json(value or {}), default=str, ensure_ascii=False)
 
 
 def _profile_for_user(orm: Session, user_id: uuid.UUID):
@@ -199,39 +220,20 @@ def _store_chat_session(
     started_at = body.started_at or now
     task_id = body.task_id or "unassigned"
     task_title = body.task_title or ("未标记任务" if task_id == "unassigned" else None)
-    existing = None
-    if body.conversation_id:
-        existing = orm.execute(
-            text("""
-                SELECT id FROM public.ai_chat_sessions
-                WHERE project_id = :project_id
-                  AND source = :source
-                  AND employee_id = :employee_id
-                  AND external_conversation_id = :conversation_id
-                LIMIT 1
-            """),
-            {
-                "project_id": str(body.project_id),
-                "source": body.source,
-                "employee_id": employee_id,
-                "conversation_id": body.conversation_id,
-            },
-        ).first()
-
-    session_id = getattr(existing, "id", None) or uuid.uuid4()
+    session_id = uuid.uuid4()
     params = {
         "id": str(session_id),
         "project_id": str(body.project_id),
         "user_id": str(user_id),
-        "employee_id": employee_id,
-        "employee_name": employee_name,
-        "source": body.source,
-        "conversation_id": body.conversation_id,
-        "title": body.title,
-        "task_id": task_id,
-        "task_title": task_title,
-        "model": body.model,
-        "status": body.status,
+        "employee_id": _sanitize_text(employee_id),
+        "employee_name": _sanitize_text(employee_name),
+        "source": _sanitize_text(body.source),
+        "conversation_id": _sanitize_text(body.conversation_id),
+        "title": _sanitize_text(body.title),
+        "task_id": _sanitize_text(task_id),
+        "task_title": _sanitize_text(task_title),
+        "model": _sanitize_text(body.model),
+        "status": _sanitize_text(body.status),
         "started_at": started_at,
         "ended_at": body.ended_at,
         "duration_ms": body.duration_ms,
@@ -240,55 +242,53 @@ def _store_chat_session(
         "total_tokens": _total_tokens(body),
         "cost": body.cost,
         "error_count": body.error_count,
-        "trace_id": body.trace_id,
+        "trace_id": _sanitize_text(body.trace_id),
         "metadata": _json_dumps(body.metadata),
     }
-    if existing is None:
-        orm.execute(
-            text("""
-                INSERT INTO public.ai_chat_sessions (
-                    id, project_id, user_id, employee_id, employee_name,
-                    source, external_conversation_id, title, task_id, task_title,
-                    model, status, started_at, ended_at, duration_ms,
-                    prompt_tokens, completion_tokens, total_tokens, cost,
-                    error_count, trace_id, metadata
-                )
-                VALUES (
-                    :id, :project_id, :user_id, :employee_id, :employee_name,
-                    :source, :conversation_id, :title, :task_id, :task_title,
-                    :model, :status, :started_at, :ended_at, :duration_ms,
-                    :prompt_tokens, :completion_tokens, :total_tokens, :cost,
-                    :error_count, :trace_id, CAST(:metadata AS jsonb)
-                )
-            """),
-            params,
-        )
-    else:
-        orm.execute(
-            text("""
-                UPDATE public.ai_chat_sessions
-                SET user_id = :user_id,
-                    employee_name = :employee_name,
-                    title = :title,
-                    task_id = :task_id,
-                    task_title = :task_title,
-                    model = :model,
-                    status = :status,
-                    started_at = :started_at,
-                    ended_at = :ended_at,
-                    duration_ms = :duration_ms,
-                    prompt_tokens = :prompt_tokens,
-                    completion_tokens = :completion_tokens,
-                    total_tokens = :total_tokens,
-                    cost = :cost,
-                    error_count = :error_count,
-                    trace_id = :trace_id,
-                    metadata = CAST(:metadata AS jsonb),
-                    updated_at = now()
-                WHERE id = :id
-            """),
-            params,
-        )
+    stored = orm.execute(
+        text("""
+            INSERT INTO public.ai_chat_sessions (
+                id, project_id, user_id, employee_id, employee_name,
+                source, external_conversation_id, title, task_id, task_title,
+                model, status, started_at, ended_at, duration_ms,
+                prompt_tokens, completion_tokens, total_tokens, cost,
+                error_count, trace_id, metadata
+            )
+            VALUES (
+                :id, :project_id, :user_id, :employee_id, :employee_name,
+                :source, :conversation_id, :title, :task_id, :task_title,
+                :model, :status, :started_at, :ended_at, :duration_ms,
+                :prompt_tokens, :completion_tokens, :total_tokens, :cost,
+                :error_count, :trace_id, CAST(:metadata AS jsonb)
+            )
+            ON CONFLICT (project_id, source, employee_id, external_conversation_id)
+                WHERE external_conversation_id IS NOT NULL
+            DO UPDATE SET
+                user_id = EXCLUDED.user_id,
+                employee_name = EXCLUDED.employee_name,
+                title = EXCLUDED.title,
+                task_id = EXCLUDED.task_id,
+                task_title = EXCLUDED.task_title,
+                model = EXCLUDED.model,
+                status = EXCLUDED.status,
+                started_at = EXCLUDED.started_at,
+                ended_at = EXCLUDED.ended_at,
+                duration_ms = EXCLUDED.duration_ms,
+                prompt_tokens = EXCLUDED.prompt_tokens,
+                completion_tokens = EXCLUDED.completion_tokens,
+                total_tokens = EXCLUDED.total_tokens,
+                cost = EXCLUDED.cost,
+                error_count = EXCLUDED.error_count,
+                trace_id = EXCLUDED.trace_id,
+                metadata = EXCLUDED.metadata,
+                updated_at = now()
+            RETURNING id
+        """),
+        params,
+    ).first()
+    stored_id = getattr(stored, "id", None)
+    if stored_id is not None:
+        session_id = uuid.UUID(str(stored_id))
 
     orm.execute(
         text("DELETE FROM public.ai_chat_messages WHERE session_id = :session_id"),
@@ -310,9 +310,9 @@ def _store_chat_session(
             {
                 "session_id": str(session_id),
                 "sequence_index": index,
-                "role": message.role,
-                "message_id": message.message_id,
-                "content": message.content,
+                "role": _sanitize_text(message.role),
+                "message_id": _sanitize_text(message.message_id),
+                "content": _sanitize_text(message.content),
                 "token_count": message.token_count,
                 "message_created_at": message.created_at,
                 "metadata": _json_dumps(message.metadata),

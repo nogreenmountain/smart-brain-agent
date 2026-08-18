@@ -68,7 +68,10 @@ import {
 } from '@/lib/api';
 import { ProjectMembersPanel } from '@/components/management-workspace/ProjectMembersPanel';
 import { TeamDirectoryPanel } from '@/components/management-workspace/TeamDirectoryPanel';
-import { moveDepartmentWithinSiblings } from '@/lib/department-order';
+import {
+  moveDepartmentWithinSiblings,
+  sameSortableContainerKeyboardCoordinates,
+} from '@/lib/department-order';
 
 type ManagementView = 'projects' | 'members';
 
@@ -88,6 +91,10 @@ const departmentTone: Record<string, string> = {
   marketing: 'border-[#f0a23a]/25 bg-[#f0a23a]/15 text-[#9a5a0d]',
   business: 'border-[#17a58a]/25 bg-[#17a58a]/12 text-[#137f6d]',
 };
+
+const categoryKeyboardCoordinates = sameSortableContainerKeyboardCoordinates(
+  sortableKeyboardCoordinates,
+);
 
 function sortDepartments(departments: Department[]): Department[] {
   return [...departments].sort((left, right) => (
@@ -229,7 +236,7 @@ export default function AdminPage() {
   ));
   const categorySensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+    useSensor(KeyboardSensor, { coordinateGetter: categoryKeyboardCoordinates }),
   );
   const selectedProjectCanManage = Boolean(me?.is_system_admin) || canManageProject(selectedProject);
   const selectedProjectCanDelete = Boolean(me?.is_system_admin) || selectedProject?.role === 'owner';

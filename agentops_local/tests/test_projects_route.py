@@ -525,7 +525,7 @@ class _ProjectRequestListOrm:
 
 
 class ProjectsRouteTests(unittest.TestCase):
-    def test_project_catalog_includes_every_project_for_authenticated_users(self) -> None:
+    def test_project_catalog_includes_every_business_project_but_hides_unused_account_scaffolds(self) -> None:
         user_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
         orm = _Orm()
 
@@ -538,8 +538,9 @@ class ProjectsRouteTests(unittest.TestCase):
         self.assertIn("pm.user_id = :u", orm.sql)
         self.assertIn("is_system_admin", orm.sql)
         self.assertIn("THEN 'owner'", orm.sql)
-        self.assertNotIn("EXISTS", orm.sql)
-        self.assertNotIn("catalog_member.project_id = p.id", orm.sql)
+        self.assertIn("p.name <> 'Default Project'", orm.sql)
+        self.assertIn("FROM public.project_members catalog_member", orm.sql)
+        self.assertIn("catalog_member.project_id = p.id", orm.sql)
         self.assertNotIn("WHERE pm.user_id = :u", orm.sql)
         self.assertIn("CASE WHEN p.completed_at IS NULL THEN 0 ELSE 1 END", orm.sql)
         self.assertEqual(orm.params, {"u": str(user_id)})

@@ -203,6 +203,78 @@ class AIChatRouteTests(unittest.TestCase):
         ][0]
         self.assertEqual(insert_session["employee_id"], "test1")
 
+    def test_device_ingest_upserts_duplicate_external_session(self) -> None:
+        self.body.source = "cc_switch"
+        request = SimpleNamespace(
+            headers={"authorization": "Bearer signed-device-token"}
+        )
+        claims = {
+            "sub": str(self.user_id),
+            "project_id": str(self.project_id),
+            "employee_id": "test1",
+            "employee_name": "Test 1",
+        }
+        with (
+            patch.object(route, "verify_telemetry_token", return_value=claims),
+            patch.object(route, "secret_from_environment", return_value="x" * 32),
+            patch.object(route, "record_audit"),
+        ):
+            route.device_ingest_ai_chat(
+                request=request,
+                body=self.body,
+                orm=self.orm,
+            )
+
+        session_write = next(
+            sql
+            for sql, _ in self.orm.calls
+            if "INSERT INTO public.ai_chat_sessions" in sql
+        )
+        self.assertIn(
+            "ON CONFLICT (project_id, source, employee_id, external_conversation_id)",
+            session_write,
+        )
+        self.assertIn("DO UPDATE SET", session_write)
+
+    def test_device_ingest_sanitizes_nul_from_text_and_metadata(self) -> None:
+        body = self.body.model_copy(deep=True)
+        body.source = "cc_switch"
+        body.title = "Codex\x00 session"
+        body.task_title = "Task\x00 title"
+        body.metadata = {"nested": {"value": "meta\x00data"}}
+        body.messages[0].content = "message\x00content"
+        body.messages[0].message_id = "message\x00id"
+        body.messages[0].metadata = {"value": "message\x00metadata"}
+        request = SimpleNamespace(
+            headers={"authorization": "Bearer signed-device-token"}
+        )
+        claims = {
+            "sub": str(self.user_id),
+            "project_id": str(self.project_id),
+            "employee_id": "test1",
+            "employee_name": "Test\x00 1",
+        }
+        with (
+            patch.object(route, "verify_telemetry_token", return_value=claims),
+            patch.object(route, "secret_from_environment", return_value="x" * 32),
+            patch.object(route, "record_audit"),
+        ):
+            route.device_ingest_ai_chat(
+                request=request,
+                body=body,
+                orm=self.orm,
+            )
+
+        persisted = [
+            value
+            for _, params in self.orm.calls
+            for value in params.values()
+            if isinstance(value, str)
+        ]
+        self.assertTrue(persisted)
+        self.assertTrue(all("\x00" not in value for value in persisted))
+        self.assertTrue(all("\\u0000" not in value for value in persisted))
+
     def test_device_ingest_rejects_project_outside_signed_scope(self) -> None:
         self.body.source = "cc_switch"
         request = SimpleNamespace(headers={"authorization": "Bearer token"})

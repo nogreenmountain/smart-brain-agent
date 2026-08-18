@@ -1164,6 +1164,12 @@ def list_project_catalog(
             LEFT JOIN public.project_members pm
               ON pm.project_id = p.id
              AND pm.user_id = :u
+            WHERE p.name <> 'Default Project'
+               OR EXISTS (
+                   SELECT 1
+                   FROM public.project_members catalog_member
+                   WHERE catalog_member.project_id = p.id
+               )
             ORDER BY
                 CASE WHEN p.completed_at IS NULL THEN 0 ELSE 1 END,
                 p.name,

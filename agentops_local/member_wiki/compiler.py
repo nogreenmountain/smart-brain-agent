@@ -182,18 +182,14 @@ def generate_experiences(prompt: str) -> str:
         base_url=os.getenv("ANTHROPIC_BASE_URL", "https://api.minimaxi.com/anthropic"),
         api_key=token,
     )
-    response = client.messages.create(
+    with client.messages.stream(
         model=model_name(),
         max_tokens=int(os.getenv("MEMBER_WIKI_MAX_TOKENS", "2400")),
         temperature=0,
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": prompt}],
-    )
-    return "\n".join(
-        block.text
-        for block in response.content
-        if getattr(block, "type", None) == "text" and getattr(block, "text", "")
-    ).strip()
+    ) as stream:
+        return "".join(stream.text_stream).strip()
 
 
 def compile_experiences(

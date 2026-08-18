@@ -72,3 +72,33 @@ forensics.
   rosters outside the caller's managed projects, no management buttons for
   ordinary members, no horizontal overflow at 1280 px, and no site console
   warnings or errors.
+
+## Full-site smoke and pressure-test closure (2026-08-18 to 2026-08-19)
+
+- Make AI Chat device ingestion concurrency-safe with an atomic partial-index
+  upsert, and recursively replace PostgreSQL-invalid NUL characters in text and
+  JSON metadata before persistence. A production pressure run completed 100 of
+  100 concurrent ingests with one session and two messages.
+- Hide unused per-account `Default Project` scaffolds from the global business
+  project catalog without deleting personal organizations or hiding any project
+  that has formal project members.
+- Restrict keyboard drag coordinates to the current sortable container so one
+  Arrow Down moves a first-level category directly to the next first-level
+  category instead of entering its nested direct child.
+- Enable HTTP/2 on the standard public HTTPS listener. A single multiplexed
+  connection completed 200 of 200 mixed `/health` and `/login` requests at
+  about 159 requests per second, with p95 latency around 236 ms.
+- Verify a real 500 MiB chunked upload through the public endpoint: 63 chunks,
+  successful hash/finalization, and correct `pending_review` state, followed by
+  complete cleanup.
+- Change member-Wiki compilation to stream Anthropic-compatible responses. The
+  same real queued prompt that returned a fixed 504 after about 20 seconds in
+  non-streaming mode completed in about 37 seconds when streamed. Add a
+  three-consecutive-failure circuit breaker so an unavailable model gateway
+  leaves remaining sessions queued instead of retrying hundreds of requests.
+- Production member-Wiki E2E processed one queued session through generation,
+  parsing, embedding, database persistence, and processed-session marking with
+  one experience and zero failures.
+- Final backend regression: 354 tests passed plus 2 subtests. SmartBrain's final
+  regression remained 33 test files / 141 tests, with TypeScript, lint, and the
+  Next.js production build passing.
