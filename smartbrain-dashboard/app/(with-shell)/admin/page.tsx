@@ -841,7 +841,14 @@ export default function AdminPage() {
               )}
             </div>
 
-            <div data-testid="project-create-profile-workspace" className="grid min-w-0 gap-3 min-[1400px]:grid-cols-[minmax(240px,0.7fr)_minmax(360px,1.3fr)] min-[1400px]:items-stretch">
+            <div
+              data-testid="project-create-profile-workspace"
+              className={`grid min-w-0 gap-3 ${
+                canCreateProjects
+                  ? 'min-[1400px]:grid-cols-[minmax(240px,0.7fr)_minmax(360px,1.3fr)] min-[1400px]:items-stretch'
+                  : 'grid-cols-1'
+              }`}
+            >
               {canCreateProjects && (
                 <section className="h-full rounded-lg border border-[#d7e0ec] bg-white p-4 shadow-[0_10px_24px_rgba(15,35,66,0.04)]">
                   <div className="mb-3 flex items-center gap-3">
@@ -905,7 +912,10 @@ export default function AdminPage() {
                     <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-brand-500/10 text-brand-600">
                       <Archive size={20} aria-hidden={true} />
                     </div>
-                    <div className="min-w-0 flex-1">
+                    <div
+                      data-testid="project-profile-title-block"
+                      className="order-3 min-w-0 w-full sm:order-none sm:w-auto sm:flex-1"
+                    >
                       <div className="text-[12px] font-bold tracking-[0.04em] text-brand-600">PROJECT PROFILE</div>
                       <h2 className="mt-1 break-words text-xl font-semibold leading-tight">{selectedProject.name}</h2>
                     </div>

@@ -558,6 +558,45 @@ describe('AdminPage', () => {
     expect(screen.queryByRole('button', { name: '创建项目' })).not.toBeInTheDocument();
   });
 
+  it('lets a project leader profile use the full workspace width when project creation is hidden', async () => {
+    mocks.getMe.mockResolvedValue({
+      user_id: 'project-leader-1',
+      email: 'leader@local.dev',
+      full_name: 'Project Leader',
+      is_system_admin: false,
+      can_manage_projects: true,
+      memberships: [{ org_id: 'org-1', org_name: '智慧大脑', role: 'admin' }],
+    });
+    mocks.listProjectCatalog.mockResolvedValue([
+      {
+        id: 'long-name-project',
+        org_id: 'org-1',
+        name: 'AI自进化框架（基于多智能体协同技术）-AI atuo evaluation',
+        environment: 'development',
+        department_id: 'research-direct',
+        role: 'admin',
+      },
+    ]);
+
+    render(<AdminPage />);
+
+    expect(await screen.findByRole('heading', {
+      name: 'AI自进化框架（基于多智能体协同技术）-AI atuo evaluation',
+    })).toBeInTheDocument();
+    const projectWorkspace = screen.getByTestId('project-create-profile-workspace');
+    expect(projectWorkspace).toHaveClass('grid-cols-1');
+    expect(projectWorkspace).not.toHaveClass(
+      'min-[1400px]:grid-cols-[minmax(240px,0.7fr)_minmax(360px,1.3fr)]',
+    );
+    expect(screen.getByTestId('project-profile-title-block')).toHaveClass(
+      'order-3',
+      'w-full',
+      'sm:order-none',
+      'sm:w-auto',
+      'sm:flex-1',
+    );
+  });
+
   it('keeps exactly three project rows visible and scrolls the remaining projects vertically', async () => {
     mocks.listProjectCatalog.mockResolvedValue([
       {
